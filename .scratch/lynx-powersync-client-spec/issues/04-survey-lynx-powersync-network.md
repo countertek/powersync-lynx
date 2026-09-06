@@ -1,7 +1,7 @@
 # Survey Lynx networking for the PowerSync sync protocol
 
 Type: research
-Status: claimed
+Status: resolved
 
 ## Question
 
@@ -14,6 +14,12 @@ Can the PowerSync JavaScript sync loop (HTTP streaming and/or WebSocket) run in 
 - Flag anything that forces a native sync transport despite `@powersync/common` in JS.
 
 Write findings to `docs/research/lynx-powersync-network.md` on branch `research/lynx-powersync-network`.
+
+## Answer
+
+HTTP streaming can run in Lynx JS on iOS/Android if experimental Fetch streaming is on and `TextDecoder` is patched. Lynx-for-Web uses host-page browser `fetch`. WebSocket is not a documented Lynx app API. Connector `fetchCredentials` / `uploadData` are ordinary JSON `fetch`. Native HTTP only if streaming `fetch` fails on a host.
+
+Note: [docs/research/lynx-powersync-network.md](../../../docs/research/lynx-powersync-network.md)
 
 ## Comments
 

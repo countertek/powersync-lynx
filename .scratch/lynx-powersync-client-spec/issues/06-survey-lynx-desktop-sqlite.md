@@ -1,7 +1,7 @@
 # Survey Lynx desktop native modules and SQLite
 
 Type: research
-Status: claimed
+Status: resolved
 
 ## Question
 
@@ -14,6 +14,12 @@ What is the supported way, on Lynx 4.0, to run a Native Module plus SQLite/`powe
 - Do not decide “Lynxtron only” vs CMake fallback. Facts [Lock package layout, Autolink, and version floors](10-lock-package-layout.md) needs.
 
 Write findings to `docs/research/lynx-desktop-sqlite.md` on branch `research/lynx-desktop-sqlite`.
+
+## Answer
+
+Two desktop hosts: Lynx 4.0 CMake `LynxView` registers with `LynxEnv.RegisterNativeModule` (no Autolink); Lynxtron Autolink (`.node`, `lynx.lib.json` `lynxtron`/`macos`/`windows`) is documented only on `/next`. `@powersync/node` can run in the Lynxtron Node host after rebuild, not in Lynx JS. PowerSync floors: Windows 10, macOS 14 (all-SDK/Node) / 12 (Swift, Kotlin native). Did not pick Lynxtron-only vs CMake fallback.
+
+Findings: [docs/research/lynx-desktop-sqlite.md](../../../docs/research/lynx-desktop-sqlite.md)
 
 ## Comments
 

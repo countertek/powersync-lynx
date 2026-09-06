@@ -1,7 +1,7 @@
 # Survey Lynx Native Module and Autolink limits for a DBAdapter
 
 Type: research
-Status: claimed
+Status: resolved
 
 ## Question
 
@@ -14,6 +14,12 @@ What can a Lynx Native Module actually pass, and what does Autolink generate, if
 - Do not design the Native Module API. Facts the contract ticket needs.
 
 Write findings to `docs/research/lynx-native-module-adapter.md` on branch `research/lynx-native-module-adapter`.
+
+## Answer
+
+A Native Module is BTS-only. It can pass primitives, `BigInt`, `ArrayBuffer`, JSON-shaped objects/arrays, and `function` callbacks — not a live SQLite handle. `DBAdapter` locks, `LockContext`, and `tablesUpdated` for `watch` stay in Lynx JS. Autolink: Android/iOS 4.0 + Lynxtron `lynx.lib.json`; no Web Autolink. Manual `registerModule` is the documented fallback.
+
+Note: [docs/research/lynx-native-module-adapter.md](../../../docs/research/lynx-native-module-adapter.md)
 
 ## Comments
 
