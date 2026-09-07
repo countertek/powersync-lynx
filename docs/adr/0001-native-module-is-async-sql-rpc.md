@@ -1,0 +1,3 @@
+# Native Module is async SQL RPC, not DBAdapter
+
+Lynx cannot pass a live `sqlite3*` or a `Promise`. Official React Native still implements `DBAdapter` in JavaScript: 1 write + 5 read WAL connections, JS locks, `powersync_update_hooks`, and async execute so `watch` can overlap sync apply. The Lynx Native Module is that same split — `open` / `close` / `execute` / `executeBatch` with `function` callbacks and a passable `{ ok, message, code? }` envelope — because a synchronous native `execute` would stall `/sync/stream` on the background JS thread while rows are copied. The JS Adapter throws `Error`, owns locks and `tablesUpdated`, and never calls `loadExtension`.
