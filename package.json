@@ -1,0 +1,25 @@
+{
+  "name": "powersync-lynx",
+  "type": "module",
+  "license": "Apache-2.0",
+  "exports": {
+    "./web-host": {
+      "types": "./lib/web-host/index.d.ts",
+      "default": "./lib/web-host/index.js"
+    }
+  },
+  "files": [
+    "lib"
+  ],
+  "peerDependencies": {
+    "@powersync/web": "^2.3.0"
+  },
+  "peerDependenciesMeta": {
+    "@powersync/web": {
+      "optional": true
+    }
+  },
+  "scripts": {
+    "test": "node --test test/web-host.test.js"
+  }
+}
