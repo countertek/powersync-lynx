@@ -20,6 +20,19 @@ static void unresolved(const char* name) {
   OutputDebugStringA(buf);
 }
 
+static void* bind_sym(void** slot, const char* name) {
+  void* p = *slot;
+  if (p) {
+    return p;
+  }
+  p = (void*)resolve_sym(name);
+  *slot = p;
+  if (!p) {
+    unresolved(name);
+  }
+  return p;
+}
+
 void* p_napi_add_finalizer_weak;
 void* p_napi_call_function_weak;
 void* p_napi_call_threadsafe_function_weak;
@@ -263,12 +276,24 @@ __attribute__((naked)) void napi_typeof_weak(void) {
   __asm__ volatile ("jmpq *p_napi_typeof_weak(%rip)");
 }
 
-__attribute__((naked)) void napi_module_register(void) {
-  __asm__ volatile ("jmpq *p_napi_module_register(%rip)");
+void napi_module_register(void* mod) {
+  void (*fn)(void*) =
+      (void (*)(void*))bind_sym(&p_napi_module_register, "napi_module_register");
+  if (!fn) {
+    return;
+  }
+  fn(mod);
 }
 
-__attribute__((naked)) void lynx_env_register_native_module(void) {
-  __asm__ volatile ("jmpq *p_lynx_env_register_native_module(%rip)");
+void lynx_env_register_native_module(const char* name, void* creator,
+                                     void* opaque) {
+  void (*fn)(const char*, void*, void*) =
+      (void (*)(const char*, void*, void*))bind_sym(
+          &p_lynx_env_register_native_module, "lynx_env_register_native_module");
+  if (!fn) {
+    return;
+  }
+  fn(name, creator, opaque);
 }
 
 BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID reserved) {
@@ -379,4 +404,5 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID reserved) {
 }
 
 /* dllimport IAT slot used by lynx_extension.h */
-void (*__imp_lynx_env_register_native_module)(void) = (void (*)(void))lynx_env_register_native_module;
+void (*__imp_lynx_env_register_native_module)(const char*, void*, void*) =
+    lynx_env_register_native_module;

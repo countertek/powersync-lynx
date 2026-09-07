@@ -33,6 +33,9 @@ id CellToId(const Cell& cell) {
     case CellKind::kNull:
       return [NSNull null];
     case CellKind::kInteger:
+      if (cell.integer_as_bigint) {
+        return [NSString stringWithFormat:@"%lld", (long long)cell.i];
+      }
       return @(cell.i);
     case CellKind::kFloat:
       return @(cell.f);
