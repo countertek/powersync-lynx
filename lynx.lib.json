@@ -1,0 +1,20 @@
+{
+  "platforms": {
+    "android": {
+      "packageName": "com.powersync.lynx",
+      "sourceDir": "android"
+    },
+    "ios": {
+      "sourceDir": "ios"
+    },
+    "lynxtron": {
+      "path": "dist"
+    },
+    "macos": {
+      "sourceDir": "shared"
+    },
+    "windows": {
+      "sourceDir": "shared"
+    }
+  }
+}
