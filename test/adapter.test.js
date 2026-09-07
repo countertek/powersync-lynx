@@ -301,6 +301,50 @@ test('readLock allows five concurrent readers and a sixth waits', async () => {
   await adapter.close();
 });
 
+test('closes opened dbIds when init fails after write open', async () => {
+  const mock = installMockNative({
+    execute: ({ sql }) => {
+      if (sql.includes("powersync_update_hooks('install')")) {
+        return { ok: false, message: 'no such function: powersync_update_hooks' };
+      }
+      return {
+        ok: true,
+        insertId: 0,
+        rowsAffected: 0,
+        columnNames: [],
+        rawRows: []
+      };
+    }
+  });
+  const adapter = new LynxDBAdapter({ name: 'app.db' });
+  await assert.rejects(() => adapter.initialized, /no such function: powersync_update_hooks/);
+  assert.equal(mock.opens.length, 1);
+  assert.deepEqual(
+    mock.closes.map((c) => c.dbId),
+    mock.opens.map((o) => o.dbId)
+  );
+});
+
+test('closes already-opened dbIds when a later read open fails', async () => {
+  const mock = installMockNative();
+  const originalOpen = globalThis.NativeModules.NativePowerSyncModule.open;
+  globalThis.NativeModules.NativePowerSyncModule.open = (payload, cb) => {
+    if (payload.readOnly === true) {
+      queueMicrotask(() => cb({ ok: false, message: 'unable to open database file' }));
+      return Promise.resolve('must-not-await-native-return');
+    }
+    return originalOpen(payload, cb);
+  };
+  const adapter = new LynxDBAdapter({ name: 'app.db' });
+  await assert.rejects(() => adapter.initialized, /unable to open database file/);
+  assert.equal(mock.opens.length, 1);
+  assert.equal(mock.opens[0].payload.readOnly, false);
+  assert.deepEqual(
+    mock.closes.map((c) => c.dbId),
+    mock.opens.map((o) => o.dbId)
+  );
+});
+
 test('BEGIN IMMEDIATE is issued in JS for writeTransaction', async () => {
   const { adapter, mock } = await openAdapter();
   mock.executes.length = 0;
