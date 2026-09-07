@@ -1,7 +1,6 @@
 #import "NativePowerSyncModule.h"
 
 #include "ps_sql.h"
-#include "lynx_ios_bind.h"
 
 #include <cmath>
 #include <cstring>
@@ -90,9 +89,7 @@ bool ParseBind(id value, BindValue* out, NSString** error) {
     const char* type = [number objCType];
     if (strcmp(type, @encode(double)) == 0 || strcmp(type, @encode(float)) == 0) {
       double d = [number doubleValue];
-      if (d == rint(d) &&
-          d <= static_cast<double>(lynx_ios_bind::kMaxSafeInteger) &&
-          d >= static_cast<double>(-lynx_ios_bind::kMaxSafeInteger)) {
+      if (d == rint(d) && d <= 9007199254740991.0 && d >= -9007199254740991.0) {
         out->kind = CellKind::kInteger;
         out->i = [number longLongValue];
       } else {
@@ -106,17 +103,8 @@ bool ParseBind(id value, BindValue* out, NSString** error) {
     return true;
   }
   if ([value isKindOfClass:[NSString class]]) {
-    NSString* string = (NSString*)value;
-    const char* utf8 = [string UTF8String];
-    std::int64_t integer = 0;
-    if (utf8 != nullptr &&
-        lynx_ios_bind::IntegerFromLynxBigIntString(utf8, &integer)) {
-      out->kind = CellKind::kInteger;
-      out->i = integer;
-      return true;
-    }
     out->kind = CellKind::kText;
-    out->text = utf8 != nullptr ? utf8 : "";
+    out->text = [((NSString*)value) UTF8String];
     return true;
   }
   if ([value isKindOfClass:[NSData class]]) {
