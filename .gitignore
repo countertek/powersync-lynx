@@ -11,3 +11,5 @@ android/.cxx/
 *.exp
 .DS_Store
 /tmp/
+# Extra-arch core dylib with no matching powersync-lynx.node (not an Autolink artifact).
+dist/macos/x64/
