@@ -45,7 +45,7 @@ Do not ship a smaller Lynx-only interface. `AbstractPowerSyncDatabase` is a depr
 Carve-outs vs official RN/Web barrels:
 
 - Do not re-export `@powersync/react`.
-- Do not export Native Module, Adapter, or Host-helper types from the Lynx-bundle entry.
+- Do not export Client-specific Native Module, Adapter, or Host-helper types from the Lynx-bundle entry. Official `DBAdapter` and related public types remain available through `export * from '@powersync/common'`.
 - Host helper types live on `powersync-lynx/web-host`.
 
 Apps should keep named imports so unused `common` exports (including attachments) can tree-shake.
@@ -54,7 +54,9 @@ Apps should keep named imports so unused `common` exports (including attachments
 
 One instance per file. `init()` is automatic.
 
-```ts
+Pseudocode (`?` marks optional fields):
+
+```text
 new PowerSyncDatabase({
   schema: AppSchema,
   database: { dbFilename: 'app.db', dbLocation?: string }
@@ -65,7 +67,9 @@ new PowerSyncDatabase({
 
 ### Schema
 
-```ts
+Pseudocode (`?` marks optional fields):
+
+```text
 new Schema({
   lists: new Table(
     { name: column.text /* , … */ },
@@ -103,7 +107,9 @@ Both official `db.watch` overloads: callback `{ onResult, onError? }` and async 
 
 ### Sync Streams
 
-```ts
+Pseudocode (`?` marks optional arguments or fields):
+
+```text
 const sub = await db.syncStream(name, params?).subscribe({ ttl?, priority? });
 sub.unsubscribe();
 await sub.waitForFirstSync();
@@ -167,11 +173,20 @@ Default `connect` `connectionMethod`: **HTTP** (`BasePowerSyncDatabase` default)
 
 | Host | Fetch | Extra requirement |
 |---|---|---|
-| iOS / Android | Lynx `fetch` (host HTTP Service) | PageConfig `enableFetchAPIStandardStreaming = true` (LynxSDK 3.7+; required so `res.body.getReader()` yields incremental chunks) |
-| Windows / macOS | Lynx `fetch` (host HTTP Service) | Host registers `LynxHttpService`. Streaming is not the Android/iOS PageConfig flag. Native HTTP is a **later flag** if this host’s `fetch` cannot stream. |
+| iOS / Android | Lynx `fetch` (host HTTP Service) | Install the HTTP Service as described below and set PageConfig `enableFetchAPIStandardStreaming = true` (LynxSDK 3.7+). This enables the experimental standard streaming path; incremental delivery remains unverified. |
+| Windows / macOS | Lynx `fetch` (host HTTP Service) | Host implements and registers `LynxHttpService`. Desktop streaming is undocumented and unverified; the integration guide's HTTP Service example is a stub. The Android/iOS PageConfig flag does not apply. |
 | Lynx-for-Web | Browser `fetch` in the Lynx bundle (CORS applies) | No `enableFetchAPIStandardStreaming`. Same-origin / CORS as any browser app. |
 
+Mobile hosts must supply the HTTP Service: iOS includes the `LynxService` CocoaPod with its `Http` subspec; Android includes `org.lynxsdk.lynx:lynx-service-http` and registers `LynxHttpService` with `LynxServiceCenter`. Native Module Autolink does not replace this requirement. Without the service, neither sync download nor Connector fetches work.
+
 Connector `fetchCredentials` / `uploadData` are ordinary JSON `fetch` in app JS. They do not need streaming.
+
+Implementation must verify both behaviors on each supported host before claiming working sync transport:
+
+- **Incremental delivery:** `res.body.getReader()` yields chunks while the HTTP response remains open, rather than buffering until it ends. Service registration and the mobile streaming flag are configuration prerequisites, not proof.
+- **Cancellation:** `disconnect()` cancels a live `/sync/stream` request, not merely the JS signal state. Native fetch support for `RequestInit.signal` remains unverified; supplying the Client's `AbortController` polyfill does not establish that fetch honors it.
+
+These are verification obligations, not capabilities proven by this spec. A failed check must be reported as a host compatibility blocker; it does not authorize changing the locked transport or adding native HTTP.
 
 Native HTTP for `/sync/stream` is a later flag if a host cannot stream. It is not this spec.
 
@@ -261,7 +276,9 @@ Manual `registerModule` / `LynxEnv.RegisterNativeModule("NativePowerSyncModule",
 
 The Lynx bundle still constructs the same public type as native:
 
-```ts
+Pseudocode (`?` marks optional fields):
+
+```text
 new PowerSyncDatabase({
   schema: AppSchema,
   database: { dbFilename: 'app.db', dbLocation?: string }
@@ -291,9 +308,11 @@ Lynx 4.0 `<lynx-view>` needs both:
 1. `nativeModulesMap[name] = esmUrl` — default export `(NativeModules, NativeModulesCall) => { open, close, execute, executeBatch }`. Runs in `lynx-bg`. Each method hops `NativeModulesCall` then invokes the Adapter’s `function` callback with the native envelope.
 2. `onNativeModulesCall(name, data, moduleName)` — host page. Owns `WASQLiteOpenFactory` / execute. Returns `{ ok: true, … }` or `{ ok: false, message, code? }`. Does not throw for this module.
 
-Autolink does not assign those properties. `attach` is the Web equivalent of Autolink:
+Autolink does not assign those properties. The host page calls `attach` to wire them for one `<lynx-view>`.
 
-```ts
+Pseudocode (`?` marks an optional argument):
+
+```text
 const { detach } = attach(lynxView, options?);
 ```
 
