@@ -345,6 +345,21 @@ test('closes already-opened dbIds when a later read open fails', async () => {
   );
 });
 
+test('executeBatch returns QueryResult without rows', async () => {
+  const { adapter, mock } = await openAdapter();
+  const result = await adapter.executeBatch('INSERT INTO t VALUES (?)', [[1], [2]]);
+  assert.deepEqual(result.array, []);
+  assert.equal(result.rowsAffected, 2);
+  const iterated = [];
+  for (const row of result) {
+    iterated.push(row);
+  }
+  assert.deepEqual(iterated, []);
+  assert.equal(mock.batches.length, 1);
+  assert.equal(mock.batches[0].sql, 'INSERT INTO t VALUES (?)');
+  await adapter.close();
+});
+
 test('BEGIN IMMEDIATE is issued in JS for writeTransaction', async () => {
   const { adapter, mock } = await openAdapter();
   mock.executes.length = 0;
