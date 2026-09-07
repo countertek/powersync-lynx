@@ -33,6 +33,8 @@ id CellToId(const Cell& cell) {
     case CellKind::kNull:
       return [NSNull null];
     case CellKind::kInteger:
+      // Lynx iOS BigInt mapping: INTEGER outside MAX_SAFE_INTEGER is a
+      // decimal NSString. Do not box those cells as NSNumber.
       if (cell.integer_as_bigint) {
         return [NSString stringWithFormat:@"%lld", (long long)cell.i];
       }
@@ -103,6 +105,9 @@ bool ParseBind(id value, BindValue* out, NSString** error) {
     return true;
   }
   if ([value isKindOfClass:[NSString class]]) {
+    // Lynx maps JS string and JS BigInt to NSString. Bind NSString as TEXT so
+    // spec string BindValue (snowflake/id) matches Android ReadableType.String
+    // and N-API IsString. Do not treat canonical decimals as INTEGER.
     out->kind = CellKind::kText;
     out->text = [((NSString*)value) UTF8String];
     return true;

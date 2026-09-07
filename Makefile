@@ -9,11 +9,12 @@ LDFLAGS := -ldl -lpthread
 
 CORE_DYLIB := dist/macos/arm64/libpowersync_aarch64.macos.dylib
 TEST_BIN := shared/build/ps_sql_test
+IOS_TEST_BIN := shared/build/ios_module_rpc_test
 NODE := dist/macos/arm64/powersync-lynx.node
 WIN_NODE := dist/windows/x64/powersync-lynx.node
 ZIG ?= $(shell command -v zig 2>/dev/null)
 
-.PHONY: deps test node win-node all
+.PHONY: deps test test-ios node win-node all
 
 all: test node
 
@@ -37,6 +38,28 @@ $(TEST_BIN): shared/build/ps_sql.o $(SQLITE_DIR)/sqlite3.o shared/tests/ps_sql_t
 
 test: deps $(TEST_BIN)
 	POWERSYNC_CORE_PATH="$(CURDIR)/$(CORE_DYLIB)" $(TEST_BIN)
+
+$(IOS_TEST_BIN): deps ios/tests/ios_module_rpc_test.mm ios/src/NativePowerSyncModule.mm \
+		ios/src/NativePowerSyncModule.h shared/ps_sql.cc shared/ps_sql.h \
+		$(SQLITE_DIR)/sqlite3.o $(CORE_DYLIB)
+	mkdir -p shared/build/ios-src
+	sed 's/@LynxNativeModule("[^"]*")//' ios/src/NativePowerSyncModule.h \
+		> shared/build/ios-src/NativePowerSyncModule.h
+	cp ios/src/NativePowerSyncModule.mm shared/build/ios-src/NativePowerSyncModule.mm
+	clang++ -std=c++17 -fPIC -O2 -fobjc-arc -fblocks \
+		-Ishared/build/ios-src -Iios/tests/stubs -Ishared -I$(SQLITE_DIR) \
+		$(SQLITE_FLAGS) -DPS_SQL_LINK_CORE=1 \
+		ios/tests/ios_module_rpc_test.mm shared/build/ios-src/NativePowerSyncModule.mm \
+		shared/ps_sql.cc $(SQLITE_DIR)/sqlite3.o \
+		$(CORE_DYLIB) -framework Foundation $(LDFLAGS) \
+		-Wl,-rpath,$(CURDIR)/dist/macos/arm64 \
+		-o $@
+	install_name_tool -change \
+		/Users/runner/work/powersync-sqlite-core/powersync-sqlite-core/target/aarch64-apple-darwin/release/deps/libpowersync.dylib \
+		$(CURDIR)/$(CORE_DYLIB) $@
+
+test-ios: $(IOS_TEST_BIN)
+	$(IOS_TEST_BIN)
 
 NODE_VENDOR := native-vendor/node_modules
 NAPI_INCLUDE := -I$(NODE_VENDOR)/@lynx-js/weak-node-api/headers \

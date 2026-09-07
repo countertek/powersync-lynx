@@ -52,7 +52,7 @@ Facts that matter for a `DBAdapter`:
 - There is **no** mapping for a host object identity, `sqlite3*`, file descriptor, or other native pointer. PrimJS `HostRef` exists for Element PAPI (living spec §4.3.3) and is **not** in this Native Module table.
 - `Promise` is **not** a row in the runtime type-mapping table. Autolink **codegen** for non-Harmony targets lists promises as a generated-target type (see §6). `[INFERENCE]` a hand-written Native Module should treat async completion as a `function` callback unless codegen is used and verified on that host.
 
-`CONTEXT.md` describes Native Module arguments as “JSON-serializable … and callbacks.” The published table is that **plus** `ArrayBuffer` and `BigInt` (iOS encodes `BigInt` as `NSString`). Not an architecture change; the contract ticket should not assume JSON-only if blob columns or `bigint` bind values are in scope.
+Glossary: [`CONTEXT.md`](../../CONTEXT.md).
 
 ---
 

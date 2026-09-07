@@ -17,6 +17,8 @@ struct Cell {
   double f = 0;
   std::string text;
   std::vector<std::uint8_t> blob;
+  // Hosts emit Lynx BigInt when true: N-API BigInt, Android Long, iOS
+  // decimal NSString.
   bool integer_as_bigint = false;
 };
 

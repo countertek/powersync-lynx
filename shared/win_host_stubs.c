@@ -276,6 +276,9 @@ __attribute__((naked)) void napi_typeof_weak(void) {
   __asm__ volatile ("jmpq *p_napi_typeof_weak(%rip)");
 }
 
+// mingw DllMainCRTStartup runs C++ static constructors (LYNX_NAPI_C_CTOR /
+// LYNX_REGISTER_NATIVE_MODULE) before user DllMain. Resolve these two
+// symbols in the trampoline so those ctors do not jump through a null p_*.
 void napi_module_register(void* mod) {
   void (*fn)(void*) =
       (void (*)(void*))bind_sym(&p_napi_module_register, "napi_module_register");

@@ -83,6 +83,26 @@ int main(int argc, char** argv) {
              !version.raw_rows[0][0].text.empty(),
          "core-load: version text cell");
 
+  BindValue snowflake;
+  snowflake.kind = CellKind::kText;
+  snowflake.text = "9007199254740993";
+  Envelope snow_type = wait_for([&](ps_sql::Callback cb) {
+    engine.execute(db_id, "SELECT typeof(?)", {snowflake}, std::move(cb));
+  });
+  expect(snow_type.ok && !snow_type.raw_rows.empty() &&
+             snow_type.raw_rows[0][0].kind == CellKind::kText &&
+             snow_type.raw_rows[0][0].text == "text",
+         "string snowflake BindValue stays TEXT");
+
+  Envelope big_int = wait_for([&](ps_sql::Callback cb) {
+    engine.execute(db_id, "SELECT 9007199254740993", {}, std::move(cb));
+  });
+  expect(big_int.ok && !big_int.raw_rows.empty() &&
+             big_int.raw_rows[0][0].kind == CellKind::kInteger &&
+             big_int.raw_rows[0][0].i == 9007199254740993LL &&
+             big_int.raw_rows[0][0].integer_as_bigint,
+         "INTEGER past MAX_SAFE_INTEGER sets integer_as_bigint");
+
   Envelope created = wait_for([&](ps_sql::Callback cb) {
     engine.execute(db_id, "CREATE TABLE items(id INTEGER PRIMARY KEY, name TEXT, blob BLOB)",
                    {}, std::move(cb));
