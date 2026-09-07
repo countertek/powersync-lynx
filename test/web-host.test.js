@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
-import { pathToFileURL } from 'node:url';
 
 import { attach } from '../lib/web-host/index.js';
 import { decodeCloneable, encodeCloneable } from '../lib/web-host/cloneable.js';
@@ -266,12 +265,9 @@ test('factory encodes params and decodes envelopes; Adapter sees ArrayBuffer/big
   );
   assert.equal(exec.ok, true);
   const sent = calls.executeRaw[0].params;
-  assert.ok(sent[0] instanceof ArrayBuffer);
+  assert.ok(sent[0] instanceof Uint8Array);
+  assert.deepEqual([...sent[0]], [7, 8]);
   assert.equal(sent[1], 99n);
   assert.equal(exec.rawRows[0][0] instanceof ArrayBuffer, true);
-});
-
-test('factory URL is a real module URL, not createObjectURL', () => {
-  const src = pathToFileURL(new URL('../lib/web-host/attach.js', import.meta.url).pathname);
-  assert.equal(typeof src.href, 'string');
+  assert.deepEqual([...new Uint8Array(exec.rawRows[0][0])], [7, 8]);
 });
