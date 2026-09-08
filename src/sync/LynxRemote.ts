@@ -285,9 +285,21 @@ function streamingReader(eventName: string): ReadableStreamDefaultReader<Uint8Ar
   let finished = false;
   let failure: Error | undefined;
   let wake: (() => void) | undefined;
-  const emitter = (
-    lynx as { getJSModule?: (name: string) => { addListener(name: string, fn: (payload: unknown) => void): void } }
-  ).getJSModule?.("GlobalEventEmitter");
+  let emitter: { addListener(name: string, fn: (payload: unknown) => void): void } | undefined;
+  try {
+    // Bare `lynx` so the Lynx bundler keeps the runtime global (eval/globalThis miss it).
+    emitter = (
+      lynx as {
+        getJSModule?: (name: string) => { addListener(name: string, fn: (payload: unknown) => void): void };
+      }
+    ).getJSModule?.("GlobalEventEmitter");
+  } catch {
+    emitter = (
+      globalThis as unknown as {
+        lynx?: { getJSModule?: (name: string) => { addListener(name: string, fn: (payload: unknown) => void): void } };
+      }
+    ).lynx?.getJSModule?.("GlobalEventEmitter");
+  }
   if (emitter == null) {
     throw new Error("GlobalEventEmitter is not registered");
   }
@@ -355,7 +367,11 @@ function moduleResponse(result: LynxFetchSuccess): Response {
 
 function isLynxAndroid(): boolean {
   try {
-    const platform = (SystemInfo as { platform?: string }).platform;
+    const fromGlobal = (globalThis as unknown as { SystemInfo?: { platform?: string } }).SystemInfo;
+    const info =
+      fromGlobal ??
+      ((0, eval)("typeof SystemInfo === 'undefined' ? undefined : SystemInfo") as { platform?: string } | undefined);
+    const platform = info?.platform;
     return platform != null && platform.toLowerCase() === "android";
   } catch {
     return false;
@@ -376,6 +392,32 @@ function lynxFetchModule(): LynxFetchModule | undefined {
   } catch {
     return undefined;
   }
+}
+
+function streamingExtension(expectStreamingResponse: boolean): Record<string, boolean> {
+  if (!expectStreamingResponse) {
+    return {};
+  }
+  return { useStreaming: true, enableFetchAPIStandardStreaming: true };
+}
+
+/**
+ * Lynx streaming Response.body is one-shot. AbstractRemote checks `res.body`
+ * then calls `res.body.getReader()`; a second getter throws "body used".
+ */
+function stabilizeStreamingResponse(response: Response): Response {
+  const captured = response.body;
+  const headers = response.headers;
+  return {
+    ok: response.ok,
+    status: response.status,
+    statusText: response.statusText,
+    headers: {
+      get: (name: string) => (headers == null ? null : headers.get(name)),
+    },
+    body: captured,
+    text: () => response.text(),
+  } as Response;
 }
 
 function fetchViaLynxModule(resource: string, request: RequestInit): Promise<Response> {
@@ -419,18 +461,36 @@ export class LynxRemote extends AbstractRemote {
     return createLynxTextDecoder();
   }
 
-  async fetch({ resource, request }: FetchOptions): Promise<Response> {
+  async fetch({ resource, request, expectStreamingResponse }: FetchOptions): Promise<Response> {
     const url = String(resource);
     if (isLynxAndroid() && lynxFetchModule() != null) {
       return fetchViaLynxModule(url, request);
     }
-    const init: RequestInit = { method: request.method ?? "GET", headers: headerMap(request.headers) };
+    const init: RequestInit & { lynxExtension?: Record<string, boolean> } = {
+      method: request.method ?? "GET",
+      headers: headerMap(request.headers),
+    };
     if (typeof request.body === "string") {
       init.body = request.body;
     }
+    const extension = streamingExtension(expectStreamingResponse);
+    if (Object.keys(extension).length > 0) {
+      init.lynxExtension = extension;
+    }
     // PrimJS puts fetch on the identifier, not always on globalThis (iOS).
     const fromGlobal = (globalThis as unknown as { fetch?: typeof fetch }).fetch;
-    return (typeof fromGlobal === "function" ? fromGlobal : fetch)(url, init);
+    const response = await (typeof fromGlobal === "function" ? fromGlobal : fetch)(url, init);
+    const streamingId = (response as Response & { lynxExtension?: { streamingId?: string } }).lynxExtension
+      ?.streamingId;
+    if (streamingId != null && streamingId.length > 0) {
+      return moduleResponse({
+        status: response.status,
+        statusText: response.statusText,
+        headers: { "content-type": response.headers?.get("content-type") ?? "" },
+        lynxExtension: { streamingId },
+      });
+    }
+    return stabilizeStreamingResponse(response);
   }
 
   async loadWebSocketSupport(platform: WebSocketSyncStreamPlatform): Promise<WebSocketSupport> {

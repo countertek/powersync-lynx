@@ -44,10 +44,11 @@ Read this before treating a green web preview as "sync works".
 | Compose profile `sync` (Postgres + PowerSync + demo-api) | **Checked in**. Image pull / container start is **not verified** in every environment. If `journeyapps/powersync-service` cannot be pulled or exits, the app stays a local offline queue |
 | Demo token endpoint | **Static HS256 JWT** minted by `demo-api` with the compose-stack secret. **Not** a JourneyApps / PowerSync Cloud account. **Not** RS256/JWKS from a real IdP |
 | `uploadData` | POSTs CRUD to `demo-api`, which writes Postgres. **Not** a production app backend |
-| Two-window money shot (A writes, B sees it via PowerSync) | **Verified** Android emulator → iOS Simulator (`ande2e` uploaded after queued insert; iOS list showed it). Web two-window procedure still documented below |
-| Offline / reconnect beat (queue writes, reconnect, watch them sync) | **Verified on Android emulator**. In-app **Go offline / Reconnect** is `disconnect()` / `connect()`, not an OS network drop. Queued `ande2e` while disconnected, cold start uploaded (`upload: complete`), iOS received it |
-| Live `/sync/stream` incremental delivery on iOS / Android | **Verified** on iOS Simulator (downloaded `persist_me` + `ande2e` from the service) and Android emulator (LynxFetchModule streaming). **Not** Windows / macOS |
-| `disconnect()` cancelling a live native stream | **Verified on Android emulator** (Go offline → `sync offline` / Reconnect; Reconnect → `sync connected`). iOS control is in the same bundle; this session did not tap it |
+| Local UI ready without waiting for `connect()` | **Unit tested** (`test/demo-boot.test.ts`). iOS Simulator relaunch shows **DB ready** and the composer while `/sync/stream` is still handshake/erroring. Watch starts from local ready, not from first checkpoint |
+| Two-window money shot (A writes, B sees it via PowerSync) | **Not verified this checkout.** iOS `ios-t2` opened **DB ready** / sometimes **sync connected**, but `ps_data__todos` stayed 0 and the log repeated `errorStreamingMalformedResponse`. Web two-window procedure still documented below |
+| Offline / reconnect beat (queue writes, reconnect, watch them sync) | In-app **Go offline / Reconnect** is `disconnect()` / `connect()`, not an OS network drop. **Not re-tapped** this checkout |
+| Live `/sync/stream` incremental delivery on iOS / Android | Handshake can leave `connect()` (iOS log `connect:` / `connected`). Incremental apply is **not proven**: iOS logs `errorStreamingMalformedResponse` and downloaded 0 todos. **Not** Windows / macOS |
+| `disconnect()` cancelling a live native stream | Same ReactLynx control. **Not tapped** this checkout |
 | Physical iOS / Android Autolink host run | **Documented**. Simulator / emulator is what this checkout exercises |
 | Windows / macOS Autolink host run | **Not verified**. Desktop remains recipe-only |
 | Lynx Explorer | **Will not work** for SQL: Explorer does not register `NativePowerSyncModule` |
@@ -157,7 +158,7 @@ docker compose --profile sync --profile registry up --build
 
 ## What you should see in the app
 
-1. **DB ready** after `waitForReady`
+1. **DB ready** after `waitForReady` (does not wait for `connect()` / first sync). Sync may stay connecting/offline; errors stay in the log
 2. Empty list on first load (no local seed — Postgres is the source of truth when the stack is up)
 3. Add / complete-toggle / delete / filter
 4. Collapsible **Sync log**: connect, disconnect, upload/download, CRUD, errors, timestamps

@@ -8,6 +8,7 @@ import {
   setConnectorLog,
   setDemoCredentials,
 } from "./connector.ts";
+import { bootDemo } from "./boot.ts";
 import { getDb, waitForDemoReady } from "./database.ts";
 import type { TodoRow } from "./schema.ts";
 import { deviceId, errorMessage, hostLabel, newId, nowIso, rowArray } from "./util.ts";
@@ -92,12 +93,12 @@ export function App() {
     let cancelled = false;
     let stopStatus = () => {};
 
-    waitForDemoReady()
-      .then(async () => {
-        if (cancelled) {
-          return;
-        }
-        log("waitForReady: database open");
+    bootDemo({
+      waitForReady: waitForDemoReady,
+      fetchCredentials: fetchDemoCredentials,
+      setCredentials: setDemoCredentials,
+      connect: () => getDb().connect(demoConnector),
+      onLocalReady: () => {
         stopStatus = getDb().registerListener({
           statusChanged(status) {
             const connected = status.connected === true;
@@ -127,33 +128,15 @@ export function App() {
             }
           },
         });
-        try {
-          const creds = await fetchDemoCredentials();
-          if (cancelled) {
-            return;
-          }
-          if (creds == null) {
-            log("token: demo API returned no credentials; staying offline");
-            return;
-          }
-          setDemoCredentials(creds);
-          await getDb().connect(demoConnector);
-          log(`connect: ${demoPowersyncUrl()} as ${device}`);
-        } catch (err) {
-          log(
-            `connect skipped: ${errorMessage(err)}. Start the sync profile (examples/README.md). Writes still queue locally.`,
-          );
-        }
-      })
-      .then(() => {
-        if (!cancelled) {
-          setReady(true);
-        }
-      })
-      .catch((err: unknown) => {
-        setFatal(fatalFromError(err));
-        log(`open failed: ${errorMessage(err)}`);
-      });
+        setReady(true);
+      },
+      log,
+      isCancelled: () => cancelled,
+      connectLabel: `${demoPowersyncUrl()} as ${device}`,
+    }).catch((err: unknown) => {
+      setFatal(fatalFromError(err));
+      log(`open failed: ${errorMessage(err)}`);
+    });
 
     return () => {
       cancelled = true;

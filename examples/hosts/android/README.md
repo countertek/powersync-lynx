@@ -81,12 +81,11 @@ This checkout, 2026-09-08/09. AVD **Pixel_10_Pro** (API 37, `emulator-5554`), JD
 | Claim | Result |
 |---|---|
 | Build + install + launch | **Yes.** `./gradlew :app:assembleDebug`, `adb install`, `am start` `com.powersync.lynx.showcase/.MainActivity` |
-| UI paints, DB ready, sync connected | **Yes.** Defaults `http://10.0.2.2:8081` / `:8080` |
-| Add | **Yes.** `ande2e` (type with `adb shell input text` while the IME is up; underscores are dropped) |
-| Persist across process death | **Yes.** `ande2e` survived force-stop / cold start |
-| Upload + another client sees it | **Yes.** Sync log `upload: 1 op(s)` / `upload: complete`. iOS Simulator showed `ande2e` |
-| Go offline / Reconnect (stream cancel) | **Yes.** Teal control under the pills. Offline → `sync offline` + Reconnect; tap again → `sync connected` |
-| Offline queue | **Yes.** Insert while disconnected, reconnect/cold start uploaded |
+| UI paints, local DB ready after relaunch | **Shared bundle fix** (`bootDemo`). This checkout did **not** rebuild/install the APK, so the emulator still needs `./gradlew :app:installDebug` to pick up **DB ready** without waiting for `connect()` |
+| Add / persist / upload | Earlier emulator runs uploaded `round2add` / `ande2e` to Postgres. Those rows are **not** a current UI-ready proof |
+| Upload + another client sees it | **Not re-verified this checkout.** iOS did not download existing Postgres todos |
+| Go offline / Reconnect (stream cancel) | Same ReactLynx control. **Not re-tapped** this checkout |
+| Offline queue | **Not re-tapped** this checkout |
 | Toggle / delete / filter | Toggle/delete hit targets are small (Lynx `bindtap` on row text). Filters paint (All is filled teal). Not used as the money-shot proof |
 | `fetch(url, init)` | **Broken on Android PrimJS** (`Failed to construct 'Request'`). Sync uses `LynxFetchModule`; demo-api POST uses `demoFetch()` in `examples/showcase/src/util.ts` |
 | Physical device | **Not run** |

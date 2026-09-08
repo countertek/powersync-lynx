@@ -88,10 +88,11 @@ This checkout, 2026-09-08/09. Simulator **iPhone 17 Pro** (`ADEBF68F-584E-4A5D-9
 | Claim | Result |
 |---|---|
 | Build + install + launch | **Yes.** `xcodebuild` Debug iphonesimulator `CODE_SIGNING_ALLOWED=NO`, `simctl install` / `launch`. Bundle id `com.powersync.lynx.showcase` |
-| UI paints, DB ready, sync connected | **Yes.** Navy TODO screen, `DB ready`, `sync connected`, `connect: http://127.0.0.1:8080 as ios` |
-| Receive another client's rows | **Yes.** Android `persist_me` and queued-then-uploaded `ande2e` appeared on this Simulator while connected |
-| Add / toggle / delete / filter / restart persist | **Not tapped this session.** Simulator window was fully covered by Orca and Accessibility reads stayed blocked, so HID clicks never reached the LCD. Use the try-it steps above |
-| Go offline / Reconnect | Same ReactLynx bundle as Android (control is a `LinkWrap` view). **Not tapped** here |
+| UI paints, local DB ready after relaunch | **Yes.** After swapping the rebuilt `main.lynx.bundle` and force-stop relaunch (`ios-t2`): navy TODO screen, `DB ready`, composer/filters visible. `connect()` no longer blocks that pill |
+| Sync handshake | **Partial.** Log reached `connect: http://127.0.0.1:8080 as ios-t2` and sometimes `connected` / `sync connected`. Then `errorStreamingMalformedResponse`. `ps_data__todos` stayed 0 |
+| Receive another client's rows | **No this checkout.** Postgres still has `round2add` / `ande2e`; this Simulator store did not download them |
+| Add / toggle / delete / filter / restart persist | Composer is on screen after relaunch. **HID not used** this checkout |
+| Go offline / Reconnect | Control is visible (`Go offline`). **Not tapped** here |
 | Physical device | **Not run** |
 
 Limitations: Lynx list rows often omit a11y nodes. `simctl io` screenshots of the LCD are the evidence, not the Simulator chrome. PrimJS iOS `fetch` is the identifier, not `globalThis.fetch`.
