@@ -1,0 +1,5 @@
+# no-mistakes repository configuration
+# This repository has no CI workflows (.github/workflows is empty by design).
+# Declaring no_ci lets the pipeline treat a zero-check PR as checks-passed
+# instead of waiting for checks that will never register.
+no_ci: true
