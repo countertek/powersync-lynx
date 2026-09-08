@@ -10,8 +10,13 @@ import type { NativeWireEnvelope } from "../adapter/native.ts";
 type NativeModulesCall = (name: string, data: Cloneable) => Cloneable | Promise<Cloneable>;
 
 interface LynxNativeModulesBag {
-  readonly NativePowerSyncModule?: NativePowerSyncFactory;
+  NativePowerSyncModule?: NativePowerSyncFactory;
 }
+
+interface WorkerGlobalWithNativeModules {
+  NativeModules?: LynxNativeModulesBag;
+}
+
 type FactoryCallback = (envelope: NativeWireEnvelope) => void;
 
 interface HopErrorFields {
@@ -66,10 +71,10 @@ export interface NativePowerSyncFactory {
  * Does not import @powersync/web.
  */
 export default function createNativePowerSyncModule(
-  _NativeModules: LynxNativeModulesBag,
+  nativeModules: LynxNativeModulesBag,
   NativeModulesCall: NativeModulesCall,
 ): NativePowerSyncFactory {
-  return {
+  const methods: NativePowerSyncFactory = {
     open(options, callback) {
       hop(NativeModulesCall, "open", options, callback);
     },
@@ -83,4 +88,8 @@ export default function createNativePowerSyncModule(
       hop(NativeModulesCall, "executeBatch", asCloneableObject({ dbId, sql, params }), callback);
     },
   };
+  nativeModules.NativePowerSyncModule = methods;
+  const workerGlobal = globalThis as typeof globalThis & WorkerGlobalWithNativeModules;
+  workerGlobal.NativeModules = nativeModules;
+  return methods;
 }

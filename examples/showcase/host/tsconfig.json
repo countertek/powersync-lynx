@@ -13,5 +13,10 @@
       "powersync-lynx/web-host": ["./web-host-shim.d.ts"]
     }
   },
-  "include": ["./main.ts", "./lynx-view.d.ts", "./web-host-shim.d.ts"]
+  "include": [
+    "./main.ts",
+    "./lynx-view.d.ts",
+    "./web-host-shim.d.ts",
+    "./lynx-web-core-assets.ts"
+  ]
 }

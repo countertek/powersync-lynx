@@ -13,6 +13,7 @@
     "typecheck": "tsc -b tsconfig.json && tsc -p host/tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@lynx-js/lynx-core": "0.1.4",
     "@lynx-js/react": "^0.126.0",
     "@lynx-js/web-core": "^0.26.0",
     "@powersync/common": "^2.2.0",
