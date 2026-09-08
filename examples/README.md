@@ -39,7 +39,7 @@ Read this before treating a green web preview as "sync works".
 | Claim | Status |
 |---|---|
 | Open DB, Schema, `get` / `execute` / `watch`, add / toggle / delete / filter | **Exercised** in the TODO app source. **Built** for Rspeedy `web` and `lynx` |
-| First-load / refresh race (lost or duplicated rows) | **Fix in source + unit tests** (`test/first-load-race.test.ts`). Watch-only UI, exclusive `waitForReady`, per-device local DB filename. **Not** an in-browser IndexedDB flush proof |
+| First-load / refresh race (lost or duplicated rows) | **Fix in source + unit tests** (`runExclusive` in `test/first-load-race.test.ts`). Watch-only UI (no local seed), exclusive `waitForReady`, per-device local DB filename, drop watch updates after unmount. **Not** an in-browser IndexedDB flush proof |
 | Lynx-for-Web Host helper (`attach` + WASQLite factory ESM URL) | **Built**. Served by `pnpm dev:web` / `pnpm preview:web` |
 | Compose profile `sync` (Postgres + PowerSync + demo-api) | **Checked in**. Image pull / container start is **not verified** in every environment. If `journeyapps/powersync-service` cannot be pulled or exits, the app stays a local offline queue |
 | Demo token endpoint | **Static HS256 JWT** minted by `demo-api` with the compose-stack secret. **Not** a JourneyApps / PowerSync Cloud account. **Not** RS256/JWKS from a real IdP |

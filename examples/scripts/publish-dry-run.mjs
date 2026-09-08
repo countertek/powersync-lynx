@@ -30,7 +30,7 @@ function run(command, args, cwd) {
 
 async function registryUp() {
   const response = await fetch(registry).catch(() => null);
-  if (response == null || response.ok === false && response.status !== 404) {
+  if (response == null || (response.ok === false && response.status !== 404)) {
     throw new Error(
       `Verdaccio is not reachable at ${registry}. From examples/: docker compose --profile registry up -d`,
     );

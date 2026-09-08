@@ -10,13 +10,7 @@ const PUBLIC_POWERSYNC_URL = process.env.POWERSYNC_PUBLIC_URL ?? "http://127.0.0
 const AUTH_KEY = process.env.PS_CLIENT_AUTH_KEY ?? "";
 const USER_ID = process.env.DEMO_USER_ID ?? "demo-user";
 const ALLOWED_TABLES = new Set(["todos"]);
-const ALLOWED_COLUMNS = new Set([
-  "id",
-  "description",
-  "completed",
-  "created_at",
-  "completed_at",
-]);
+const ALLOWED_COLUMNS = new Set(["id", "description", "completed", "created_at", "completed_at"]);
 
 const pool = new Pool({
   host: process.env.PGHOST ?? "127.0.0.1",

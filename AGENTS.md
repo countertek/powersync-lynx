@@ -20,7 +20,6 @@ Normative spec: `docs/spec.md` (captain override: Client is TypeScript sources o
 
 Consumer TODO demo lives under `examples/`. Demo guide: `examples/README.md`. Do not put `@powersync/web` in the library install graph.
 
-
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.

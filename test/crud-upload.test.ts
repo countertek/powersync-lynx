@@ -7,7 +7,7 @@ function crudEntryLike(fields: {
   op: string;
   table: string;
   id: string;
-  opData?: Record<string, unknown> | null;
+  opData?: { description: string; completed: number } | null;
 }) {
   return {
     ...fields,

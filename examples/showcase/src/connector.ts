@@ -26,8 +26,14 @@ export function hasDemoCredentials(): boolean {
   return configured != null;
 }
 
+/** Plain { op, table, id, opData } for demo-api. CrudEntry.toJSON() emits { type, data } instead. */
 export function crudUploadEntries(
-  crud: ReadonlyArray<{ op: string; table: string; id: string; opData?: Record<string, unknown> | null }>,
+  crud: ReadonlyArray<{
+    op: string;
+    table: string;
+    id: string;
+    opData?: Record<string, unknown> | null;
+  }>,
 ): Array<{ op: string; table: string; id: string; opData: Record<string, unknown> | null }> {
   return crud.map((entry) => ({
     op: entry.op,
