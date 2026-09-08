@@ -397,30 +397,48 @@ async function dispatchClose(data: Cloneable): Promise<NativeEnvelope> {
     return { ok: false, message: `unknown dbId: ${dbId}` };
   }
   return enqueueConnection(conn, async () => {
+    if (connections.get(dbId) !== conn) {
+      return { ok: false, message: `unknown dbId: ${dbId}` };
+    }
     await abortHeldLease(conn);
-    connections.delete(dbId);
     const entry = files.get(conn.fileKey);
-    if (entry) {
+    if (entry == null) {
+      connections.delete(dbId);
+      return { ok: true };
+    }
+    if (entry.refCount > 1) {
+      connections.delete(dbId);
       entry.refCount -= 1;
-      if (entry.refCount <= 0) {
-        const adapter = entry.adapter;
-        entry.adapter = null;
-        const closing = Promise.resolve(adapter?.close?.()).then(() => undefined);
-        entry.pending = closing;
-        try {
-          await closing;
-        } finally {
-          if (entry.pending === closing) {
-            entry.pending = null;
-          }
-          if (files.get(conn.fileKey) === entry && entry.refCount <= 0 && entry.adapter == null) {
-            files.delete(conn.fileKey);
-          }
-        }
+      return { ok: true };
+    }
+    const adapter = entry.adapter;
+    if (adapter == null) {
+      dropClosedFile(dbId, conn, entry);
+      return { ok: true };
+    }
+    const closing = Promise.resolve(adapter.close()).then(() => undefined);
+    entry.pending = closing;
+    try {
+      await closing;
+      dropClosedFile(dbId, conn, entry);
+      return { ok: true };
+    } catch (err) {
+      return failure(err instanceof Error || err instanceof Object ? err : String(err));
+    } finally {
+      if (entry.pending === closing) {
+        entry.pending = null;
       }
     }
-    return { ok: true };
   });
+}
+
+function dropClosedFile(dbId: string, conn: ConnectionEntry, entry: FileEntry): void {
+  connections.delete(dbId);
+  entry.refCount -= 1;
+  entry.adapter = null;
+  if (files.get(conn.fileKey) === entry && entry.refCount <= 0 && entry.adapter == null) {
+    files.delete(conn.fileKey);
+  }
 }
 
 async function withLock<T>(

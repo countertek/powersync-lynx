@@ -429,6 +429,38 @@ test("executeBatch returns QueryResult without rows", async () => {
   await adapter.close();
 });
 
+test("partial close retries only remaining native connections", async () => {
+  const { adapter, mock } = await openAdapter();
+  const writeDbId = mock.opens.find((open) => open.payload.readOnly === false).dbId;
+  const failReaderId = mock.opens.find((open) => open.payload.readOnly === true).dbId;
+  let failReaderCloses = 0;
+
+  globalThis.NativeModules.NativePowerSyncModule.close = (dbId, cb) => {
+    mock.closes.push({ dbId, callback: cb instanceof Function });
+    queueMicrotask(() => {
+      if (dbId === failReaderId && failReaderCloses === 0) {
+        failReaderCloses += 1;
+        cb({ ok: false, message: "reader close failed" });
+        return;
+      }
+      cb({ ok: true });
+    });
+    return Promise.resolve("must-not-await-native-return");
+  };
+
+  await assert.rejects(() => adapter.close(), /reader close failed/);
+  assert.equal(mock.closes.length, mock.opens.length);
+  assert.equal(mock.closes.filter((close) => close.dbId === writeDbId).length, 1);
+  assert.equal(mock.closes.filter((close) => close.dbId === failReaderId).length, 1);
+
+  const afterFirst = mock.closes.length;
+  await adapter.close();
+  assert.deepEqual(
+    mock.closes.slice(afterFirst).map((close) => close.dbId),
+    [failReaderId],
+  );
+});
+
 test("close nulls connections so a second close cannot re-close dbIds", async () => {
   const { adapter, mock } = await openAdapter();
   await adapter.close();

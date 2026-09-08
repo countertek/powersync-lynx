@@ -678,6 +678,101 @@ test("Lynx-bundle Adapter runs SQL RPC through the Host helper factory", async (
   assert.equal(calls.closes.length, 1);
 });
 
+test("last close keeps dbId when adapter.close rejects so retry can finish", async () => {
+  let closeAttempts = 0;
+  const tx = {
+    async executeRaw(sql, params) {
+      return defaultSqlResult(sql, params);
+    },
+    async executeBatch() {
+      return { insertId: 0, rowsAffected: 0, array: [] };
+    },
+  };
+  const loadWeb = async () => ({
+    WASQLiteOpenFactory: class {
+      openDB() {
+        return {
+          async readLock(fn) {
+            return fn(tx);
+          },
+          async writeLock(fn) {
+            return fn(tx);
+          },
+          async close() {
+            closeAttempts += 1;
+            if (closeAttempts === 1) {
+              throw new Error("worker already dead");
+            }
+          },
+        };
+      }
+    },
+    createConsoleLogger() {
+      return { log() {} };
+    },
+  });
+
+  const opened = await handleNativeCall("open", { dbFilename: "retry-close.db" }, undefined, loadWeb);
+  assert.equal(opened.ok, true);
+  assert.equal(mappingStats().files, 1);
+  assert.equal(mappingStats().connections, 1);
+
+  const first = await handleNativeCall("close", opened.dbId, undefined, loadWeb);
+  assert.equal(first.ok, false);
+  assert.equal(first.message, "worker already dead");
+  assert.equal(mappingStats().files, 1);
+  assert.equal(mappingStats().connections, 1);
+
+  const retry = await handleNativeCall("close", opened.dbId, undefined, loadWeb);
+  assert.equal(retry.ok, true, retry.message);
+  assert.equal(mappingStats().files, 0);
+  assert.equal(mappingStats().connections, 0);
+  assert.equal(closeAttempts, 2);
+});
+
+test("duplicate close of one dbId does not close a sibling file share", async () => {
+  const calls = {};
+  const loadWeb = loadMock(calls);
+  const first = await handleNativeCall("open", { dbFilename: "share.db" }, undefined, loadWeb);
+  const sibling = await handleNativeCall(
+    "open",
+    { dbFilename: "share.db", readOnly: true },
+    undefined,
+    loadWeb,
+  );
+  assert.equal(first.ok, true);
+  assert.equal(sibling.ok, true);
+  assert.equal(mappingStats().files, 1);
+  assert.equal(mappingStats().connections, 2);
+
+  const [closeA, closeB] = await Promise.all([
+    handleNativeCall("close", first.dbId, undefined, loadWeb),
+    handleNativeCall("close", first.dbId, undefined, loadWeb),
+  ]);
+  const okCount = [closeA, closeB].filter((result) => result.ok === true).length;
+  const failCount = [closeA, closeB].filter((result) => result.ok === false).length;
+  assert.equal(okCount, 1);
+  assert.equal(failCount, 1);
+  assert.ok([closeA, closeB].some((result) => result.ok === false && /unknown dbId/.test(result.message)));
+  assert.equal(calls.closes.length, 0);
+  assert.equal(mappingStats().files, 1);
+  assert.equal(mappingStats().connections, 1);
+
+  const executed = await handleNativeCall(
+    "execute",
+    { dbId: sibling.dbId, sql: "select 1", params: [1] },
+    undefined,
+    loadWeb,
+  );
+  assert.equal(executed.ok, true, executed.message);
+
+  const siblingClosed = await handleNativeCall("close", sibling.dbId, undefined, loadWeb);
+  assert.equal(siblingClosed.ok, true, siblingClosed.message);
+  assert.equal(calls.closes.length, 1);
+  assert.equal(mappingStats().files, 0);
+  assert.equal(mappingStats().connections, 0);
+});
+
 test("Lynx-bundle PowerSyncDatabase works through the Host helper", async () => {
   const store = { lists: [] };
   installHostHelper(appSqlHandler(store));
