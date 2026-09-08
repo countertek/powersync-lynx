@@ -1,0 +1,25 @@
+storage: /verdaccio/storage/data
+plugins: /verdaccio/plugins
+web:
+  title: PowerSync Lynx local registry
+auth:
+  htpasswd:
+    file: /verdaccio/storage/htpasswd
+    max_users: -1
+uplinks:
+  npmjs:
+    url: https://registry.npmjs.org/
+packages:
+  "powersync-lynx":
+    access: $all
+    publish: $all
+    unpublish: $all
+  "@*/*":
+    access: $all
+    publish: $authenticated
+    proxy: npmjs
+  "**":
+    access: $all
+    publish: $authenticated
+    proxy: npmjs
+log: { type: stdout, format: pretty, level: http }

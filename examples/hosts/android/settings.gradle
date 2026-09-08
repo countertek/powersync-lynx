@@ -1,0 +1,5 @@
+plugins {
+  id 'org.lynxsdk.library-settings'
+}
+
+rootProject.name = 'powersync-lynx-showcase'

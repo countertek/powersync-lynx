@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PowerSync Lynx TODO</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="chrome">
+      <p class="eyebrow">Lynx-for-Web host</p>
+      <h1>PowerSync Lynx TODO</h1>
+      <p class="lede">
+        This page calls <code>attach()</code> on <code>&lt;lynx-view&gt;</code> before the bundle
+        starts, mapping Native Module SQL RPC onto WASQLite. Open
+        <code>?device=a</code> and <code>?device=b</code> in two windows for the cross-device money
+        shot — each device id gets its own local DB.
+      </p>
+      <p class="note">
+        Direct-wires to a local compose stack at <code>127.0.0.1:8080</code> (PowerSync) and
+        <code>127.0.0.1:8081</code> (demo token + upload). If that stack is down, the app stays a
+        local offline queue. See <code>examples/README.md</code> for what is and is not verified.
+      </p>
+    </header>
+    <lynx-view id="ps-lynx" style="width: 100%; height: 100%"></lynx-view>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

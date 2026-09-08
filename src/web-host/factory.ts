@@ -10,8 +10,9 @@ import type { NativeWireEnvelope } from "../adapter/native.ts";
 type NativeModulesCall = (name: string, data: Cloneable) => Cloneable | Promise<Cloneable>;
 
 interface LynxNativeModulesBag {
-  readonly NativePowerSyncModule?: NativePowerSyncFactory;
+  NativePowerSyncModule?: NativePowerSyncFactory;
 }
+
 type FactoryCallback = (envelope: NativeWireEnvelope) => void;
 
 interface HopErrorFields {
@@ -63,13 +64,15 @@ export interface NativePowerSyncFactory {
 
 /**
  * lynx-bg Native Module factory. Default export is loaded from nativeModulesMap.
+ * Assigns methods onto the NativeModules bag and the worker global because
+ * lynx-bg lookup is NativeModules.NativePowerSyncModule, not the return value.
  * Does not import @powersync/web.
  */
 export default function createNativePowerSyncModule(
-  _NativeModules: LynxNativeModulesBag,
+  nativeModules: LynxNativeModulesBag,
   NativeModulesCall: NativeModulesCall,
 ): NativePowerSyncFactory {
-  return {
+  const methods: NativePowerSyncFactory = {
     open(options, callback) {
       hop(NativeModulesCall, "open", options, callback);
     },
@@ -83,4 +86,8 @@ export default function createNativePowerSyncModule(
       hop(NativeModulesCall, "executeBatch", asCloneableObject({ dbId, sql, params }), callback);
     },
   };
+  nativeModules.NativePowerSyncModule = methods;
+  // lynx-bg looks up NativeModules.NativePowerSyncModule on the worker global.
+  Object.assign(globalThis, { NativeModules: nativeModules });
+  return methods;
 }

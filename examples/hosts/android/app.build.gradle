@@ -1,0 +1,25 @@
+plugins {
+  id 'com.android.application'
+  id 'org.lynxsdk.library-build'
+}
+
+android {
+  namespace 'com.powersync.lynx.showcase'
+  compileSdk 35
+
+  defaultConfig {
+    applicationId 'com.powersync.lynx.showcase'
+    minSdk 24
+    targetSdk 35
+  }
+
+  compileOptions {
+    sourceCompatibility JavaVersion.VERSION_11
+    targetCompatibility JavaVersion.VERSION_11
+  }
+}
+
+dependencies {
+  implementation 'org.lynxsdk.lynx:lynx:4.0.1'
+  implementation 'org.lynxsdk.lynx:lynx-service-http:4.0.1'
+}

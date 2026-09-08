@@ -1,0 +1,53 @@
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: #050910;
+  color: #e7eefc;
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-serif,
+    sans-serif;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+}
+
+.chrome {
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid #24324a;
+}
+
+.eyebrow {
+  margin: 0;
+  color: #2ee6d6;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: 6px 0 8px;
+  font-size: 22px;
+}
+
+.lede,
+.note {
+  margin: 0 0 8px;
+  color: #93a0b8;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: #e7eefc;
+}
+
+lynx-view {
+  flex: 1;
+  min-height: 0;
+}

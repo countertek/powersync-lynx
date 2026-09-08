@@ -5,7 +5,12 @@ import {
   type Cloneable,
   type CloneableObject,
 } from "./cloneable.ts";
-import { copyToArrayBuffer, errorCode, hasPrimitiveConstructor } from "../values.ts";
+import {
+  copyToArrayBuffer,
+  errorCode,
+  hasPrimitiveConstructor,
+  type RuntimeValue,
+} from "../values.ts";
 import type { NativeEnvelope, NativeFailEnvelope, NativeOkEnvelope } from "../adapter/native.ts";
 
 export const MODULE_NAME = "NativePowerSyncModule";
@@ -93,6 +98,7 @@ interface FileEntry {
   refCount: number;
   adapter: WASQLiteAdapter | null;
   pending: Promise<void> | null;
+  pendingTables: string[];
 }
 
 interface HeldLease {
@@ -293,7 +299,7 @@ async function openFile(
     return entry;
   }
 
-  entry = { refCount: 0, adapter: null, pending: null };
+  entry = { refCount: 0, adapter: null, pending: null, pendingTables: [] };
   files.set(fileKeyValue, entry);
   const opening = entry;
   opening.pending = (async () => {
@@ -441,15 +447,97 @@ function dropClosedFile(dbId: string, conn: ConnectionEntry, entry: FileEntry): 
   }
 }
 
+function isUpdateHooksGet(sql: string): boolean {
+  return /powersync_update_hooks\s*\(\s*'get'\s*\)/i.test(sql);
+}
+
+function tablesFromJsonCell(cell: Cloneable | undefined): string[] {
+  if (cell == null) {
+    return [];
+  }
+  try {
+    const parsed: unknown = JSON.parse(String(cell));
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    const tables: string[] = [];
+    for (const item of parsed) {
+      // SAFETY: powersync_update_hooks('get') JSON is a list of primitive table names.
+      const value = item as RuntimeValue;
+      if (hasPrimitiveConstructor(value, String)) {
+        tables.push(value);
+      }
+    }
+    return tables;
+  } catch {
+    return [];
+  }
+}
+
+function addPendingTables(entry: FileEntry, tables: string[]): void {
+  for (const table of tables) {
+    if (!entry.pendingTables.includes(table)) {
+      entry.pendingTables.push(table);
+    }
+  }
+}
+
+async function stashUpdateHooks(tx: WASQLiteTx, entry: FileEntry | undefined): Promise<void> {
+  if (entry == null) {
+    return;
+  }
+  try {
+    // WASQLite writeLock can drain powersync_update_hooks before the Adapter's
+    // follow-up get; stash names here and merge them in mergeHookGetEnvelope.
+    const result = await tx.executeRaw("SELECT powersync_update_hooks('get')", []);
+    addPendingTables(entry, tablesFromJsonCell(result.rawRows?.[0]?.[0]));
+  } catch {
+    // PRAGMAs can run before sqlite-core hooks exist on a mock or fresh connection.
+  }
+}
+
+function takePendingTables(entry: FileEntry, extra: string[]): string[] {
+  const merged: string[] = [];
+  for (const table of [...entry.pendingTables, ...extra]) {
+    if (!merged.includes(table)) {
+      merged.push(table);
+    }
+  }
+  entry.pendingTables = [];
+  return merged;
+}
+
+function mergeHookGetEnvelope(
+  entry: FileEntry | undefined,
+  result: NativeOkEnvelope,
+): NativeOkEnvelope {
+  if (entry == null) {
+    return result;
+  }
+  const tables = takePendingTables(entry, tablesFromJsonCell(result.rawRows?.[0]?.[0]));
+  return {
+    ...result,
+    columnNames: ["powersync_update_hooks"],
+    rawRows: [[JSON.stringify(tables)]],
+  };
+}
+
 async function withLock<T>(
   adapter: WASQLiteAdapter,
   readOnly: boolean,
   fn: (tx: WASQLiteTx) => Promise<T>,
+  entry?: FileEntry,
 ): Promise<T> {
   if (readOnly) {
     return adapter.readLock(fn);
   }
-  return adapter.writeLock(fn);
+  return adapter.writeLock(async (tx) => {
+    try {
+      return await fn(tx);
+    } finally {
+      await stashUpdateHooks(tx, entry);
+    }
+  });
 }
 
 function asExecuteRequest(data: Cloneable): ExecuteRequest {
@@ -498,7 +586,11 @@ async function enqueueConnection<T>(conn: ConnectionEntry, run: () => Promise<T>
   }
 }
 
-async function acquireHeldLease(adapter: WASQLiteAdapter, readOnly: boolean): Promise<HeldLease> {
+async function acquireHeldLease(
+  adapter: WASQLiteAdapter,
+  readOnly: boolean,
+  entry?: FileEntry,
+): Promise<HeldLease> {
   let releaseLock = (): void => {};
   const held = new Promise<void>((resolve) => {
     releaseLock = resolve;
@@ -509,12 +601,17 @@ async function acquireHeldLease(adapter: WASQLiteAdapter, readOnly: boolean): Pr
     settleTx = resolve;
     failTx = reject;
   });
-  const finished = withLock(adapter, readOnly, async (tx) => {
-    if (settleTx) {
-      settleTx(tx);
-    }
-    await held;
-  });
+  const finished = withLock(
+    adapter,
+    readOnly,
+    async (tx) => {
+      if (settleTx) {
+        settleTx(tx);
+      }
+      await held;
+    },
+    entry,
+  );
   finished.catch((reason: Error) => {
     if (failTx) {
       failTx(reason);
@@ -550,11 +647,13 @@ async function executeOnHeldOrLock(
   sql: string,
   params: WASQLiteBindValue,
 ): Promise<NativeOkEnvelope> {
+  const entry = files.get(conn.fileKey);
   const control = transactionControl(sql);
+  let envelope: NativeOkEnvelope;
   if (control === "begin") {
     const started = conn.lease == null;
     if (started) {
-      conn.lease = await acquireHeldLease(adapter, conn.readOnly);
+      conn.lease = await acquireHeldLease(adapter, conn.readOnly, entry);
     }
     const lease = conn.lease;
     if (lease == null) {
@@ -562,34 +661,48 @@ async function executeOnHeldOrLock(
     }
     try {
       const result = await lease.tx.executeRaw(sql, params);
-      return toNativeEnvelope(result);
+      envelope = toNativeEnvelope(result);
     } catch (failure) {
       if (started) {
         await abortHeldLease(conn);
       }
       throw failure;
     }
-  }
-  if (control === "commit" || control === "rollback") {
+  } else if (control === "commit" || control === "rollback") {
     const lease = conn.lease;
     if (lease == null) {
-      const result = await withLock(adapter, conn.readOnly, (tx) => tx.executeRaw(sql, params));
-      return toNativeEnvelope(result);
+      const result = await withLock(
+        adapter,
+        conn.readOnly,
+        (tx) => tx.executeRaw(sql, params),
+        entry,
+      );
+      envelope = toNativeEnvelope(result);
+    } else {
+      try {
+        const result = await lease.tx.executeRaw(sql, params);
+        envelope = toNativeEnvelope(result);
+      } finally {
+        conn.lease = null;
+        await lease.release();
+      }
     }
-    try {
-      const result = await lease.tx.executeRaw(sql, params);
-      return toNativeEnvelope(result);
-    } finally {
-      conn.lease = null;
-      await lease.release();
-    }
-  }
-  if (conn.lease != null) {
+  } else if (conn.lease != null) {
     const result = await conn.lease.tx.executeRaw(sql, params);
-    return toNativeEnvelope(result);
+    envelope = toNativeEnvelope(result);
+  } else {
+    const result = await withLock(
+      adapter,
+      conn.readOnly,
+      (tx) => tx.executeRaw(sql, params),
+      entry,
+    );
+    envelope = toNativeEnvelope(result);
   }
-  const result = await withLock(adapter, conn.readOnly, (tx) => tx.executeRaw(sql, params));
-  return toNativeEnvelope(result);
+  if (isUpdateHooksGet(sql) && conn.readOnly !== true) {
+    return mergeHookGetEnvelope(entry, envelope);
+  }
+  return envelope;
 }
 
 async function dispatchExecute(data: Cloneable): Promise<NativeEnvelope> {
@@ -642,24 +755,29 @@ async function dispatchExecuteBatch(data: Cloneable): Promise<NativeEnvelope> {
         : await conn.lease.tx.executeBatch(sql, params);
       return toNativeEnvelope(result);
     }
-    const result = await withLock(adapter, conn.readOnly, async (tx) => {
-      if (conn.readOnly) {
-        return tx.executeRaw(sql, params);
-      }
-      await tx.executeRaw("BEGIN IMMEDIATE", []);
-      try {
-        const batchResult = await tx.executeBatch(sql, params);
-        await tx.executeRaw("COMMIT", []);
-        return batchResult;
-      } catch (failure) {
-        try {
-          await tx.executeRaw("ROLLBACK", []);
-        } catch {
-          // Batch already failed; keep the original error.
+    const result = await withLock(
+      adapter,
+      conn.readOnly,
+      async (tx) => {
+        if (conn.readOnly) {
+          return tx.executeRaw(sql, params);
         }
-        throw failure;
-      }
-    });
+        await tx.executeRaw("BEGIN IMMEDIATE", []);
+        try {
+          const batchResult = await tx.executeBatch(sql, params);
+          await tx.executeRaw("COMMIT", []);
+          return batchResult;
+        } catch (failure) {
+          try {
+            await tx.executeRaw("ROLLBACK", []);
+          } catch {
+            // Batch already failed; keep the original error.
+          }
+          throw failure;
+        }
+      },
+      entry,
+    );
     return toNativeEnvelope(result);
   });
 }

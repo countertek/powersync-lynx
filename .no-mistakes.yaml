@@ -1,5 +1,6 @@
 # no-mistakes repository configuration
-# This repository has no CI workflows (.github/workflows is empty by design).
+# PRs have no test/lint CI. A publish-only workflow lives in
+# .github/workflows/publish.yml (workflow_dispatch + version tags).
 # Declaring no_ci lets the pipeline treat a zero-check PR as checks-passed
 # instead of waiting for checks that will never register.
 no_ci: true

@@ -305,7 +305,7 @@ Named export: `attach`. Types for `attach` / `detach` / attach options live on t
 
 Lynx 4.0 `<lynx-view>` needs both:
 
-1. `nativeModulesMap[name] = esmUrl` — default export `(NativeModules, NativeModulesCall) => { open, close, execute, executeBatch }`. Runs in `lynx-bg`. Each method hops `NativeModulesCall` then invokes the Adapter’s `function` callback with the native envelope.
+1. `nativeModulesMap[name] = esmUrl` — default export `(NativeModules, NativeModulesCall) => { open, close, execute, executeBatch }`. Runs in `lynx-bg`. The factory assigns those methods onto the `NativeModules` bag and the lynx-bg `NativeModules` global so bundle lookup of `NativeModules.NativePowerSyncModule` succeeds. Each method hops `NativeModulesCall` then invokes the Adapter’s `function` callback with the native envelope.
 2. `onNativeModulesCall(name, data, moduleName)` — host page. Owns `WASQLiteOpenFactory` / execute. Returns `{ ok: true, … }` or `{ ok: false, message, code? }`. Does not throw for this module.
 
 Autolink does not assign those properties. The host page calls `attach` to wire them for one `<lynx-view>`.
@@ -367,7 +367,7 @@ Do not construct six factories on one IndexedDB/OPFS file. Do not construct `Web
 
 `dbLocation` is official `SQLOpenOptions.dbLocation` (directory must already exist). First open of a key binds attach options; a second `<lynx-view>` that opens the same file reuses that factory (one instance per file).
 
-The JS Adapter still issues official OP-SQLite PRAGMAs and `powersync_update_hooks('install'|'get')` via `execute`.
+The JS Adapter still issues official OP-SQLite PRAGMAs and `powersync_update_hooks('install'|'get')` via `execute`. WASQLite `writeLock` can consume update-hook names before that follow-up `get`; the Host helper stashes table names at lock release and returns the merged list on `powersync_update_hooks('get')` so `watch` still refreshes.
 
 ### Web hop (`Cloneable`)
 

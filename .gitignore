@@ -16,8 +16,18 @@ android/host/local.properties
 *.exp
 .DS_Store
 /tmp/
+*.tsbuildinfo
+
 # Extra-arch core dylib with no matching powersync-lynx.node (not an Autolink artifact).
 dist/macos/x64/
 
 # Generated lynx-bg factory ESM (scripts/bundle-web-host-factory.mjs).
 dist/web-host/
+
+# Examples consumer app (separate pnpm project).
+examples/**/node_modules/
+examples/**/lynx-dist/
+examples/**/host-dist/
+examples/**/.rspeedy/
+
+

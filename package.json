@@ -38,7 +38,8 @@
     "test": "node --test test/*.test.ts",
     "prepack": "pnpm typecheck && node scripts/bundle-web-host-factory.mjs && node scripts/fetch-native-deps.mjs --sqlite",
     "bundle-factory": "node scripts/bundle-web-host-factory.mjs",
-    "prepare": "node scripts/bundle-web-host-factory.mjs"
+    "prepare": "node scripts/bundle-web-host-factory.mjs",
+    "publish-dry-run": "node examples/scripts/publish-dry-run.mjs"
   },
   "dependencies": {
     "@powersync/common": "^2.2.0",

@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "paths": {
+      "powersync-lynx/web-host": ["./web-host-shim.d.ts"]
+    }
+  },
+  "include": ["./main.ts", "./lynx-view.d.ts", "./web-host-shim.d.ts", "./lynx-web-core-assets.ts"]
+}
