@@ -2,10 +2,19 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 
+import { Schema, Table, column } from "../src/index.ts";
+import { LynxDBAdapter } from "../src/adapter/LynxDBAdapter.ts";
+import { PowerSyncDatabase } from "../src/PowerSyncDatabase.ts";
 import { attach } from "../src/web-host/index.ts";
 import { decodeCloneable, encodeCloneable } from "../src/web-host/cloneable.ts";
 import createFactory from "../src/web-host/factory.ts";
-import { MODULE_NAME, mappingStats, resetWebHostMapping } from "../src/web-host/page-rpc.ts";
+import {
+  MODULE_NAME,
+  createOnNativeModulesCall,
+  handleNativeCall,
+  mappingStats,
+  resetWebHostMapping,
+} from "../src/web-host/page-rpc.ts";
 
 interface WebCalls {
   constructs: object[];
@@ -17,9 +26,19 @@ interface WebCalls {
 
 afterEach(() => {
   resetWebHostMapping();
+  delete globalThis.NativeModules;
 });
 
-function mockWeb(calls: WebCalls) {
+function defaultSqlResult(sql, params) {
+  return {
+    insertId: 1,
+    rowsAffected: 1,
+    columnNames: ["n"],
+    rawRows: [[params?.[0] ?? 0]],
+  };
+}
+
+function mockWeb(calls: WebCalls, handleSql) {
   calls.constructs = [];
   calls.closes = [];
   calls.locks = [];
@@ -50,15 +69,23 @@ function mockWeb(calls: WebCalls) {
   const tx = {
     async executeRaw(sql, params) {
       calls.executeRaw.push({ sql, params });
-      return {
-        insertId: 1,
-        rowsAffected: 1,
-        columnNames: ["n"],
-        rawRows: [[params?.[0] ?? 0]],
-      };
+      if (handleSql instanceof Function) {
+        return handleSql(sql, params);
+      }
+      return defaultSqlResult(sql, params);
     },
     async executeBatch(sql, params) {
       calls.executeBatch.push({ sql, params });
+      if (handleSql instanceof Function) {
+        let rowsAffected = 0;
+        let insertId = 0;
+        for (const row of params ?? []) {
+          const result = handleSql(sql, row);
+          rowsAffected += result.rowsAffected ?? 0;
+          insertId = result.insertId ?? insertId;
+        }
+        return { insertId, rowsAffected, array: [] };
+      }
       return { insertId: 2, rowsAffected: params?.length ?? 0, array: [] };
     },
   };
@@ -71,21 +98,82 @@ function mockWeb(calls: WebCalls) {
   };
 }
 
-function loadMock(calls) {
-  const web = mockWeb(calls);
+function loadMock(calls, handleSql) {
+  const web = mockWeb(calls, handleSql);
   return async () => web;
 }
 
-test("encode/decode ArrayBuffer and bigint both directions", () => {
+function installHostHelper(handleSql) {
+  const calls = {};
+  const loadWeb = loadMock(calls, handleSql);
+  const hop = (name, data) => handleNativeCall(name, data, undefined, loadWeb);
+  globalThis.NativeModules = {
+    NativePowerSyncModule: createFactory({}, hop),
+  };
+  return calls;
+}
+
+function appSqlHandler(store = { lists: [] }) {
+  function ok(columnNames, rawRows, extra = {}) {
+    return { insertId: 0, rowsAffected: 0, columnNames, rawRows, ...extra };
+  }
+  return function handleSql(sql, params) {
+    if (sql.includes("powersync_rs_version")) {
+      return ok(["version"], [["0.5.3"]]);
+    }
+    if (sql.includes("powersync_offline_sync_status")) {
+      return ok(
+        ["r"],
+        [
+          [
+            JSON.stringify({
+              connected: false,
+              connecting: false,
+              priority_status: [],
+              downloading: null,
+              streams: [],
+            }),
+          ],
+        ],
+      );
+    }
+    if (sql.includes("PRAGMA table_info")) {
+      return ok(["cid", "name"], [[0, "type"]]);
+    }
+    if (sql.includes("sqlite_master")) {
+      return ok(["name"], []);
+    }
+    if (sql.includes("powersync_update_hooks('get')")) {
+      return ok(["powersync_update_hooks"], [["[]"]]);
+    }
+    if (/INSERT INTO lists/i.test(sql)) {
+      store.lists.push({ id: params?.[0], name: params?.[1] });
+      return ok([], [], { insertId: store.lists.length, rowsAffected: 1 });
+    }
+    if (/SELECT .*FROM lists/i.test(sql)) {
+      return ok(
+        ["id", "name"],
+        store.lists.map((row) => [row.id, row.name]),
+      );
+    }
+    return ok([], []);
+  };
+}
+
+test("encode/decode ArrayBuffer, Uint8Array, and bigint both directions", () => {
   const buf = new Uint8Array([0, 255, 16]).buffer;
-  const encoded = encodeCloneable({ blob: buf, n: 9n, nested: [1n, buf] });
+  const u8 = new Uint8Array([7, 8, 9]);
+  const encoded = encodeCloneable({ blob: buf, bytes: u8, n: 9n, nested: [1n, buf] });
   assert.deepEqual(encoded.blob, { __psAb: true, u8: [0, 255, 16] });
+  assert.deepEqual(encoded.bytes, { __psAb: true, u8: [7, 8, 9] });
   assert.deepEqual(encoded.n, { __psBig: true, v: "9" });
   assert.equal(encoded.nested[0].__psBig, true);
   const decoded = decodeCloneable(encoded);
   assert.equal(decoded.n, 9n);
   assert.ok(decoded.blob instanceof ArrayBuffer);
   assert.deepEqual([...new Uint8Array(decoded.blob)], [0, 255, 16]);
+  assert.ok(decoded.bytes instanceof ArrayBuffer);
+  assert.deepEqual([...new Uint8Array(decoded.bytes)], [7, 8, 9]);
   assert.equal(decoded.nested[0], 1n);
 });
 
@@ -229,7 +317,6 @@ test("readOnly routes execute to readLock+executeRaw; writes use writeLock", asy
 });
 
 test("page catch returns ok:false envelope with optional code", async () => {
-  const { handleNativeCall } = await import("../src/web-host/page-rpc.ts");
   const loadWeb = async () => ({
     WASQLiteOpenFactory: class {
       constructor() {}
@@ -260,7 +347,6 @@ test("page catch returns ok:false envelope with optional code", async () => {
 });
 
 test("factory encodes params and decodes envelopes; Adapter sees ArrayBuffer/bigint", async () => {
-  const { handleNativeCall } = await import("../src/web-host/page-rpc.ts");
   const calls = {};
   const loadWeb = loadMock(calls);
   const handler = async (name, data) => handleNativeCall(name, data, undefined, loadWeb);
@@ -280,4 +366,123 @@ test("factory encodes params and decodes envelopes; Adapter sees ArrayBuffer/big
   assert.equal(sent[1], 99n);
   assert.equal(exec.rawRows[0][0] instanceof ArrayBuffer, true);
   assert.deepEqual([...new Uint8Array(exec.rawRows[0][0])], [7, 8]);
+});
+
+test("factory methods return immediately and invoke the callback later", async () => {
+  const calls = {};
+  const loadWeb = loadMock(calls);
+  const handler = (name, data) => handleNativeCall(name, data, undefined, loadWeb);
+  const methods = createFactory({}, handler);
+
+  let callbackRan = false;
+  const done = new Promise((resolve) => {
+    const ret = methods.open({ dbFilename: "async.db" }, (env) => {
+      callbackRan = true;
+      resolve(env);
+    });
+    assert.equal(ret, undefined);
+    assert.equal(callbackRan, false);
+  });
+  const env = await done;
+  assert.equal(callbackRan, true);
+  assert.equal(env.ok, true);
+});
+
+test("wrapped onNativeModulesCall dispatches NativePowerSyncModule and falls through", async () => {
+  const calls = {};
+  const previous = async () => ({ from: "prev" });
+  const handler = createOnNativeModulesCall(previous, undefined, loadMock(calls));
+
+  const opened = await handler("open", { dbFilename: "wrap.db" }, MODULE_NAME);
+  assert.equal(opened.ok, true);
+  assert.equal(calls.constructs.length, 1);
+
+  const other = await handler("ping", { a: 1 }, "bridge");
+  assert.deepEqual(other, { from: "prev" });
+});
+
+test("unknown method and missing dbFilename return ok:false envelopes", async () => {
+  const loadWeb = loadMock({});
+  const missing = await handleNativeCall("open", {}, undefined, loadWeb);
+  assert.equal(missing.ok, false);
+  assert.match(missing.message, /dbFilename/);
+
+  const unknown = await handleNativeCall("vacuum", {}, undefined, loadWeb);
+  assert.equal(unknown.ok, false);
+  assert.match(unknown.message, /unknown method/);
+});
+
+test("last close then reopen constructs a new WASQLiteOpenFactory", async () => {
+  const calls = {};
+  const loadWeb = loadMock(calls);
+  const first = await handleNativeCall("open", { dbFilename: "reopen.db" }, undefined, loadWeb);
+  assert.equal(first.ok, true);
+  assert.equal(calls.constructs.length, 1);
+
+  const closed = await handleNativeCall("close", first.dbId, undefined, loadWeb);
+  assert.equal(closed.ok, true);
+  assert.equal(calls.closes.length, 1);
+  assert.equal(mappingStats().files, 0);
+
+  const second = await handleNativeCall("open", { dbFilename: "reopen.db" }, undefined, loadWeb);
+  assert.equal(second.ok, true);
+  assert.equal(calls.constructs.length, 2);
+  assert.notEqual(second.dbId, first.dbId);
+});
+
+test("Lynx-bundle Adapter runs SQL RPC through the Host helper factory", async () => {
+  const store = { lists: [] };
+  const calls = installHostHelper(appSqlHandler(store));
+  const adapter = new LynxDBAdapter({ name: "app.db", dbLocation: "/tmp/ps" });
+  await adapter.initialized;
+
+  assert.equal(calls.constructs.length, 1);
+  assert.equal(calls.constructs[0].open.dbFilename, "app.db");
+  assert.equal(calls.constructs[0].open.dbLocation, "/tmp/ps");
+  assert.equal(mappingStats().connections, 6);
+
+  const inserted = await adapter.execute("INSERT INTO lists (id, name) VALUES (?, ?)", [
+    "list-1",
+    "Groceries",
+  ]);
+  assert.equal(inserted.rowsAffected, 1);
+
+  const rows = await adapter.getAll("SELECT id, name FROM lists");
+  assert.deepEqual(rows, [{ id: "list-1", name: "Groceries" }]);
+
+  const batch = await adapter.executeBatch("INSERT INTO lists (id, name) VALUES (?, ?)", [
+    ["list-2", "Hardware"],
+    ["list-3", "Pharmacy"],
+  ]);
+  assert.equal(batch.rowsAffected, 2);
+  assert.equal(calls.executeBatch.length, 1);
+
+  await adapter.close();
+  assert.equal(mappingStats().connections, 0);
+  assert.equal(calls.closes.length, 1);
+});
+
+test("Lynx-bundle PowerSyncDatabase works through the Host helper", async () => {
+  const store = { lists: [] };
+  installHostHelper(appSqlHandler(store));
+  const db = new PowerSyncDatabase({
+    schema: new Schema({
+      lists: new Table({ name: column.text }),
+    }),
+    database: { dbFilename: "app.db" },
+  });
+  try {
+    await db.waitForReady();
+    const inserted = await db.execute("INSERT INTO lists (id, name) VALUES (?, ?)", [
+      "list-1",
+      "Groceries",
+    ]);
+    assert.equal(inserted.rowsAffected, 1);
+    const rows = await db.getAll("SELECT id, name FROM lists");
+    assert.deepEqual(rows, [{ id: "list-1", name: "Groceries" }]);
+    await db.close();
+    assert.equal(mappingStats().connections, 0);
+  } finally {
+    db.triggersImpl?.dispose();
+  }
 });
