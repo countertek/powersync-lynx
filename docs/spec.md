@@ -222,11 +222,11 @@ Wire types are the Lynx Native Module table: primitives, `BigInt`, `ArrayBuffer`
 | Method | Arguments | Callback envelope (success) |
 |---|---|---|
 | `open` | `{ dbFilename, dbLocation?, readOnly? }` | `{ ok: true, dbId }` (`dbId` is an opaque string) |
-| `close` | `dbId` | `{ ok: true }` — erase `dbId` only after SQLite close succeeds; keep or re-insert the handle on failure so retry is not `unknown dbId` |
+| `close` | `dbId` | `{ ok: true }` |
 | `execute` | `dbId, sql, params` | `{ ok: true, insertId, rowsAffected, columnNames, rawRows }` (`QueryResult` cells) |
-| `executeBatch` | `dbId, sql, params` | same as `execute` — official RN shape: **one SQL, many parameter rows** (`params: BindValue[][]`). Wraps `BEGIN IMMEDIATE` / `COMMIT`; first error rolls back. Nested in an already-open transaction, it joins that transaction. |
+| `executeBatch` | `dbId, sql, params` | same as `execute` — official RN shape: **one SQL, many parameter rows** (`params: BindValue[][]`) |
 
-`BindValue` / cells: `string | number | bigint | ArrayBuffer | null`. INTEGER / `bigint` identity on the Native Module hop is `{ __psBig: true, v: string }` (same tag as [Web hop](#web-hop-cloneable)). The JS Adapter encodes/decodes so app SQL still sees `bigint`. Decimal strings stay TEXT.
+`BindValue` / cells: `string | number | bigint | ArrayBuffer | null`.
 
 Failure (every method): `{ ok: false, message: string, code?: number }` (`sqlite3_errmsg` / `sqlite3_extended_errcode`). Native does not throw across the wire.
 
@@ -316,7 +316,7 @@ Pseudocode (`?` marks an optional argument):
 const { detach } = attach(lynxView, options?);
 ```
 
-- **Merges** `nativeModulesMap` (keeps other keys). Factory URL is `new URL('../../dist/web-host/factory.js', import.meta.url)` of generated private `dist/web-host/factory.js` (bundled from `src/web-host/factory.ts`) — not a raw TypeScript `import.meta.url` sibling, and not `URL.createObjectURL(new Blob(…))`.
+- **Merges** `nativeModulesMap` (keeps other keys). Factory URL is `new URL('./factory.js', import.meta.url)` of private `lib/web-host/factory.js` — not `URL.createObjectURL(new Blob(…))`.
 - **Wraps** `onNativeModulesCall`: dispatch on our `moduleName`; every other name falls through to the previous handler.
 - Assign both **before** the bundle calls `NativeModules` (set them before `url` / start). Lynx queues `onNativeModulesCall` until a handler exists; `nativeModulesMap` is loaded when `lynx-bg` starts.
 - Returns `{ detach() }`: unwraps our handler if it is still the current one; drops our map key; leaves other keys. Does not revoke a Blob URL. Does not `close()` open databases — that remains `PowerSyncDatabase.close()`. Detach in reverse attach order if the page wrapped again after us.
@@ -360,8 +360,8 @@ On the host page, keyed by `dbFilename` + optional `dbLocation`:
 
 - First `open` constructs `new WASQLiteOpenFactory({ dbFilename, dbLocation, …attachOptions }).openDB()`, mints `dbId`.
 - Later `open`s of that key mint more `dbId`s onto the **same** adapter (refcount). `readOnly` is a routing hint when the VFS actually has readers (`OPFSWriteAheadVFS`); on the default VFS those reads serialize inside WASQLite.
-- `execute` / `executeBatch` on a `dbId` hold one WASQLite lock for the whole JS transaction (`BEGIN` through `COMMIT` / `ROLLBACK` / `close`); other statements take a per-call `readLock` / `writeLock` (`executeRaw` vs `executeBatch` according to `readOnly`). Map WASQLite `QueryResult` onto the native envelope (`insertId`, `rowsAffected`, `columnNames`, `rawRows`).
-- Last `close` for that key awaits `adapter.close()` and drops the entry only after it fulfills. Failure keeps the `dbId` and adapter. Non-last close drops that `dbId` only. Duplicate close of one `dbId` must not close a sibling.
+- `execute` / `executeBatch` on a `dbId` run on that adapter (`readLock` + `executeRaw` vs `writeLock` + `executeRaw` / `executeBatch` according to `readOnly`). Map WASQLite `QueryResult` onto the native envelope (`insertId`, `rowsAffected`, `columnNames`, `rawRows`).
+- Last `close` for that key `adapter.close()`s and drops the entry.
 
 Do not construct six factories on one IndexedDB/OPFS file. Do not construct `WebPowerSyncDatabase`. WASQLite WASM already loads PowerSync sqlite-core; JS never calls `loadExtension`.
 
@@ -449,7 +449,7 @@ Lynx 4.0 Autolink pages cover Android/iOS only; desktop Autolink keys and `plugi
 
 - `.` is ESM-only (`default`), same as `@powersync/common` / `@powersync/web` 2.x. No dual CJS on `.`.
 - `./web-host` is the only public Host-helper subpath. Named export `attach`.
-- Factory ESM is generated private `dist/web-host/factory.js` (bundled from `src/web-host/factory.ts`; committed Client sources stay TypeScript). `attach` sets `nativeModulesMap.NativePowerSyncModule` to `new URL('../../dist/web-host/factory.js', import.meta.url)`. Not a public export. Not a Blob URL.
+- Factory ESM is **private** `lib/web-host/factory.js`. `attach` sets `nativeModulesMap.NativePowerSyncModule` to `new URL('./factory.js', import.meta.url)`. Not a public export. Not a Blob URL.
 - `./lynxtron` is CJS because `pluginLynxtron()` `require`s it. It loads `dist/<host>/<arch>/powersync-lynx.node` so static `LYNX_REGISTER_NATIVE_MODULE` runs. Not app API.
 - `@powersync/web` is an **optional peer** (needed only for `./web-host`). Native installs do not pull WASM.
 - No `@lynx-js/react` peer — the barrel does not import React. The floor is Lynx **4.0+** in the host build (Android Autolink Gradle plugins 4.0+, iOS `cocoapods-lynx-library`, Lynxtron `pluginLynxtron()`).
@@ -495,13 +495,13 @@ powersync-lynx/
     web-host/
       index.js            # attach
       index.d.ts
+      factory.js          # private lynx-bg factory
   lynxtron/
     index.cjs
   android/                # com.powersync.lynx
   ios/
   shared/                 # desktop N-API / C++ (macos + windows)
   dist/
-    web-host/factory.js   # generated lynx-bg factory
     macos/arm64/powersync-lynx.node
     windows/x64/powersync-lynx.node
 ```
