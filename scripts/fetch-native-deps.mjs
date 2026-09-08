@@ -45,12 +45,33 @@ async function download(url, dest) {
   await pipeline(Readable.fromWeb(response.body), fs.createWriteStream(dest));
 }
 
+function materializeRegularFile(src, dest) {
+  try {
+    fs.lstatSync(dest);
+    fs.unlinkSync(dest);
+  } catch {
+    // dest does not exist
+  }
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  fs.copyFileSync(src, dest);
+}
+
+function materializeIosSrcCompileInputs() {
+  const iosSrc = path.join(ROOT, 'ios', 'src');
+  const sqliteDir = path.join(ROOT, 'third_party', 'sqlite');
+  materializeRegularFile(path.join(ROOT, 'shared', 'ps_sql.cc'), path.join(iosSrc, 'ps_sql.cc'));
+  materializeRegularFile(path.join(ROOT, 'shared', 'ps_sql.h'), path.join(iosSrc, 'ps_sql.h'));
+  materializeRegularFile(path.join(sqliteDir, 'sqlite3.c'), path.join(iosSrc, 'sqlite3.c'));
+  materializeRegularFile(path.join(sqliteDir, 'sqlite3.h'), path.join(iosSrc, 'sqlite3.h'));
+}
+
 async function ensureSqlite() {
   const dir = path.join(ROOT, 'third_party', 'sqlite');
   const header = path.join(dir, 'sqlite3.h');
   const source = path.join(dir, 'sqlite3.c');
   if (fs.existsSync(header) && fs.existsSync(source)) {
     console.log('sqlite amalgamation present');
+    materializeIosSrcCompileInputs();
     return;
   }
   const zipPath = path.join(ROOT, 'third_party', `${SQLITE_AMALGAMATION}.zip`);
@@ -65,6 +86,7 @@ async function ensureSqlite() {
   fs.copyFileSync(path.join(extracted, 'sqlite3.h'), header);
   fs.copyFileSync(path.join(extracted, 'sqlite3ext.h'), path.join(dir, 'sqlite3ext.h'));
   console.log('sqlite amalgamation ready');
+  materializeIosSrcCompileInputs();
 }
 
 async function ensureCoreAsset(name, destDir) {
