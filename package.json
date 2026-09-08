@@ -1,9 +1,17 @@
 {
   "name": "powersync-lynx",
   "version": "0.0.0",
-  "type": "module",
   "license": "Apache-2.0",
-  "packageManager": "pnpm@12.3.4",
+  "files": [
+    "lib",
+    "lynxtron",
+    "android",
+    "ios",
+    "shared",
+    "dist",
+    "lynx.lib.json"
+  ],
+  "type": "module",
   "main": "./lib/index.js",
   "types": "./lib/index.d.ts",
   "exports": {
@@ -18,24 +26,33 @@
     "./lynxtron": "./lynxtron/index.cjs",
     "./package.json": "./package.json"
   },
-  "files": [
-    "lib",
-    "lynxtron",
-    "android",
-    "ios",
-    "shared",
-    "dist",
-    "lynx.lib.json"
-  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.test.json",
+    "lint": "oxlint .",
+    "fmt": "oxfmt .",
+    "test": "tsc -p tsconfig.json && node --test test/*.test.ts",
+    "prepack": "tsc -p tsconfig.json"
+  },
   "dependencies": {
     "@powersync/common": "^2.2.0",
     "@powersync/shared-internals": "^1.2.0"
+  },
+  "devDependencies": {
+    "@oxlint/plugins": "1.78.0",
+    "@types/node": "26.4.1",
+    "oxfmt": "0.63.0",
+    "oxlint": "1.78.0",
+    "typescript": "7.0.2"
   },
   "peerDependencies": {
     "@powersync/common": "^2.2.0",
     "@powersync/web": "^2.3.0"
   },
   "peerDependenciesMeta": {
-    "@powersync/web": { "optional": true }
-  }
+    "@powersync/web": {
+      "optional": true
+    }
+  },
+  "packageManager": "pnpm@12.3.4"
 }

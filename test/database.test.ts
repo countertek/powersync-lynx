@@ -1,27 +1,29 @@
-import assert from 'node:assert/strict';
-import { test } from 'node:test';
-import { Schema, Table, column, SyncStreamConnectionMethod } from '../lib/index.js';
-import { PowerSyncDatabase } from '../lib/PowerSyncDatabase.js';
-import { LynxRemote } from '../lib/sync/LynxRemote.js';
-import { LynxStreamingSyncImplementation } from '../lib/sync/LynxStreamingSyncImplementation.js';
+// @ts-nocheck
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { Schema, Table, column, SyncStreamConnectionMethod } from "../lib/index.js";
+import { PowerSyncDatabase } from "../lib/PowerSyncDatabase.js";
+import { LynxRemote } from "../lib/sync/LynxRemote.js";
+import { LynxStreamingSyncImplementation } from "../lib/sync/LynxStreamingSyncImplementation.js";
+import type { BindValueRows, OpenPayload } from "../lib/adapter/native.js";
 
-function installAppNative(store = { lists: [] }) {
+function installAppNative(store: { lists: { id: string; name: string }[] } = { lists: [] }) {
   let nextId = 1;
-  const opens = [];
-  const closes = [];
-  const batches = [];
+  const opens: { payload: OpenPayload; dbId: string }[] = [];
+  const closes: { dbId: string }[] = [];
+  const batches: { sql: string; params: BindValueRows }[] = [];
 
   function ok(columnNames, rawRows, extra = {}) {
     return { ok: true, insertId: 0, rowsAffected: 0, columnNames, rawRows, ...extra };
   }
 
   function handleExecute(sql, params) {
-    if (sql.includes('powersync_rs_version')) {
-      return ok(['version'], [['0.5.3']]);
+    if (sql.includes("powersync_rs_version")) {
+      return ok(["version"], [["0.5.3"]]);
     }
-    if (sql.includes('powersync_offline_sync_status')) {
+    if (sql.includes("powersync_offline_sync_status")) {
       return ok(
-        ['r'],
+        ["r"],
         [
           [
             JSON.stringify({
@@ -29,20 +31,20 @@ function installAppNative(store = { lists: [] }) {
               connecting: false,
               priority_status: [],
               downloading: null,
-              streams: []
-            })
-          ]
-        ]
+              streams: [],
+            }),
+          ],
+        ],
       );
     }
-    if (sql.includes('PRAGMA table_info')) {
-      return ok(['cid', 'name'], [[0, 'type']]);
+    if (sql.includes("PRAGMA table_info")) {
+      return ok(["cid", "name"], [[0, "type"]]);
     }
-    if (sql.includes('sqlite_master')) {
-      return ok(['name'], []);
+    if (sql.includes("sqlite_master")) {
+      return ok(["name"], []);
     }
     if (sql.includes("powersync_update_hooks('get')")) {
-      return ok(['powersync_update_hooks'], [['[]']]);
+      return ok(["powersync_update_hooks"], [["[]"]]);
     }
     if (/INSERT INTO lists/i.test(sql)) {
       store.lists.push({ id: params?.[0], name: params?.[1] });
@@ -50,8 +52,8 @@ function installAppNative(store = { lists: [] }) {
     }
     if (/SELECT .*FROM lists/i.test(sql)) {
       return ok(
-        ['id', 'name'],
-        store.lists.map((row) => [row.id, row.name])
+        ["id", "name"],
+        store.lists.map((row) => [row.id, row.name]),
       );
     }
     return ok([], []);
@@ -77,31 +79,40 @@ function installAppNative(store = { lists: [] }) {
           for (const row of params ?? []) {
             handleExecute(sql, row);
           }
-          cb({ ok: true, insertId: 0, rowsAffected: params?.length ?? 0, columnNames: [], rawRows: [] });
+          cb({
+            ok: true,
+            insertId: 0,
+            rowsAffected: params?.length ?? 0,
+            columnNames: [],
+            rawRows: [],
+          });
         });
-      }
-    }
+      },
+    },
   };
   return { opens, closes, batches, store };
 }
 
-test('barrel re-exports common names and default connect method is HTTP', () => {
-  assert.equal(typeof Schema, 'function');
-  assert.equal(typeof Table, 'function');
-  assert.equal(typeof column.text, 'object');
-  const getter = Object.getOwnPropertyDescriptor(PowerSyncDatabase.prototype, 'defaultConnectionMethod')?.get;
-  assert.equal(typeof getter, 'function');
+test("barrel re-exports common names and default connect method is HTTP", () => {
+  assert.equal(Schema instanceof Function, true);
+  assert.equal(Table instanceof Function, true);
+  assert.equal(column.text instanceof Object, true);
+  const getter = Object.getOwnPropertyDescriptor(
+    PowerSyncDatabase.prototype,
+    "defaultConnectionMethod",
+  )?.get;
+  assert.equal(getter instanceof Function, true);
   assert.equal(getter.call({}), SyncStreamConnectionMethod.HTTP);
 });
 
-test('app constructs PowerSyncDatabase and uses official SQL including executeBatch QueryResult', async () => {
+test("app constructs PowerSyncDatabase and uses official SQL including executeBatch QueryResult", async () => {
   const mock = installAppNative();
   const AppSchema = new Schema({
-    lists: new Table({ name: column.text })
+    lists: new Table({ name: column.text }),
   });
   const db = new PowerSyncDatabase({
     schema: AppSchema,
-    database: { dbFilename: 'app.db', dbLocation: '/tmp/ps' }
+    database: { dbFilename: "app.db", dbLocation: "/tmp/ps" },
   });
   try {
     await db.waitForReady();
@@ -110,15 +121,18 @@ test('app constructs PowerSyncDatabase and uses official SQL including executeBa
     assert.equal(mock.opens.filter((open) => open.payload.readOnly === false).length, 1);
     assert.equal(mock.opens.filter((open) => open.payload.readOnly === true).length, 5);
 
-    const inserted = await db.execute('INSERT INTO lists (id, name) VALUES (?, ?)', ['list-1', 'Groceries']);
+    const inserted = await db.execute("INSERT INTO lists (id, name) VALUES (?, ?)", [
+      "list-1",
+      "Groceries",
+    ]);
     assert.equal(inserted.rowsAffected, 1);
 
-    const rows = await db.getAll('SELECT id, name FROM lists');
-    assert.deepEqual(rows, [{ id: 'list-1', name: 'Groceries' }]);
+    const rows = await db.getAll("SELECT id, name FROM lists");
+    assert.deepEqual(rows, [{ id: "list-1", name: "Groceries" }]);
 
-    const batch = await db.executeBatch('INSERT INTO lists (id, name) VALUES (?, ?)', [
-      ['list-2', 'Hardware'],
-      ['list-3', 'Pharmacy']
+    const batch = await db.executeBatch("INSERT INTO lists (id, name) VALUES (?, ?)", [
+      ["list-2", "Hardware"],
+      ["list-3", "Pharmacy"],
     ]);
     assert.deepEqual(batch.array, []);
     assert.equal(batch.rowsAffected, 2);
@@ -129,16 +143,16 @@ test('app constructs PowerSyncDatabase and uses official SQL including executeBa
     assert.deepEqual(iterated, []);
     assert.equal(mock.batches.length, 1);
 
-    const all = await db.getAll('SELECT id, name FROM lists');
+    const all = await db.getAll("SELECT id, name FROM lists");
     assert.deepEqual(all, [
-      { id: 'list-1', name: 'Groceries' },
-      { id: 'list-2', name: 'Hardware' },
-      { id: 'list-3', name: 'Pharmacy' }
+      { id: "list-1", name: "Groceries" },
+      { id: "list-2", name: "Hardware" },
+      { id: "list-3", name: "Pharmacy" },
     ]);
 
     const impl = db.generateSyncStreamImplementation(
       { fetchCredentials: async () => null, uploadData: async () => {} },
-      {}
+      {},
     );
     assert.ok(impl instanceof LynxStreamingSyncImplementation);
     assert.ok(impl.options.remote instanceof LynxRemote);
@@ -151,18 +165,18 @@ test('app constructs PowerSyncDatabase and uses official SQL including executeBa
   }
 });
 
-test('LynxRemote createTextDecoder uses TextCodecHelper UTF-8', () => {
+test("LynxRemote createTextDecoder uses TextCodecHelper UTF-8", () => {
   const decoded = [];
   globalThis.TextCodecHelper = {
     decode(buf) {
       decoded.push(buf);
       return new TextDecoder().decode(buf);
-    }
+    },
   };
   const remote = new LynxRemote({ fetchCredentials: async () => null }, { log() {} });
   const decoder = remote.createTextDecoder();
-  const bytes = new TextEncoder().encode('hello');
-  assert.equal(decoder.decode(bytes), 'hello');
+  const bytes = new TextEncoder().encode("hello");
+  assert.equal(decoder.decode(bytes), "hello");
   assert.equal(decoded.length, 1);
   assert.ok(decoded[0] instanceof ArrayBuffer);
 });
