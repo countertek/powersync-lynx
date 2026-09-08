@@ -30,4 +30,14 @@ examples/**/lynx-dist/
 examples/**/host-dist/
 examples/**/.rspeedy/
 
+# Native demo hosts (generated).
+examples/**/Pods/
+examples/**/DerivedData/
+examples/**/xcuserdata/
+examples/**/.gradle/
+examples/**/build/
+examples/**/.cxx/
+examples/hosts/android/local.properties
+examples/hosts/ios/generated/
+
 

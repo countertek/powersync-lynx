@@ -1,7 +1,8 @@
 import type { PowerSyncBackendConnector } from "powersync-lynx";
 
-export const DEMO_API_URL = "http://127.0.0.1:8081";
-export const DEMO_POWERSYNC_URL = "http://127.0.0.1:8080";
+import { demoApiUrl, demoFetch, demoPowersyncUrl } from "./util.ts";
+
+export { demoApiUrl, demoPowersyncUrl };
 export const DEMO_USER = "demo-user";
 
 export interface DemoCredentials {
@@ -44,20 +45,21 @@ export function crudUploadEntries(
 }
 
 export async function fetchDemoCredentials(): Promise<DemoCredentials | null> {
-  const response = await fetch(`${DEMO_API_URL}/token`);
+  const response = await fetch(`${demoApiUrl()}/token`);
   if (!response.ok) {
     throw new Error(`demo token endpoint HTTP ${response.status}`);
   }
   const body: unknown = await response.json();
-  if (!(body instanceof Object) || !("token" in body) || !("endpoint" in body)) {
+  if (!(body instanceof Object) || !("token" in body)) {
     throw new Error("demo token endpoint returned an unexpected body");
   }
   const token = String(body.token).trim();
-  const endpoint = String(body.endpoint).trim();
-  if (token.length === 0 || endpoint.length === 0) {
-    throw new Error("demo token endpoint returned an empty token or endpoint");
+  if (token.length === 0) {
+    throw new Error("demo token endpoint returned an empty token");
   }
-  return { endpoint, token };
+  // demo-api advertises 127.0.0.1; Android emulator and physical devices
+  // must use the host-injected origin instead.
+  return { endpoint: demoPowersyncUrl(), token };
 }
 
 /**
@@ -80,7 +82,7 @@ export const demoConnector: PowerSyncBackendConnector = {
       return;
     }
     logFn(`upload: ${transaction.crud.length} op(s)`);
-    const response = await fetch(`${DEMO_API_URL}/upload`, {
+    const response = await demoFetch(`${demoApiUrl()}/upload`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ crud: crudUploadEntries(transaction.crud) }),

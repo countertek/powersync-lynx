@@ -1,55 +1,94 @@
 # Android native host (Autolink)
 
-This is a drop-in recipe for a Lynx **4.0+** Android host that loads the TODO app
-bundle and Autolinks `powersync-lynx`. It is not a full Android Studio app.
+A Lynx **4.0** Android app that loads the ReactLynx TODO bundle and Autolinks
+`NativePowerSyncModule`. Emulator is the path this repo verifies. Lynx Explorer
+does **not** register the module.
 
-Lynx Explorer does **not** register `NativePowerSyncModule`. There is no
-Explorer/QR run path; see the try-it guide [`examples/README.md`](../../README.md).
+Floors: minSdk **24**, compileSdk 35, Lynx **4.0.1** (PrimJS **4.0.0** — Maven has no `primjs:4.0.1`), Autolink Gradle plugins **4.0.1**.
+
+## Prerequisites
+
+- JDK 17 (`JAVA_HOME`)
+- Android SDK with `platforms;android-35` (or 36) and an ARM64 emulator image
+- pnpm **12**
+- The local compose stack from [`examples/README.md`](../../README.md)
+
+This environment: Java 17, `ANDROID_HOME=$HOME/Library/Android/sdk`, AVD `Pixel_10_Pro` (API 37).
+
+## Install / build / run (emulator)
+
+From the repository root:
+
+```bash
+pnpm --dir examples/showcase install
+pnpm --dir examples/showcase build
+
+pnpm --dir examples/hosts install
+
+cd examples/hosts/android
+./gradlew :app:assembleDebug
+$ANDROID_HOME/emulator/emulator -avd Pixel_10_Pro -no-snapshot-load &
+$ANDROID_HOME/platform-tools/adb wait-for-device
+./gradlew :app:installDebug
+adb shell am start -n com.powersync.lynx.showcase/.MainActivity
+```
+
+The emulator reaches the Mac via **`10.0.2.2`**, not `127.0.0.1`. Defaults in
+`app/src/main/res/values/strings.xml` already use that.
+
+## Server addressing
+
+| Source | Keys |
+|---|---|
+| `strings.xml` (defaults) | `demo_device=android`, `demo_api_url=http://10.0.2.2:8081`, `powersync_url=http://10.0.2.2:8080` |
+| Launch extras | `device`, `demoApiUrl`, `powersyncUrl` |
+
+Two-client (second store on the same emulator, or a second AVD):
+
+```bash
+adb shell am start -n com.powersync.lynx.showcase/.MainActivity --es device android-b
+```
+
+Or emulator + web demo at `http://localhost:4173/?device=web-b`.
+
+Cleartext HTTP is allowed **only in debug** and only for `10.0.2.2`, `127.0.0.1`,
+and `localhost` (`app/src/debug/res/xml/network_security_config.xml`). Release
+builds have no cleartext.
+
+## Physical device
+
+1. Put the Mac's LAN IP in `strings.xml` (`demo_api_url` / `powersync_url`).
+2. Add that IP as a `<domain>` under the debug network-security-config (or the
+   request is blocked as cleartext).
+3. `adb install` / Android Studio. USB debugging required. No signing account
+   is needed for debug APKs.
+
+## Troubleshooting
+
+| Symptom | Check |
+|---|---|
+| Autolink plugin not found | Plugin ids are `org.lynxsdk.lynx.library-settings` / `library-build` **4.0.1** on the Gradle Plugin Portal, not the shorter `org.lynxsdk.library-*` names in older recipes. |
+| `NativePowerSyncModule is not registered` | `pnpm --dir examples/hosts install` so Autolink can see `lynx.lib.json`. Fallback only if the plugin cannot resolve: `LynxEnv.inst().registerModule("NativePowerSyncModule", NativePowerSyncModule.class)`. |
+| Missing bundle | `pnpm --dir examples/showcase build` first (`copyLynxBundle` fails loudly). |
+| Token works, sync does not | Still pointing at `127.0.0.1` from inside the emulator. Use `10.0.2.2`. |
+| `cleartext` / `ERR_CLEARTEXT_NOT_PERMITTED` | Debug network-security-config does not list that host. |
+| Empty `<input>` | `xelement` + `xelement-input` 4.0.0 missing. |
 
 ## What this environment verified
 
-- The ReactLynx **lynx** bundle compiles (`pnpm --dir examples/showcase build`).
-- This Android host was **not** assembled with Gradle against a device/emulator
-  in the examples task. Live `/sync/stream` incremental delivery and
-  `disconnect()` cancellation are **not verified** on Android.
+This checkout, 2026-09-08/09. AVD **Pixel_10_Pro** (API 37, `emulator-5554`), JDK 17, AGP 8.7.2, Gradle 8.11.1, Lynx **4.0.1** (PrimJS **4.0.0**), pnpm **12.3.4**.
 
-Floors: minSdk **24**, compileSdk 35, Lynx **4.0+**.
+| Claim | Result |
+|---|---|
+| Build + install + launch | **Yes.** `./gradlew :app:assembleDebug`, `adb install`, `am start` `com.powersync.lynx.showcase/.MainActivity` |
+| UI paints, DB ready, sync connected | **Yes.** Defaults `http://10.0.2.2:8081` / `:8080` |
+| Add | **Yes.** `ande2e` (type with `adb shell input text` while the IME is up; underscores are dropped) |
+| Persist across process death | **Yes.** `ande2e` survived force-stop / cold start |
+| Upload + another client sees it | **Yes.** Sync log `upload: 1 op(s)` / `upload: complete`. iOS Simulator showed `ande2e` |
+| Go offline / Reconnect (stream cancel) | **Yes.** Teal control under the pills. Offline → `sync offline` + Reconnect; tap again → `sync connected` |
+| Offline queue | **Yes.** Insert while disconnected, reconnect/cold start uploaded |
+| Toggle / delete / filter | Toggle/delete hit targets are small (Lynx `bindtap` on row text). Filters paint (All is filled teal). Not used as the money-shot proof |
+| `fetch(url, init)` | **Broken on Android PrimJS** (`Failed to construct 'Request'`). Sync uses `LynxFetchModule`; demo-api POST uses `demoFetch()` in `examples/showcase/src/util.ts` |
+| Physical device | **Not run** |
 
-## Autolink Gradle
-
-`settings.gradle`:
-
-```gradle
-plugins {
-  id 'org.lynxsdk.library-settings'
-}
-```
-
-`app/build.gradle`:
-
-```gradle
-plugins {
-  id 'com.android.application'
-  id 'org.lynxsdk.library-build'
-}
-
-dependencies {
-  implementation 'org.lynxsdk.lynx:lynx:4.0.1'
-  implementation 'org.lynxsdk.lynx:lynx-service-http:4.0.1'
-}
-```
-
-The host app `package.json` must depend on `powersync-lynx` so Autolink can
-find `lynx.lib.json`.
-
-## HTTP Service + streaming flag
-
-Register `LynxHttpService` with `LynxServiceCenter` before creating LynxView.
-Set PageConfig `enableFetchAPIStandardStreaming = true` (LynxSDK 3.7+).
-Service registration is a prerequisite, not proof of incremental delivery.
-`ShowcaseApplication.kt` in this folder registers the HTTP Service before
-`LynxEnv` init; this recipe does not include a LynxView.
-
-## Load the bundle
-
-Point LynxView at `examples/showcase/lynx-dist/main.lynx.bundle`.
+`am force-stop` often leaves the process; `adb uninstall` is the reliable way to load a new bundle (it wipes the local DB).

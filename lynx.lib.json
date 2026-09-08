@@ -5,7 +5,8 @@
       "sourceDir": "android"
     },
     "ios": {
-      "sourceDir": "ios"
+      "sourceDir": ".",
+      "podspecPath": "powersync-lynx.podspec"
     },
     "lynxtron": {
       "path": "dist"

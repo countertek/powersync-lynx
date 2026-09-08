@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from "@lynx-js/react";
 
 import {
-  DEMO_POWERSYNC_URL,
   demoConnector,
+  demoPowersyncUrl,
   fetchDemoCredentials,
   hasDemoCredentials,
   setConnectorLog,
@@ -90,44 +90,7 @@ export function App() {
 
   useEffect(() => {
     let cancelled = false;
-    let lastConnected = false;
-    let lastUploading = false;
-    let lastDownloading = false;
-    let everConnected = false;
-    const stopStatus = getDb().registerListener({
-      statusChanged(status) {
-        const connected = status.connected === true;
-        const uploading = status.dataFlowStatus?.uploading === true;
-        const downloading = status.dataFlowStatus?.downloading === true;
-        if (status.connecting === true) {
-          setSyncLabel("connecting");
-        } else {
-          setSyncLabel(connected ? "connected" : "offline");
-        }
-        if (connected && !lastConnected) {
-          log(everConnected ? "reconnected" : "connected");
-          everConnected = true;
-        }
-        if (!connected && lastConnected) {
-          log("disconnected");
-        }
-        if (uploading && !lastUploading) {
-          log("upload in progress");
-        }
-        if (!uploading && lastUploading) {
-          log("upload idle");
-        }
-        if (downloading && !lastDownloading) {
-          log("download in progress");
-        }
-        if (!downloading && lastDownloading) {
-          log("download idle");
-        }
-        lastConnected = connected;
-        lastUploading = uploading;
-        lastDownloading = downloading;
-      },
-    });
+    let stopStatus = () => {};
 
     waitForDemoReady()
       .then(async () => {
@@ -135,6 +98,35 @@ export function App() {
           return;
         }
         log("waitForReady: database open");
+        stopStatus = getDb().registerListener({
+          statusChanged(status) {
+            const connected = status.connected === true;
+            const uploading = status.dataFlowStatus?.uploading === true;
+            const downloading = status.dataFlowStatus?.downloading === true;
+            if (status.connecting === true) {
+              setSyncLabel("connecting");
+            } else {
+              setSyncLabel(connected ? "connected" : "offline");
+            }
+            if (connected) {
+              log("connected");
+            }
+            if (uploading) {
+              log("upload in progress");
+            }
+            if (downloading) {
+              log("download in progress");
+            }
+            const downloadError = status.dataFlowStatus?.downloadError;
+            const uploadError = status.dataFlowStatus?.uploadError;
+            if (downloadError != null) {
+              log(`sync error: ${errorMessage(downloadError)}`);
+            }
+            if (uploadError != null) {
+              log(`upload error: ${errorMessage(uploadError)}`);
+            }
+          },
+        });
         try {
           const creds = await fetchDemoCredentials();
           if (cancelled) {
@@ -146,7 +138,7 @@ export function App() {
           }
           setDemoCredentials(creds);
           await getDb().connect(demoConnector);
-          log(`connect: ${DEMO_POWERSYNC_URL} as ${device}`);
+          log(`connect: ${demoPowersyncUrl()} as ${device}`);
         } catch (err) {
           log(
             `connect skipped: ${errorMessage(err)}. Start the sync profile (examples/README.md). Writes still queue locally.`,
@@ -271,7 +263,7 @@ export function App() {
 
   if (fatal != null) {
     return (
-      <view className="Page">
+      <page className="Page">
         <view className="Hero">
           <text className="Eyebrow">PowerSync on Lynx</text>
           <text className="Title">{fatal.title}</text>
@@ -279,12 +271,13 @@ export function App() {
         <view className="Banner Banner--error">
           <text className="BannerText">{fatal.detail}</text>
         </view>
-      </view>
+      </page>
     );
   }
 
   return (
-    <scroll-view className="Page" scroll-y>
+    <page style={{ width: "100%", height: "100%", backgroundColor: "#050910" }}>
+      <scroll-view className="Page" scroll-y>
       <view className="Hero">
         <text className="Eyebrow">PowerSync on Lynx</text>
         <text className="Title">TODO</text>
@@ -304,14 +297,12 @@ export function App() {
           <text className="PillLabel">device {device}</text>
         </view>
       </view>
-
-      <view className="Row">
-        <view
-          className={wantSync ? "Btn Btn--ghost" : "Btn"}
-          bindtap={wantSync ? goOffline : goOnline}
-        >
-          <text className="BtnLabel">{wantSync ? "Go offline" : "Reconnect"}</text>
-        </view>
+      <view
+        className="LinkWrap"
+        style={{ backgroundColor: "#0c1422", padding: 12 }}
+        bindtap={wantSync ? goOffline : goOnline}
+      >
+        <text className="Link">{wantSync ? "Go offline" : "Reconnect"}</text>
       </view>
 
       <view className="Card">
@@ -377,6 +368,7 @@ export function App() {
             ))
           : null}
       </view>
-    </scroll-view>
+      </scroll-view>
+    </page>
   );
 }

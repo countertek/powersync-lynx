@@ -1,62 +1,97 @@
 # iOS native host (Autolink)
 
-This is a drop-in recipe for a Lynx **4.0+** iOS host that loads the TODO app bundle
-and Autolinks `powersync-lynx`. It is not a full Xcode project.
-
-Lynx Explorer does **not** register `NativePowerSyncModule` (SQL fails at
-`waitForReady`). There is no Explorer/QR run path; see the try-it guide
-[`examples/README.md`](../../README.md).
-
-## What this environment verified
-
-- The ReactLynx **lynx** bundle compiles (`pnpm --dir examples/showcase build`).
-- This iOS host was **not** built with Xcode and was **not** run on a simulator
-  or device. Live `/sync/stream` incremental delivery and `disconnect()` cancellation
-  are **not verified** on iOS.
+A Lynx **4.0** iPhone app that loads the ReactLynx TODO bundle and Autolinks
+`NativePowerSyncModule`. Simulator is the path this repo verifies. Lynx Explorer
+does **not** register the module.
 
 ## Prerequisites
 
-- Xcode, iOS **15.0+**
+- Xcode 16+ (this environment: Xcode 26.6)
+- iOS **15.0+** (simulator does not need a signing team)
 - CocoaPods >= 1.11.3
-- gem `cocoapods-lynx-library`
-- Lynx **4.0+** (`Lynx`, `LynxService` with `Http`)
-- The showcase npm package installed so Autolink can see `lynx.lib.json`
+- gem `cocoapods-lynx-library` (`gem install cocoapods-lynx-library`)
+- pnpm **12**
+- The local compose stack from [`examples/README.md`](../../README.md) (`postgres` :5432, `powersync` :8080, `demo-api` :8081)
 
-## Podfile
+## Install / build / run (simulator)
 
-```ruby
-source 'https://cdn.cocoapods.org/'
-platform :ios, '15.0'
+From the repository root:
 
-plugin 'cocoapods-lynx-library'
+```bash
+pnpm --dir examples/showcase install
+pnpm --dir examples/showcase build          # emits examples/showcase/lynx-dist/main.lynx.bundle
 
-target 'PowerSyncLynxShowcase' do
-  use_lynx_library!
+pnpm --dir examples/hosts install           # Autolink scans this node_modules for lynx.lib.json
+gem install cocoapods-lynx-library          # once per machine
 
-  pod 'Lynx', '4.0.0', :subspecs => ['Framework']
-  pod 'PrimJS', '4.0.0', :subspecs => ['quickjs', 'napi']
-  pod 'LynxService', '4.0.0', :subspecs => ['Image', 'Log', 'Http']
-end
+cd examples/hosts/ios
+pod install
+xcodebuild -workspace PowerSyncLynxShowcase.xcworkspace \
+  -scheme PowerSyncLynxShowcase \
+  -configuration Debug \
+  -sdk iphonesimulator \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
+  -derivedDataPath build \
+  CODE_SIGNING_ALLOWED=NO \
+  build
+
+APP=$(find build -name PowerSyncLynxShowcase.app | head -1)
+UDID=$(xcrun simctl list devices available | awk -F '[()]' '/iPhone 17 Pro/{print $2; exit}')
+xcrun simctl boot "$UDID" || true
+xcrun simctl install "$UDID" "$APP"
+xcrun simctl launch --console "$UDID" com.powersync.lynx.showcase
 ```
 
-`use_lynx_library!` discovers `powersync-lynx` via the host app `package.json`
-dependency (`file:../..` in this repo, or a packed tarball in a consumer app).
+The simulator reaches `127.0.0.1` on the Mac, so it uses the same URLs as the web demo.
 
-## HTTP Service + streaming flag
+Open the Xcode workspace (not the `.xcodeproj`) after `pod install`. User Script Sandboxing is off so the Copy Lynx bundle phase can read `examples/showcase/lynx-dist/`.
 
-Autolink registers `NativePowerSyncModule`. It does **not** install the HTTP
-Service. Without `LynxService/Http` and PageConfig
-`enableFetchAPIStandardStreaming = true` (LynxSDK 3.7+), Connector fetches and
-`/sync/stream` will not run. Incremental delivery still remains unverified.
+## Server addressing
 
-`AppDelegate.mm` in this folder registers `LynxHttpService` before `LynxEnv`
-init. Set PageConfig `enableFetchAPIStandardStreaming = true` when creating
-`LynxView` (this recipe does not include a LynxView).
+| Source | Keys |
+|---|---|
+| Info.plist (defaults) | `DEMO_DEVICE=ios`, `DEMO_API_URL=http://127.0.0.1:8081`, `POWERSYNC_URL=http://127.0.0.1:8080` |
+| Process environment | `DEMO_DEVICE`, `DEMO_API_URL`, `POWERSYNC_URL` (`SIMCTL_CHILD_` prefix with `simctl launch`) |
+| argv | `-DemoDevice ios-b -DemoApiUrl http://127.0.0.1:8081 -PowerSyncUrl http://127.0.0.1:8080` |
 
-## Load the bundle
+Two-client on two simulators:
 
-Point `LynxView` at the Rspeedy lynx artifact:
+```bash
+xcrun simctl launch "$UDID_A" com.powersync.lynx.showcase -DemoDevice ios-a
+xcrun simctl launch "$UDID_B" com.powersync.lynx.showcase -DemoDevice ios-b
+```
 
-`examples/showcase/lynx-dist/main.lynx.bundle`
+Or one simulator + the web demo at `http://localhost:4173/?device=web-b`.
 
-(Exact filename is whatever `pnpm --dir examples/showcase build` emits.)
+ATS is `NSAllowsLocalNetworking` only (not `NSAllowsArbitraryLoads`).
+
+## Physical device
+
+1. Set `DEMO_API_URL` / `POWERSYNC_URL` in Info.plist to `http://<Mac LAN IP>:8081` / `:8080`.
+2. Confirm the compose ports are reachable on that LAN.
+3. Sign the app with your team (`DEVELOPMENT_TEAM`) and run from Xcode. This checkout does not ship a signing identity.
+
+## Troubleshooting
+
+| Symptom | Check |
+|---|---|
+| `NativePowerSyncModule is not registered` | Open the **workspace**. `pod install` must see `examples/hosts/node_modules/powersync-lynx/lynx.lib.json`. |
+| Copy Lynx bundle phase fails | `pnpm --dir examples/showcase build` first. |
+| `connect skipped` | Compose profile `sync` is down, or ATS blocked a non-local URL. |
+| Empty input field | `XElement` pod is missing. |
+| Stream never incremental | Bundle PageConfig `enableFetchAPIStandardStreaming` is set in `examples/showcase/lynx.config.ts`. Confirm `LynxHttpService` is registered before `LynxEnv` init. |
+
+## What this environment verified
+
+This checkout, 2026-09-08/09. Simulator **iPhone 17 Pro** (`ADEBF68F-584E-4A5D-9A9B-F0E134D10019`), iOS **26.5**, Xcode **26.6**, CocoaPods 1.17.0, Lynx pods **4.0.0**, pnpm **12.3.4**.
+
+| Claim | Result |
+|---|---|
+| Build + install + launch | **Yes.** `xcodebuild` Debug iphonesimulator `CODE_SIGNING_ALLOWED=NO`, `simctl install` / `launch`. Bundle id `com.powersync.lynx.showcase` |
+| UI paints, DB ready, sync connected | **Yes.** Navy TODO screen, `DB ready`, `sync connected`, `connect: http://127.0.0.1:8080 as ios` |
+| Receive another client's rows | **Yes.** Android `persist_me` and queued-then-uploaded `ande2e` appeared on this Simulator while connected |
+| Add / toggle / delete / filter / restart persist | **Not tapped this session.** Simulator window was fully covered by Orca and Accessibility reads stayed blocked, so HID clicks never reached the LCD. Use the try-it steps above |
+| Go offline / Reconnect | Same ReactLynx bundle as Android (control is a `LinkWrap` view). **Not tapped** here |
+| Physical device | **Not run** |
+
+Limitations: Lynx list rows often omit a11y nodes. `simctl io` screenshots of the LCD are the evidence, not the Simulator chrome. PrimJS iOS `fetch` is the identifier, not `globalThis.fetch`.

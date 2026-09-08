@@ -58,14 +58,49 @@ function trailingIncompleteUtf8Bytes(bytes: Uint8Array): number {
   return 0;
 }
 
+function textCodecHelper(): LynxTextCodecHelper | undefined {
+  const fromGlobalThis = (globalThis as unknown as { TextCodecHelper?: LynxTextCodecHelper })
+    .TextCodecHelper;
+  if (fromGlobalThis != null) {
+    return fromGlobalThis;
+  }
+  try {
+    return (0, eval)(
+      "typeof TextCodecHelper === 'undefined' ? undefined : TextCodecHelper",
+    ) as LynxTextCodecHelper | undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function decodeUtf8Manual(bytes: ArrayBuffer): string {
+  const u8 = new Uint8Array(bytes);
+  let binary = "";
+  for (let i = 0; i < u8.length; i++) {
+    binary += String.fromCharCode(u8[i]!);
+  }
+  try {
+    return decodeURIComponent(escape(binary));
+  } catch {
+    return binary;
+  }
+}
+
+function decodeUtf8(bytes: ArrayBuffer): string {
+  const helper = textCodecHelper();
+  if (helper != null) {
+    return helper.decode(bytes);
+  }
+  if (typeof TextDecoder !== "undefined") {
+    return new TextDecoder("utf-8").decode(bytes);
+  }
+  return decodeUtf8Manual(bytes);
+}
+
 function createLynxTextDecoder(): TextDecoder {
   let carry = new Uint8Array(0);
   const decoder = {
     decode(input?: ArrayBuffer | ArrayBufferView, options?: { stream?: boolean }): string {
-      const helper = globalThis.TextCodecHelper;
-      if (helper == null) {
-        throw new Error("TextCodecHelper is not registered");
-      }
       const stream = options?.stream === true;
       const incoming = input == null ? new Uint8Array(0) : new Uint8Array(toArrayBuffer(input));
       const combined = new Uint8Array(carry.length + incoming.length);
@@ -77,11 +112,302 @@ function createLynxTextDecoder(): TextDecoder {
       if (complete.length === 0) {
         return "";
       }
-      return helper.decode(copyToArrayBuffer(complete));
+      return decodeUtf8(copyToArrayBuffer(complete));
     },
   };
   // SAFETY: Lynx TextCodecHelper.decode is the UTF-8 path; PowerSync only calls decode().
   return decoder as TextDecoder;
+}
+
+
+interface LynxFetchSuccess {
+  url?: string;
+  body?: ArrayBuffer | Uint8Array | string;
+  headers?: Record<string, string>;
+  status?: number;
+  statusText?: string;
+  lynxExtension?: { streamingId?: string; enableFetchAPIStandardStreaming?: boolean };
+}
+
+interface LynxFetchModule {
+  fetch(
+    request: Record<string, unknown>,
+    resolve: (response: LynxFetchSuccess) => void,
+    reject: (error: { message?: string }) => void,
+  ): void;
+}
+
+function encodeUtf8(text: string): ArrayBuffer {
+  if (typeof TextEncoder !== "undefined") {
+    return new TextEncoder().encode(text).buffer;
+  }
+  const encoded = unescape(encodeURIComponent(text));
+  const bytes = new Uint8Array(encoded.length);
+  for (let i = 0; i < encoded.length; i++) {
+    bytes[i] = encoded.charCodeAt(i);
+  }
+  return copyToArrayBuffer(bytes);
+}
+
+function toUint8(data: unknown): Uint8Array {
+  if (data instanceof Uint8Array) {
+    return data;
+  }
+  if (data instanceof ArrayBuffer) {
+    return new Uint8Array(data);
+  }
+  if (ArrayBuffer.isView(data)) {
+    return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  }
+  if (Array.isArray(data)) {
+    return new Uint8Array(data as number[]);
+  }
+  if (typeof data === "string") {
+    return new Uint8Array(encodeUtf8(data));
+  }
+  return new Uint8Array(0);
+}
+
+function headerMap(headers: HeadersInit | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (headers == null || typeof headers !== "object") {
+    return out;
+  }
+  if (Array.isArray(headers)) {
+    for (const pair of headers) {
+      if (pair != null && pair.length >= 2 && pair[0] != null && pair[1] != null) {
+        out[String(pair[0])] = String(pair[1]);
+      }
+    }
+    return out;
+  }
+  const rec = headers as Record<string, unknown>;
+  for (const key in rec) {
+    if (!Object.prototype.hasOwnProperty.call(rec, key)) {
+      continue;
+    }
+    const value = rec[key];
+    if (value != null) {
+      out[key] = String(value);
+    }
+  }
+  return out;
+}
+
+function copyHeaderRecord(headers: unknown): Record<string, string> {
+  const lower: Record<string, string> = {};
+  if (headers == null || typeof headers !== "object") {
+    return lower;
+  }
+  const rec = headers as Record<string, unknown>;
+  for (const key of Object.keys(rec)) {
+    const value = rec[key];
+    if (value == null || typeof value === "object") {
+      continue;
+    }
+    lower[key.toLowerCase()] = String(value);
+  }
+  return lower;
+}
+
+class LynxFetchResponse {
+  ok: boolean;
+  status: number;
+  statusText: string;
+  headers: { get: (name: string) => string | null };
+  body: { getReader: () => ReadableStreamDefaultReader<Uint8Array> };
+  constructor(result: LynxFetchSuccess) {
+    const status = Number(result.status ?? 0);
+    const streamingId = result.lynxExtension?.streamingId;
+    const reader =
+      streamingId != null && streamingId.length > 0
+        ? streamingReader(streamingId)
+        : readerFromChunks(result.body == null ? [] : [toUint8(result.body)]);
+    this.ok = status >= 200 && status < 300;
+    this.status = status;
+    this.statusText = String(result.statusText ?? "");
+    const headerMap = copyHeaderRecord(result.headers);
+    this.headers = {
+      get: (name: string) => headerMap[String(name).toLowerCase()] ?? null,
+    };
+    this.body = {
+      getReader: () => reader,
+    };
+  }
+  async text(): Promise<string> {
+    const parts: Uint8Array[] = [];
+    const reader = this.body.getReader();
+    for (;;) {
+      const next = await reader.read();
+      if (next.done) {
+        break;
+      }
+      if (next.value != null) {
+        parts.push(next.value);
+      }
+    }
+    let total = 0;
+    for (const part of parts) {
+      total += part.byteLength;
+    }
+    const joined = new Uint8Array(total);
+    let offset = 0;
+    for (const part of parts) {
+      joined.set(part, offset);
+      offset += part.byteLength;
+    }
+    return decodeUtf8(copyToArrayBuffer(joined));
+  }
+}
+
+function readerFromChunks(chunks: Uint8Array[]): ReadableStreamDefaultReader<Uint8Array> {
+  let i = 0;
+  return {
+    read() {
+      if (i < chunks.length) {
+        const value = chunks[i]!;
+        i += 1;
+        return Promise.resolve({ done: false, value });
+      }
+      return Promise.resolve({ done: true, value: undefined });
+    },
+    cancel() {
+      i = chunks.length;
+      return Promise.resolve();
+    },
+    releaseLock() {},
+    closed: Promise.resolve(undefined),
+  } as ReadableStreamDefaultReader<Uint8Array>;
+}
+
+function streamingReader(eventName: string): ReadableStreamDefaultReader<Uint8Array> {
+  const queue: Uint8Array[] = [];
+  let finished = false;
+  let failure: Error | undefined;
+  let wake: (() => void) | undefined;
+  const emitter = (
+    lynx as { getJSModule?: (name: string) => { addListener(name: string, fn: (payload: unknown) => void): void } }
+  ).getJSModule?.("GlobalEventEmitter");
+  if (emitter == null) {
+    throw new Error("GlobalEventEmitter is not registered");
+  }
+  const onEvent = (payload: unknown) => {
+    const event =
+      payload != null && typeof payload === "object" && "event" in payload
+        ? String((payload as { event?: unknown }).event)
+        : "";
+    const data =
+      payload != null && typeof payload === "object" && "data" in payload
+        ? (payload as { data?: unknown }).data
+        : undefined;
+    const error =
+      payload != null && typeof payload === "object" && "error" in payload
+        ? (payload as { error?: unknown }).error
+        : undefined;
+    if (event === "onData") {
+      queue.push(toUint8(data));
+    } else if (event === "onEnd") {
+      finished = true;
+    } else if (event === "onError") {
+      failure = new Error(error == null ? "Lynx HTTP stream error" : String(error));
+      finished = true;
+    }
+    wake?.();
+  };
+  emitter.addListener(eventName, onEvent);
+  return {
+    async read() {
+      for (;;) {
+        if (failure != null) {
+          throw failure;
+        }
+        if (queue.length > 0) {
+          return { done: false, value: queue.shift()! };
+        }
+        if (finished) {
+          return { done: true, value: undefined };
+        }
+        await new Promise<void>((resolve) => {
+          wake = resolve;
+        });
+      }
+    },
+    cancel() {
+      finished = true;
+      wake?.();
+      return Promise.resolve();
+    },
+    releaseLock() {},
+    closed: Promise.resolve(undefined),
+  } as ReadableStreamDefaultReader<Uint8Array>;
+}
+
+function unwrapFetchSuccess(result: unknown): LynxFetchSuccess {
+  if (Array.isArray(result) && result.length > 0 && result[0] != null && typeof result[0] === "object") {
+    return result[0] as LynxFetchSuccess;
+  }
+  return (result ?? {}) as LynxFetchSuccess;
+}
+
+function moduleResponse(result: LynxFetchSuccess): Response {
+  return new LynxFetchResponse(result) as unknown as Response;
+}
+
+function isLynxAndroid(): boolean {
+  try {
+    const platform = (SystemInfo as { platform?: string }).platform;
+    return platform != null && platform.toLowerCase() === "android";
+  } catch {
+    return false;
+  }
+}
+
+function lynxFetchModule(): LynxFetchModule | undefined {
+  const fromGlobalThis = (
+    globalThis as unknown as { NativeModules?: { LynxFetchModule?: LynxFetchModule } }
+  ).NativeModules?.LynxFetchModule;
+  if (fromGlobalThis != null) {
+    return fromGlobalThis;
+  }
+  try {
+    return (0, eval)(
+      "typeof NativeModules === 'undefined' ? undefined : NativeModules.LynxFetchModule",
+    ) as LynxFetchModule | undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function fetchViaLynxModule(resource: string, request: RequestInit): Promise<Response> {
+  const native = lynxFetchModule();
+  if (native == null) {
+    throw new Error("LynxFetchModule is not registered");
+  }
+  const headers = headerMap(request.headers);
+  const payload: Record<string, unknown> = {
+    method: String(request.method ?? "GET"),
+    url: resource,
+    headers,
+    lynxExtension: { enableFetchAPIStandardStreaming: true },
+  };
+  if (typeof request.body === "string") {
+    payload.body = encodeUtf8(request.body);
+  }
+  return new Promise((resolve, reject) => {
+    native.fetch(
+      payload,
+      (result) => {
+        try {
+          resolve(moduleResponse(unwrapFetchSuccess(result)));
+        } catch (err) {
+          reject(err);
+        }
+      },
+      (error) => {
+        reject(new Error(error?.message ?? "LynxFetchModule.fetch failed"));
+      },
+    );
+  });
 }
 
 export class LynxRemote extends AbstractRemote {
@@ -93,8 +419,18 @@ export class LynxRemote extends AbstractRemote {
     return createLynxTextDecoder();
   }
 
-  fetch({ resource, request }: FetchOptions): Promise<Response> {
-    return globalThis.fetch(resource, request);
+  async fetch({ resource, request }: FetchOptions): Promise<Response> {
+    const url = String(resource);
+    if (isLynxAndroid() && lynxFetchModule() != null) {
+      return fetchViaLynxModule(url, request);
+    }
+    const init: RequestInit = { method: request.method ?? "GET", headers: headerMap(request.headers) };
+    if (typeof request.body === "string") {
+      init.body = request.body;
+    }
+    // PrimJS puts fetch on the identifier, not always on globalThis (iOS).
+    const fromGlobal = (globalThis as unknown as { fetch?: typeof fetch }).fetch;
+    return (typeof fromGlobal === "function" ? fromGlobal : fetch)(url, init);
   }
 
   async loadWebSocketSupport(platform: WebSocketSyncStreamPlatform): Promise<WebSocketSupport> {

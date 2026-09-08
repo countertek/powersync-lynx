@@ -128,8 +128,8 @@ importers:
         specifier: ^2.3.0
         version: 2.3.0(@powersync/common@2.2.0)
       powersync-lynx:
-        specifier: file:../..
-        version: file:../..(@powersync/common@2.2.0)(@powersync/web@2.3.0(@powersync/common@2.2.0))
+        specifier: link:../..
+        version: link:../..
     devDependencies:
       '@lynx-js/preact-devtools':
         specifier: 5.0.1-20260827072047-5f77e12
@@ -1911,15 +1911,6 @@ packages:
   postcss@8.5.28:
     resolution: {integrity: sha512-RRuzqDtt5Y9h3quz5hWhK+TPnsmVs6WwSU6LkJMeY4HstUEDuYTG8UJSdawMRzmzAtV+KEoG8N3Qg2qLy5vM/A==}
     engines: {node: ^10 || ^12 || >=14}
-
-  powersync-lynx@file:../..:
-    resolution: {directory: ../.., type: directory}
-    peerDependencies:
-      '@powersync/common': ^2.2.0
-      '@powersync/web': ^2.3.0
-    peerDependenciesMeta:
-      '@powersync/web':
-        optional: true
 
   punycode.js@2.3.1:
     resolution: {integrity: sha512-uxFIHU0YlHYhDQtV4R9J6a52SLx28BCjT+4ieh7IGbgwVJWO+km431c4yRlREUAsAmt/uMjQUyQHNEPf0M39CA==}
@@ -4092,13 +4083,6 @@ snapshots:
       nanoid: 3.3.18
       picocolors: 1.1.1
       source-map-js: 1.2.1
-
-  powersync-lynx@file:../..(@powersync/common@2.2.0)(@powersync/web@2.3.0(@powersync/common@2.2.0)):
-    dependencies:
-      '@powersync/common': 2.2.0
-      '@powersync/shared-internals': 1.2.0(@powersync/common@2.2.0)
-    optionalDependencies:
-      '@powersync/web': 2.3.0(@powersync/common@2.2.0)
 
   punycode.js@2.3.1: {}
 

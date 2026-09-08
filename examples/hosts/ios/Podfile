@@ -2,6 +2,7 @@ source 'https://cdn.cocoapods.org/'
 platform :ios, '15.0'
 
 plugin 'cocoapods-lynx-library'
+inhibit_all_warnings!
 
 target 'PowerSyncLynxShowcase' do
   use_lynx_library!
@@ -9,4 +10,23 @@ target 'PowerSyncLynxShowcase' do
   pod 'Lynx', '4.0.0', :subspecs => ['Framework']
   pod 'PrimJS', '4.0.0', :subspecs => ['quickjs', 'napi']
   pod 'LynxService', '4.0.0', :subspecs => ['Image', 'Log', 'Http']
+  pod 'SDWebImage', '5.15.5'
+  pod 'SDWebImageWebPCoder', '0.11.0'
+  pod 'XElement', '4.0.0'
+end
+
+post_install do |installer|
+  installer.pods_project.targets.each do |target|
+    target.build_configurations.each do |config|
+      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0'
+      config.build_settings['GCC_TREAT_WARNINGS_AS_ERRORS'] = 'NO'
+      config.build_settings['ENABLE_USER_SCRIPT_SANDBOXING'] = 'NO'
+    end
+    next unless target.respond_to?(:source_build_phase)
+    target.source_build_phase.files.each do |file|
+      flags = file.settings && file.settings['COMPILER_FLAGS']
+      next unless flags
+      file.settings['COMPILER_FLAGS'] = flags.gsub(/(?:^|\s)-Werror(?:\s|$)/, ' ')
+    end
+  end
 end

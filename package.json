@@ -20,7 +20,8 @@
     "lynx.lib.json",
     "scripts",
     "third_party/sqlite/sqlite3.c",
-    "third_party/sqlite/sqlite3.h"
+    "third_party/sqlite/sqlite3.h",
+    "powersync-lynx.podspec"
   ],
   "type": "module",
   "main": "./src/index.ts",

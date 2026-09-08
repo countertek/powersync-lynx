@@ -18,7 +18,7 @@ Normative spec: `docs/spec.md` (captain override: Client is TypeScript sources o
 
 ### Examples app
 
-Consumer TODO demo lives under `examples/`. Demo guide: `examples/README.md`. Do not put `@powersync/web` in the library install graph.
+Consumer TODO demo lives under `examples/`. Demo guide: `examples/README.md`. Runnable iOS/Android Autolink hosts: `examples/hosts/ios/README.md`, `examples/hosts/android/README.md`. Desktop stays recipe-only (`examples/hosts/desktop/`). Showcase depends on this package via `link:../..`. Do not put `@powersync/web` in the library install graph.
 
 ## Maintaining this file
 

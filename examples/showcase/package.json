@@ -18,7 +18,7 @@
     "@lynx-js/web-core": "^0.26.0",
     "@powersync/common": "^2.2.0",
     "@powersync/web": "^2.3.0",
-    "powersync-lynx": "file:../.."
+    "powersync-lynx": "link:../.."
   },
   "devDependencies": {
     "@lynx-js/preact-devtools": "5.0.1-20260827072047-5f77e12",

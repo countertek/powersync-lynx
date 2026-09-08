@@ -1,0 +1,368 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		8645760C1E308875FDAF1162 /* libPods-PowerSyncLynxShowcase.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 255167E8DFBD938986ECB016 /* libPods-PowerSyncLynxShowcase.a */; };
+		A30000000000000000000001 /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000001 /* main.m */; };
+		A30000000000000000000003 /* AppDelegate.mm in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000003 /* AppDelegate.mm */; };
+		A30000000000000000000005 /* ViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005 /* ViewController.m */; };
+		A30000000000000000000007 /* DemoLynxProvider.m in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000007 /* DemoLynxProvider.m */; };
+		A30000000000000000000009 /* HostConfig.m in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000009 /* HostConfig.m */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		255167E8DFBD938986ECB016 /* libPods-PowerSyncLynxShowcase.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-PowerSyncLynxShowcase.a"; sourceTree = BUILT_PRODUCTS_DIR; };
+		5EE68C35B756F1B406F9CC5B /* Pods-PowerSyncLynxShowcase.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-PowerSyncLynxShowcase.debug.xcconfig"; path = "Target Support Files/Pods-PowerSyncLynxShowcase/Pods-PowerSyncLynxShowcase.debug.xcconfig"; sourceTree = "<group>"; };
+		92B709067C8902C1607CACBE /* Pods-PowerSyncLynxShowcase.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-PowerSyncLynxShowcase.release.xcconfig"; path = "Target Support Files/Pods-PowerSyncLynxShowcase/Pods-PowerSyncLynxShowcase.release.xcconfig"; sourceTree = "<group>"; };
+		A10000000000000000000016 /* PowerSyncLynxShowcase.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PowerSyncLynxShowcase.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A20000000000000000000001 /* main.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = main.m; sourceTree = "<group>"; };
+		A20000000000000000000002 /* AppDelegate.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AppDelegate.h; sourceTree = "<group>"; };
+		A20000000000000000000003 /* AppDelegate.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = AppDelegate.mm; sourceTree = "<group>"; };
+		A20000000000000000000004 /* ViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ViewController.h; sourceTree = "<group>"; };
+		A20000000000000000000005 /* ViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = ViewController.m; sourceTree = "<group>"; };
+		A20000000000000000000006 /* DemoLynxProvider.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = DemoLynxProvider.h; sourceTree = "<group>"; };
+		A20000000000000000000007 /* DemoLynxProvider.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = DemoLynxProvider.m; sourceTree = "<group>"; };
+		A20000000000000000000008 /* HostConfig.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = HostConfig.h; sourceTree = "<group>"; };
+		A20000000000000000000009 /* HostConfig.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = HostConfig.m; sourceTree = "<group>"; };
+		A2000000000000000000000A /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A10000000000000000000005 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				8645760C1E308875FDAF1162 /* libPods-PowerSyncLynxShowcase.a in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		5E55B1B953D38FF46DAE2308 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				255167E8DFBD938986ECB016 /* libPods-PowerSyncLynxShowcase.a */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		8F1B42B09B5302CA4223AF0F /* Pods */ = {
+			isa = PBXGroup;
+			children = (
+				5EE68C35B756F1B406F9CC5B /* Pods-PowerSyncLynxShowcase.debug.xcconfig */,
+				92B709067C8902C1607CACBE /* Pods-PowerSyncLynxShowcase.release.xcconfig */,
+			);
+			name = Pods;
+			path = Pods;
+			sourceTree = "<group>";
+		};
+		A10000000000000000000013 = {
+			isa = PBXGroup;
+			children = (
+				A10000000000000000000014 /* App */,
+				A10000000000000000000015 /* Products */,
+				8F1B42B09B5302CA4223AF0F /* Pods */,
+				5E55B1B953D38FF46DAE2308 /* Frameworks */,
+			);
+			sourceTree = "<group>";
+		};
+		A10000000000000000000014 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				A20000000000000000000001 /* main.m */,
+				A20000000000000000000002 /* AppDelegate.h */,
+				A20000000000000000000003 /* AppDelegate.mm */,
+				A20000000000000000000004 /* ViewController.h */,
+				A20000000000000000000005 /* ViewController.m */,
+				A20000000000000000000006 /* DemoLynxProvider.h */,
+				A20000000000000000000007 /* DemoLynxProvider.m */,
+				A20000000000000000000008 /* HostConfig.h */,
+				A20000000000000000000009 /* HostConfig.m */,
+				A2000000000000000000000A /* Info.plist */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		A10000000000000000000015 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A10000000000000000000016 /* PowerSyncLynxShowcase.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A10000000000000000000002 /* PowerSyncLynxShowcase */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A10000000000000000000012 /* Build configuration list for PBXNativeTarget "PowerSyncLynxShowcase" */;
+			buildPhases = (
+				82BABAAC34F7EFF27FD5D98B /* [CP] Check Pods Manifest.lock */,
+				A10000000000000000000003 /* Sources */,
+				A10000000000000000000005 /* Frameworks */,
+				A10000000000000000000004 /* Resources */,
+				A10000000000000000000006 /* Copy Lynx bundle */,
+				0723FC95DA03B3292751C148 /* [CP] Embed Pods Frameworks */,
+				117B1B7569A5AC0C526BD908 /* [CP] Copy Pods Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = PowerSyncLynxShowcase;
+			productName = PowerSyncLynxShowcase;
+			productReference = A10000000000000000000016 /* PowerSyncLynxShowcase.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A10000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					A10000000000000000000002 = {
+						CreatedOnToolsVersion = 16.0;
+					};
+				};
+			};
+			buildConfigurationList = A10000000000000000000011 /* Build configuration list for PBXProject "PowerSyncLynxShowcase" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = A10000000000000000000013;
+			productRefGroup = A10000000000000000000015 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A10000000000000000000002 /* PowerSyncLynxShowcase */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A10000000000000000000004 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		0723FC95DA03B3292751C148 /* [CP] Embed Pods Frameworks */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+				"${PODS_ROOT}/Target Support Files/Pods-PowerSyncLynxShowcase/Pods-PowerSyncLynxShowcase-frameworks-${CONFIGURATION}-input-files.xcfilelist",
+			);
+			name = "[CP] Embed Pods Frameworks";
+			outputFileListPaths = (
+				"${PODS_ROOT}/Target Support Files/Pods-PowerSyncLynxShowcase/Pods-PowerSyncLynxShowcase-frameworks-${CONFIGURATION}-output-files.xcfilelist",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-PowerSyncLynxShowcase/Pods-PowerSyncLynxShowcase-frameworks.sh\"\n";
+			showEnvVarsInLog = 0;
+		};
+		117B1B7569A5AC0C526BD908 /* [CP] Copy Pods Resources */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+				"${PODS_ROOT}/Target Support Files/Pods-PowerSyncLynxShowcase/Pods-PowerSyncLynxShowcase-resources-${CONFIGURATION}-input-files.xcfilelist",
+			);
+			name = "[CP] Copy Pods Resources";
+			outputFileListPaths = (
+				"${PODS_ROOT}/Target Support Files/Pods-PowerSyncLynxShowcase/Pods-PowerSyncLynxShowcase-resources-${CONFIGURATION}-output-files.xcfilelist",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-PowerSyncLynxShowcase/Pods-PowerSyncLynxShowcase-resources.sh\"\n";
+			showEnvVarsInLog = 0;
+		};
+		82BABAAC34F7EFF27FD5D98B /* [CP] Check Pods Manifest.lock */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"${PODS_PODFILE_DIR_PATH}/Podfile.lock",
+				"${PODS_ROOT}/Manifest.lock",
+			);
+			name = "[CP] Check Pods Manifest.lock";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(DERIVED_FILE_DIR)/Pods-PowerSyncLynxShowcase-checkManifestLockResult.txt",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "diff \"${PODS_PODFILE_DIR_PATH}/Podfile.lock\" \"${PODS_ROOT}/Manifest.lock\" > /dev/null\nif [ $? != 0 ] ; then\n    # print error to STDERR\n    echo \"error: The sandbox is not in sync with the Podfile.lock. Run 'pod install' or update your CocoaPods installation.\" >&2\n    exit 1\nfi\n# This output is used by Xcode 'outputs' to avoid re-running this script phase.\necho \"SUCCESS\" > \"${SCRIPT_OUTPUT_FILE_0}\"\n";
+			showEnvVarsInLog = 0;
+		};
+		A10000000000000000000006 /* Copy Lynx bundle */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Copy Lynx bundle";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/main.lynx.bundle",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -euo pipefail\nSRC=\"${SRCROOT}/../../showcase/lynx-dist/main.lynx.bundle\"\nif [ ! -f \"$SRC\" ]; then\n  echo \"error: missing $SRC — from the repo root run: pnpm --dir examples/showcase build\" >&2\n  exit 1\nfi\ncp -f \"$SRC\" \"${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/main.lynx.bundle\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A10000000000000000000003 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A30000000000000000000001 /* main.m in Sources */,
+				A30000000000000000000003 /* AppDelegate.mm in Sources */,
+				A30000000000000000000005 /* ViewController.m in Sources */,
+				A30000000000000000000007 /* DemoLynxProvider.m in Sources */,
+				A30000000000000000000009 /* HostConfig.m in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		A10000000000000000000007 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++17";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+			};
+			name = Debug;
+		};
+		A10000000000000000000008 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++17";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				SDKROOT = iphoneos;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		A10000000000000000000009 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 5EE68C35B756F1B406F9CC5B /* Pods-PowerSyncLynxShowcase.debug.xcconfig */;
+			buildSettings = {
+				CODE_SIGNING_ALLOWED = YES;
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = App/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.powersync.lynx.showcase;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		A10000000000000000000010 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 92B709067C8902C1607CACBE /* Pods-PowerSyncLynxShowcase.release.xcconfig */;
+			buildSettings = {
+				CODE_SIGNING_ALLOWED = YES;
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = App/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.powersync.lynx.showcase;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A10000000000000000000011 /* Build configuration list for PBXProject "PowerSyncLynxShowcase" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A10000000000000000000007 /* Debug */,
+				A10000000000000000000008 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A10000000000000000000012 /* Build configuration list for PBXNativeTarget "PowerSyncLynxShowcase" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A10000000000000000000009 /* Debug */,
+				A10000000000000000000010 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = A10000000000000000000001 /* Project object */;
+}

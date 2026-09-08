@@ -1,0 +1,68 @@
+plugins {
+  id 'com.android.application'
+  id 'org.lynxsdk.lynx.library-build'
+}
+
+def lynxBundle = file("${rootDir}/../../showcase/lynx-dist/main.lynx.bundle")
+
+android {
+  namespace 'com.powersync.lynx.showcase'
+  compileSdk 35
+
+  defaultConfig {
+    applicationId 'com.powersync.lynx.showcase'
+    minSdk 24
+    targetSdk 35
+    versionCode 1
+    versionName '0.0.0'
+  }
+
+  compileOptions {
+    sourceCompatibility JavaVersion.VERSION_11
+    targetCompatibility JavaVersion.VERSION_11
+  }
+
+  sourceSets {
+    main {
+      assets.srcDirs += ["${layout.buildDirectory.get().asFile}/lynx-assets"]
+    }
+  }
+}
+
+tasks.register('copyLynxBundle', Copy) {
+  from lynxBundle
+  into layout.buildDirectory.dir('lynx-assets')
+  doFirst {
+    if (!lynxBundle.exists()) {
+      throw new GradleException(
+          "Missing ${lynxBundle}. From the repo root: pnpm --dir examples/showcase build")
+    }
+  }
+}
+
+tasks.named('preBuild').configure { dependsOn('copyLynxBundle') }
+
+configurations.configureEach {
+  resolutionStrategy {
+    force 'org.lynxsdk.lynx:lynx:4.0.1'
+    force 'org.lynxsdk.lynx:primjs:4.0.0'
+  }
+}
+
+dependencies {
+  implementation 'androidx.annotation:annotation:1.9.1'
+  implementation 'org.lynxsdk.lynx:lynx:4.0.1'
+  implementation 'org.lynxsdk.lynx:lynx-jssdk:4.0.1'
+  implementation 'org.lynxsdk.lynx:lynx-trace:4.0.1'
+  implementation 'org.lynxsdk.lynx:lynx-service-image:4.0.1'
+  implementation 'org.lynxsdk.lynx:lynx-service-log:4.0.1'
+  implementation 'org.lynxsdk.lynx:lynx-service-http:4.0.1'
+  implementation 'org.lynxsdk.lynx:xelement:4.0.1'
+  implementation 'org.lynxsdk.lynx:xelement-input:4.0.1'
+  implementation 'com.facebook.fresco:fresco:2.3.0'
+  implementation 'com.facebook.fresco:animated-gif:2.3.0'
+  implementation 'com.facebook.fresco:animated-webp:2.3.0'
+  implementation 'com.facebook.fresco:webpsupport:2.3.0'
+  implementation 'com.facebook.fresco:animated-base:2.3.0'
+  implementation 'com.squareup.okhttp3:okhttp:4.9.0'
+}
