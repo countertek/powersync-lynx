@@ -163,11 +163,13 @@ export async function demoFetch(url: string, init: RequestInit = {}): Promise<Re
       headers[key] = String(value);
     }
   }
+  if (headers["Accept-Encoding"] == null && headers["accept-encoding"] == null) {
+    headers["Accept-Encoding"] = "identity";
+  }
   const payload: Record<string, unknown> = {
     method: String(init.method ?? "GET"),
     url,
     headers,
-    lynxExtension: { enableFetchAPIStandardStreaming: true },
   };
   if (typeof init.body === "string") {
     payload.body = encodeUtf8(init.body);
@@ -189,7 +191,8 @@ export async function demoFetch(url: string, init: RequestInit = {}): Promise<Re
       return textBody;
     },
     async json() {
-      return JSON.parse(textBody) as unknown;
+      const text = textBody.charCodeAt(0) === 0xfeff ? textBody.slice(1) : textBody;
+      return JSON.parse(text.trim()) as unknown;
     },
   } as Response;
 }

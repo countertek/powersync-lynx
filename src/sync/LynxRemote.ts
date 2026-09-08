@@ -199,11 +199,25 @@ function headerMap(headers: HeadersInit | undefined): Record<string, string> {
  * fetchStreamRaw treats the body as NDJSON and splits BSON on 0x0A — rust
  * then raises errorStreamingMalformedResponse. Request NDJSON only.
  */
+function hasHeader(headers: Record<string, string>, name: string): boolean {
+  const lower = name.toLowerCase();
+  for (const key of Object.keys(headers)) {
+    if (key.toLowerCase() === lower) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function preferNdjsonAccept(headers: Record<string, string>): Record<string, string> {
   for (const key of Object.keys(headers)) {
     if (key.toLowerCase() === "accept" && headers[key]!.includes("bson-stream")) {
       headers[key] = "application/x-ndjson";
     }
+  }
+  // OkHttp/Lynx may gzip JSON and hand the compressed bytes to JS.
+  if (!hasHeader(headers, "accept-encoding")) {
+    headers["Accept-Encoding"] = "identity";
   }
   return headers;
 }
@@ -224,12 +238,33 @@ function copyHeaderRecord(headers: unknown): Record<string, string> {
   return lower;
 }
 
+function stripBom(text: string): string {
+  if (text.length > 0 && text.charCodeAt(0) === 0xfeff) {
+    return text.slice(1);
+  }
+  return text;
+}
+
+function isParsedJsonValue(value: unknown): boolean {
+  if (value == null || typeof value !== "object") {
+    return false;
+  }
+  if (Array.isArray(value)) {
+    return false;
+  }
+  if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
+    return false;
+  }
+  return true;
+}
+
 class LynxFetchResponse {
   ok: boolean;
   status: number;
   statusText: string;
   headers: { get: (name: string) => string | null };
   body: { getReader: () => ReadableStreamDefaultReader<Uint8Array> };
+  private rawBody: unknown;
   constructor(result: LynxFetchSuccess) {
     const status = Number(result.status ?? 0);
     const streamingId = result.lynxExtension?.streamingId;
@@ -237,6 +272,7 @@ class LynxFetchResponse {
       streamingId != null && streamingId.length > 0
         ? streamingReader(streamingId)
         : readerFromChunks(result.body == null ? [] : [toUint8(result.body)]);
+    this.rawBody = result.body;
     this.ok = status >= 200 && status < 300;
     this.status = status;
     this.statusText = String(result.statusText ?? "");
@@ -273,7 +309,10 @@ class LynxFetchResponse {
     return decodeUtf8(copyToArrayBuffer(joined));
   }
   async json(): Promise<unknown> {
-    return JSON.parse(await this.text());
+    if (isParsedJsonValue(this.rawBody)) {
+      return this.rawBody;
+    }
+    return JSON.parse(stripBom(await this.text()).trim());
   }
 }
 
@@ -307,12 +346,34 @@ const earlyEvents = new Map<string, unknown[]>();
 const liveStreamNames = new Set<string>();
 const hookedEmitters = new WeakSet<object>();
 const hookedLynxHosts = new WeakSet<object>();
+const streamHandlers = new WeakMap<object, Map<string, (payload: unknown) => void>>();
+const origAdds = new WeakMap<object, StreamEmitter["addListener"]>();
+const slottedNames = new WeakMap<object, Set<string>>();
+const foreignListeners = new WeakMap<object, Map<string, Array<(payload: unknown) => void>>>();
+const hookedEventMaps = new WeakSet<object>();
+
+/** Native LynxFetchModule names streams `LynxFetchModuleStreamingEvent` + AtomicLong. */
+const NATIVE_STREAM_PREFIX = "LynxFetchModuleStreamingEvent";
+const NATIVE_STREAM_SLOTS = 64;
+
+function unwrapStreamPayload(payload: unknown): unknown {
+  if (!Array.isArray(payload)) {
+    return payload;
+  }
+  for (const item of payload) {
+    if (item != null && typeof item === "object" && !Array.isArray(item) && "event" in item) {
+      return item;
+    }
+  }
+  return payload.length > 0 ? payload[0] : payload;
+}
 
 function isStreamEvent(payload: unknown): boolean {
-  if (payload == null || typeof payload !== "object") {
+  const eventPayload = unwrapStreamPayload(payload);
+  if (eventPayload == null || typeof eventPayload !== "object") {
     return false;
   }
-  const event = (payload as { event?: unknown }).event;
+  const event = (eventPayload as { event?: unknown }).event;
   return event === "onData" || event === "onEnd" || event === "onError";
 }
 
@@ -339,6 +400,46 @@ function drainEarly(name: string, deliver: (payload: unknown) => void): void {
   }
 }
 
+function slotListener(emitter: object, name: string): (payload: unknown) => void {
+  return (payload: unknown) => {
+    const handler = streamHandlers.get(emitter)?.get(name);
+    if (handler != null) {
+      handler(payload);
+    } else {
+      rememberEarly(name, payload);
+    }
+    const extras = foreignListeners.get(emitter)?.get(name);
+    if (extras != null) {
+      for (const fn of extras) {
+        fn(payload);
+      }
+    }
+  };
+}
+
+function ensureSlot(emitter: StreamEmitter, name: string): void {
+  let names = slottedNames.get(emitter);
+  if (names == null) {
+    names = new Set();
+    slottedNames.set(emitter, names);
+  }
+  if (names.has(name)) {
+    return;
+  }
+  const origAdd = origAdds.get(emitter);
+  if (origAdd == null) {
+    return;
+  }
+  names.add(name);
+  origAdd(name, slotListener(emitter, name));
+}
+
+function preSlotNativeStreams(emitter: StreamEmitter): void {
+  for (let i = 0; i < NATIVE_STREAM_SLOTS; i++) {
+    ensureSlot(emitter, `${NATIVE_STREAM_PREFIX}${i}`);
+  }
+}
+
 function lynxHost(): { getJSModule?: (name: string) => StreamEmitter } | undefined {
   try {
     // Bare `lynx` so the Lynx bundler keeps the runtime global (eval/globalThis miss it).
@@ -353,20 +454,63 @@ function lynxHost(): { getJSModule?: (name: string) => StreamEmitter } | undefin
 }
 
 function lookupEmitter(): StreamEmitter | undefined {
-  return lynxHost()?.getJSModule?.("GlobalEventEmitter");
+  const host = lynxHost() as
+    | {
+        getJSModule?: (name: string) => StreamEmitter;
+        getApp?: () => { GlobalEventEmitter?: StreamEmitter };
+        GlobalEventEmitter?: StreamEmitter;
+      }
+    | undefined;
+  const fromApp = host?.getApp?.()?.GlobalEventEmitter;
+  if (fromApp != null) {
+    return fromApp;
+  }
+  if (host?.GlobalEventEmitter != null) {
+    return host.GlobalEventEmitter;
+  }
+  return host?.getJSModule?.("GlobalEventEmitter");
+}
+
+function hookEventsMap(emitter: StreamEmitter): void {
+  const events = (emitter as { _events?: Map<string, unknown> })._events;
+  if (events == null || typeof events.get !== "function" || hookedEventMaps.has(events)) {
+    return;
+  }
+  hookedEventMaps.add(events);
+  const origGet = events.get.bind(events);
+  events.get = (name: string) => {
+    let list = origGet(name);
+    if (list == null || (Array.isArray(list) && list.length === 0)) {
+      ensureSlot(emitter, String(name));
+      list = origGet(name);
+    }
+    return list;
+  };
 }
 
 function hookEmitter(emitter: StreamEmitter): void {
   if (hookedEmitters.has(emitter)) {
+    hookEventsMap(emitter);
     return;
   }
   hookedEmitters.add(emitter);
   const origAdd = emitter.addListener.bind(emitter);
+  origAdds.set(emitter, origAdd);
   const origEmit = typeof emitter.emit === "function" ? emitter.emit.bind(emitter) : undefined;
   const origTrigger = typeof emitter.trigger === "function" ? emitter.trigger.bind(emitter) : undefined;
   emitter.addListener = (name, fn) => {
-    liveStreamNames.add(name);
-    origAdd(name, fn);
+    let byName = foreignListeners.get(emitter);
+    if (byName == null) {
+      byName = new Map();
+      foreignListeners.set(emitter, byName);
+    }
+    let list = byName.get(name);
+    if (list == null) {
+      list = [];
+      byName.set(name, list);
+    }
+    list.push(fn);
+    ensureSlot(emitter, name);
   };
   emitter.emit = (name, data) => {
     rememberEarly(name, data);
@@ -376,6 +520,8 @@ function hookEmitter(emitter: StreamEmitter): void {
     rememberEarly(name, params);
     return origTrigger?.(name, params);
   };
+  preSlotNativeStreams(emitter);
+  hookEventsMap(emitter);
 }
 
 function wrapLynxGetJSModule(): void {
@@ -414,17 +560,18 @@ function streamingReader(eventName: string): ReadableStreamDefaultReader<Uint8Ar
   }
   hookEmitter(emitter);
   const onEvent = (payload: unknown) => {
+    const eventPayload = unwrapStreamPayload(payload);
     const event =
-      payload != null && typeof payload === "object" && "event" in payload
-        ? String((payload as { event?: unknown }).event)
+      eventPayload != null && typeof eventPayload === "object" && "event" in eventPayload
+        ? String((eventPayload as { event?: unknown }).event)
         : "";
     const data =
-      payload != null && typeof payload === "object" && "data" in payload
-        ? (payload as { data?: unknown }).data
+      eventPayload != null && typeof eventPayload === "object" && "data" in eventPayload
+        ? (eventPayload as { data?: unknown }).data
         : undefined;
     const error =
-      payload != null && typeof payload === "object" && "error" in payload
-        ? (payload as { error?: unknown }).error
+      eventPayload != null && typeof eventPayload === "object" && "error" in eventPayload
+        ? (eventPayload as { error?: unknown }).error
         : undefined;
     if (event === "onData") {
       queue.push(toUint8(data));
@@ -436,7 +583,13 @@ function streamingReader(eventName: string): ReadableStreamDefaultReader<Uint8Ar
     }
     wake?.();
   };
-  emitter.addListener(eventName, onEvent);
+  let handlers = streamHandlers.get(emitter);
+  if (handlers == null) {
+    handlers = new Map();
+    streamHandlers.set(emitter, handlers);
+  }
+  handlers.set(eventName, onEvent);
+  ensureSlot(emitter, eventName);
   drainEarly(eventName, onEvent);
   return {
     async read() {
