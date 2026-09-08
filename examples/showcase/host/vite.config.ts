@@ -38,12 +38,6 @@ export default defineConfig({
     fs: {
       allow: [showcaseRoot, repoRoot],
     },
-    proxy: {
-      "/demo-api": {
-        target: "http://127.0.0.1:8081",
-        rewrite: (path) => path.replace(/^\/demo-api/, ""),
-      },
-    },
   },
   preview: {
     port: 4173,

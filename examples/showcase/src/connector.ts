@@ -26,6 +26,17 @@ export function hasDemoCredentials(): boolean {
   return configured != null;
 }
 
+export function crudUploadEntries(
+  crud: ReadonlyArray<{ op: string; table: string; id: string; opData?: Record<string, unknown> | null }>,
+): Array<{ op: string; table: string; id: string; opData: Record<string, unknown> | null }> {
+  return crud.map((entry) => ({
+    op: entry.op,
+    table: entry.table,
+    id: entry.id,
+    opData: entry.opData ?? null,
+  }));
+}
+
 export async function fetchDemoCredentials(): Promise<DemoCredentials | null> {
   const response = await fetch(`${DEMO_API_URL}/token`);
   if (!response.ok) {
@@ -66,7 +77,7 @@ export const demoConnector: PowerSyncBackendConnector = {
     const response = await fetch(`${DEMO_API_URL}/upload`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ crud: transaction.crud }),
+      body: JSON.stringify({ crud: crudUploadEntries(transaction.crud) }),
     });
     if (!response.ok) {
       const detail = await response.text();

@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from "@lynx-js/react";
 
-import { createSnapshotGate } from "./boot.ts";
 import {
   DEMO_POWERSYNC_URL,
   demoConnector,
@@ -175,18 +174,15 @@ export function App() {
       return;
     }
     const abort = new AbortController();
-    const gate = createSnapshotGate();
     db.watch(
       TODO_WATCH_SQL,
       [],
       {
         onResult(result) {
-          const token = gate.take();
-          const next = asTodoRows(rowArray(result));
-          if (!gate.isCurrent(token)) {
+          if (abort.signal.aborted) {
             return;
           }
-          setTodos(next);
+          setTodos(asTodoRows(rowArray(result)));
         },
         onError(err) {
           log(`todos watch: ${errorMessage(err)}`);

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { createSnapshotGate, runExclusive } from "../examples/showcase/src/boot.ts";
+import { runExclusive } from "../examples/showcase/src/boot.ts";
 
 test("runExclusive coalesces concurrent first-load callers", async () => {
   let n = 0;
@@ -47,18 +47,4 @@ test("TOCTOU empty-check duplicates without exclusive and does not with it", asy
   });
   await Promise.all([seed(), seed()]);
   assert.equal(once.length, 1);
-});
-
-test("snapshot gate ignores a stale empty result after a newer snapshot", () => {
-  const gate = createSnapshotGate();
-  let value = "initial";
-  const first = gate.take();
-  const second = gate.take();
-  if (gate.isCurrent(second)) {
-    value = "fresh";
-  }
-  if (gate.isCurrent(first)) {
-    value = "stale-empty";
-  }
-  assert.equal(value, "fresh");
 });
