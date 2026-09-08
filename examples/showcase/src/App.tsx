@@ -21,6 +21,35 @@ interface LynxInputEvent {
 const LIST_WATCH_SQL = "SELECT * FROM lists ORDER BY created_at";
 const TODO_WATCH_SQL = "SELECT * FROM todos WHERE list_id = ? ORDER BY created_at";
 
+const MISSING_MODULE_HINT =
+  "NativePowerSyncModule is not registered on this host. Lynx Explorer does not ship it. Use the Lynx-for-Web host (attach + WASQLite) or an Autolink native host. See examples/README.md.";
+
+interface FatalState {
+  title: string;
+  detail: string;
+}
+
+interface LiveTodos {
+  unsubscribe(): void;
+}
+
+let liveTodos: LiveTodos | null = null;
+
+function isMissingNativeModule(message: string): boolean {
+  return message.includes("NativePowerSyncModule is not registered");
+}
+
+function fatalFromError(err: unknown): FatalState {
+  const message = errorMessage(err);
+  if (isMissingNativeModule(message)) {
+    return {
+      title: "Native Module missing",
+      detail: `${message}\n\n${MISSING_MODULE_HINT}`,
+    };
+  }
+  return { title: "Could not open", detail: message };
+}
+
 function asListRows(value: unknown[]): ListRow[] {
   return value.filter(
     (row): row is ListRow => row instanceof Object && "id" in row && "name" in row,
@@ -36,7 +65,7 @@ function asTodoRows(value: unknown[]): TodoRow[] {
 
 export function App() {
   const [ready, setReady] = useState(false);
-  const [fatal, setFatal] = useState<string | null>(null);
+  const [fatal, setFatal] = useState<FatalState | null>(null);
   const [lists, setLists] = useState<ListRow[]>([]);
   const [todos, setTodos] = useState<TodoRow[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -86,11 +115,8 @@ export function App() {
         log(`getAll: ${all.length} lists`);
         setReady(true);
       } catch (err) {
-        const message = errorMessage(err);
-        setFatal(
-          `${message}\n\nNativePowerSyncModule is not registered on this host. Lynx Explorer does not ship it. Use the Lynx-for-Web host (attach + WASQLite) or an Autolink native host. See examples/README.md.`,
-        );
-        log(`open failed: ${message}`);
+        setFatal(fatalFromError(err));
+        log(`open failed: ${errorMessage(err)}`);
       }
     })();
     return () => {
@@ -149,16 +175,20 @@ export function App() {
       return;
     }
     const id = newId();
-    await db.execute("INSERT INTO lists (id, name, created_at, owner_id) VALUES (?, ?, ?, ?)", [
-      id,
-      name,
-      nowIso(),
-      "demo",
-    ]);
-    setListDraft("");
-    setListField((n) => n + 1);
-    setSelectedId(id);
-    log(`execute: inserted list "${name}"`);
+    try {
+      await db.execute("INSERT INTO lists (id, name, created_at, owner_id) VALUES (?, ?, ?, ?)", [
+        id,
+        name,
+        nowIso(),
+        "demo",
+      ]);
+      setListDraft("");
+      setListField((n) => n + 1);
+      setSelectedId(id);
+      log(`execute: inserted list "${name}"`);
+    } catch (err) {
+      log(`execute failed: ${errorMessage(err)}`);
+    }
   }, [listDraft, log]);
 
   const addTodo = useCallback(async () => {
@@ -169,27 +199,35 @@ export function App() {
     if (description.length === 0) {
       return;
     }
-    await db.execute(
-      "INSERT INTO todos (id, list_id, description, completed, created_at, completed_at) VALUES (?, ?, ?, ?, ?, ?)",
-      [newId(), selectedId, description, 0, nowIso(), null],
-    );
-    setTodoDraft("");
-    setTodoField((n) => n + 1);
-    log(`execute: inserted todo "${description}"`);
+    try {
+      await db.execute(
+        "INSERT INTO todos (id, list_id, description, completed, created_at, completed_at) VALUES (?, ?, ?, ?, ?, ?)",
+        [newId(), selectedId, description, 0, nowIso(), null],
+      );
+      setTodoDraft("");
+      setTodoField((n) => n + 1);
+      log(`execute: inserted todo "${description}"`);
+    } catch (err) {
+      log(`execute failed: ${errorMessage(err)}`);
+    }
   }, [log, selectedId, todoDraft]);
 
   const toggleTodo = useCallback(
     async (todo: TodoRow) => {
       const completed = todo.completed ? 0 : 1;
       const completedAt = completed === 1 ? nowIso() : null;
-      await db.writeTransaction(async (tx) => {
-        await tx.execute("UPDATE todos SET completed = ?, completed_at = ? WHERE id = ?", [
-          completed,
-          completedAt,
-          todo.id,
-        ]);
-      });
-      log(`writeTransaction: toggled "${todo.description}"`);
+      try {
+        await db.writeTransaction(async (tx) => {
+          await tx.execute("UPDATE todos SET completed = ?, completed_at = ? WHERE id = ?", [
+            completed,
+            completedAt,
+            todo.id,
+          ]);
+        });
+        log(`writeTransaction: toggled "${todo.description}"`);
+      } catch (err) {
+        log(`writeTransaction failed: ${errorMessage(err)}`);
+      }
     },
     [log],
   );
@@ -199,15 +237,19 @@ export function App() {
       return;
     }
     const createdAt = nowIso();
-    await db.writeTransaction(async (tx) => {
-      for (const description of ["Batch item A", "Batch item B", "Batch item C"]) {
-        await tx.execute(
-          "INSERT INTO todos (id, list_id, description, completed, created_at, completed_at) VALUES (?, ?, ?, ?, ?, ?)",
-          [newId(), selectedId, description, 0, createdAt, null],
-        );
-      }
-    });
-    log("writeTransaction: inserted 3 batch todos");
+    try {
+      await db.writeTransaction(async (tx) => {
+        for (const description of ["Batch item A", "Batch item B", "Batch item C"]) {
+          await tx.execute(
+            "INSERT INTO todos (id, list_id, description, completed, created_at, completed_at) VALUES (?, ?, ?, ?, ?, ?)",
+            [newId(), selectedId, description, 0, createdAt, null],
+          );
+        }
+      });
+      log("writeTransaction: inserted 3 batch todos");
+    } catch (err) {
+      log(`writeTransaction failed: ${errorMessage(err)}`);
+    }
   }, [log, selectedId]);
 
   const connectLive = useCallback(async () => {
@@ -217,17 +259,28 @@ export function App() {
       return;
     }
     try {
+      liveTodos?.unsubscribe();
+      liveTodos = null;
+      await db.disconnect();
       await db.connect(demoConnector);
       log("connect: Connector attached (HTTP). Live streaming is not verified on this host.");
       setSyncLabel("connecting");
       try {
         const sub = await db.syncStream("todos").subscribe();
+        liveTodos = sub;
         log('syncStream("todos").subscribe() returned');
-        const timeout = new Promise<never>((_resolve, reject) => {
-          setTimeout(() => reject(new Error("waitForFirstSync timed out")), 4000);
-        });
-        await Promise.race([sub.waitForFirstSync(), timeout]);
-        log("waitForFirstSync: resolved");
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          const timeout = new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(() => reject(new Error("waitForFirstSync timed out")), 4000);
+          });
+          await Promise.race([sub.waitForFirstSync(), timeout]);
+          log("waitForFirstSync: resolved");
+        } finally {
+          if (timer != null) {
+            clearTimeout(timer);
+          }
+        }
       } catch (err) {
         log(
           `sync subscribe / waitForFirstSync: ${errorMessage(err)} (not verified on a live host)`,
@@ -245,10 +298,10 @@ export function App() {
       <view className="Page">
         <view className="Hero">
           <text className="Eyebrow">PowerSync on Lynx</text>
-          <text className="Title">Native Module missing</text>
+          <text className="Title">{fatal.title}</text>
         </view>
         <view className="Banner Banner--error">
-          <text className="BannerText">{fatal}</text>
+          <text className="BannerText">{fatal.detail}</text>
         </view>
       </view>
     );

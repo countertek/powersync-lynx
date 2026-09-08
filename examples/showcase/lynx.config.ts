@@ -1,7 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { pluginQRCode } from "@lynx-js/qrcode-rsbuild-plugin";
 import { pluginReactLynx } from "@lynx-js/react-rsbuild-plugin";
 import { defineConfig } from "@lynx-js/rspeedy";
 import { pluginTypeCheck } from "@rsbuild/plugin-type-check";
@@ -9,15 +8,7 @@ import { pluginTypeCheck } from "@rsbuild/plugin-type-check";
 const here = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
-  plugins: [
-    pluginQRCode({
-      schema(url) {
-        return `${url}?fullscreen=true`;
-      },
-    }),
-    pluginReactLynx(),
-    pluginTypeCheck(),
-  ],
+  plugins: [pluginReactLynx(), pluginTypeCheck()],
   environments: {
     web: {},
     lynx: {},

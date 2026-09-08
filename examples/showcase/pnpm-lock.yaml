@@ -128,9 +128,6 @@ importers:
       '@lynx-js/preact-devtools':
         specifier: 5.0.1-20260827072047-5f77e12
         version: 5.0.1-20260827072047-5f77e12
-      '@lynx-js/qrcode-rsbuild-plugin':
-        specifier: ^0.7.1
-        version: 0.7.1(@lynx-js/rspeedy@0.17.1(@emnapi/core@1.11.3)(@emnapi/runtime@1.11.3)(@rspack/core@2.2.2(@swc/helpers@0.5.23))(csso@5.0.5)(lightningcss@1.33.0)(supports-color@8.1.1)(tslib@2.8.1)(typescript@6.0.3))(@rsbuild/core@2.2.3)
       '@lynx-js/react-rsbuild-plugin':
         specifier: ^0.20.1
         version: 0.20.1(@lynx-js/react@0.126.0(@lynx-js/types@4.1.0)(@types/react@19.2.18))(@lynx-js/rspeedy@0.17.1(@emnapi/core@1.11.3)(@emnapi/runtime@1.11.3)(@rspack/core@2.2.2(@swc/helpers@0.5.23))(csso@5.0.5)(lightningcss@1.33.0)(supports-color@8.1.1)(tslib@2.8.1)(typescript@6.0.3))(@rsbuild/core@2.2.3)(csso@5.0.5)(lightningcss@1.33.0)(tslib@2.8.1)
@@ -364,18 +361,6 @@ packages:
 
   '@lynx-js/preact-devtools@5.0.1-20260827072047-5f77e12':
     resolution: {integrity: sha512-S4zV+qtL+M8MBT9G4I2jkeaDsbLVyX4kt5m+XyS9w7drBSrJlgOdxZ/lMtG3ngZVhpo7TuE6UODZGexB0QbZdA==}
-
-  '@lynx-js/qrcode-rsbuild-plugin@0.7.1':
-    resolution: {integrity: sha512-7MsYsxxDbyBeX2G+VGswE+g1mZcOwcmTgmHqsfAsJM5yxqZmgTL56Uom5v2MH1gIEQ9zifoP0bZOKr+/R97+WA==}
-    engines: {node: ^20.19.0 || >=22.12.0}
-    peerDependencies:
-      '@lynx-js/rspeedy': ^0.17.0
-      '@rsbuild/core': ^2.0.0
-    peerDependenciesMeta:
-      '@lynx-js/rspeedy':
-        optional: true
-      '@rsbuild/core':
-        optional: true
 
   '@lynx-js/react-alias-rsbuild-plugin@0.20.1':
     resolution: {integrity: sha512-kxnG+QQXtCiLmPLTh/khgtq+aFY3ksCI1xgEGv0OV7tWlAoDk8dXh+7xcDMBQcffJ4retI57orIOez6I2cHrpQ==}
@@ -2470,11 +2455,6 @@ snapshots:
     dependencies:
       errorstacks: 2.4.2
       htm: 3.1.1
-
-  '@lynx-js/qrcode-rsbuild-plugin@0.7.1(@lynx-js/rspeedy@0.17.1(@emnapi/core@1.11.3)(@emnapi/runtime@1.11.3)(@rspack/core@2.2.2(@swc/helpers@0.5.23))(csso@5.0.5)(lightningcss@1.33.0)(supports-color@8.1.1)(tslib@2.8.1)(typescript@6.0.3))(@rsbuild/core@2.2.3)':
-    optionalDependencies:
-      '@lynx-js/rspeedy': 0.17.1(@emnapi/core@1.11.3)(@emnapi/runtime@1.11.3)(@rspack/core@2.2.2(@swc/helpers@0.5.23))(csso@5.0.5)(lightningcss@1.33.0)(supports-color@8.1.1)(tslib@2.8.1)(typescript@6.0.3)
-      '@rsbuild/core': 2.2.3
 
   '@lynx-js/react-alias-rsbuild-plugin@0.20.1(@lynx-js/rspeedy@0.17.1(@emnapi/core@1.11.3)(@emnapi/runtime@1.11.3)(@rspack/core@2.2.2(@swc/helpers@0.5.23))(csso@5.0.5)(lightningcss@1.33.0)(supports-color@8.1.1)(tslib@2.8.1)(typescript@6.0.3))(@rsbuild/core@2.2.3)':
     optionalDependencies:
