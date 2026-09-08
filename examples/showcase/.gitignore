@@ -1,0 +1,8 @@
+node_modules/
+lynx-dist/
+host-dist/
+.rspeedy/
+*.tsbuildinfo
+.DS_Store
+*.local
+*.log*

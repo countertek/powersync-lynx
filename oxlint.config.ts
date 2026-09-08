@@ -16,6 +16,9 @@ const ignorePatterns = [
   ".windsurf/**",
   "android/**",
   "dist/**",
+  // ReactLynx consumer: component props are incompatible with anti-slop
+  // no-object-parameters. See examples/README.md.
+  "examples/**",
   "ios/**",
   "lynxtron/**",
   "native-vendor/**",

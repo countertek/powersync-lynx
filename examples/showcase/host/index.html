@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PowerSync Lynx showcase</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="chrome">
+      <p class="eyebrow">Lynx-for-Web host</p>
+      <h1>PowerSync Lynx showcase</h1>
+      <p class="lede">
+        This page calls <code>attach()</code> on <code>&lt;lynx-view&gt;</code> before the bundle
+        starts, mapping Native Module SQL RPC onto WASQLite.
+      </p>
+      <p class="note">
+        Verified: host build + factory ESM URL. Not verified: live real-host streaming or
+        cancellation on physical iOS / Android / Windows / macOS.
+      </p>
+    </header>
+    <lynx-view id="ps-lynx" style="width: 100%; height: 100%"></lynx-view>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

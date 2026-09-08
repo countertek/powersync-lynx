@@ -1,0 +1,12 @@
+source 'https://cdn.cocoapods.org/'
+platform :ios, '15.0'
+
+plugin 'cocoapods-lynx-library'
+
+target 'PowerSyncLynxShowcase' do
+  use_lynx_library!
+
+  pod 'Lynx', '4.0.0', :subspecs => ['Framework']
+  pod 'PrimJS', '4.0.0', :subspecs => ['quickjs', 'napi']
+  pod 'LynxService', '4.0.0', :subspecs => ['Image', 'Log', 'Http']
+end

@@ -16,6 +16,11 @@ Single-context: root `CONTEXT.md` plus `docs/adr/`. See `docs/agents/domain.md`.
 
 Normative spec: `docs/spec.md` (captain override: Client is TypeScript sources only — no committed `.js` / `.d.ts` emit; lynx-bg factory is generated `dist/web-host/factory.js`, not `lib/web-host/factory.js`). This package (`powersync-lynx`) ships Lynx-bundle TypeScript in `src/` (`PowerSyncDatabase`, Adapter, `LynxRemote`), Host helper in `src/web-host/`, and NativePowerSyncModule (async SQL RPC) in `android/`, `ios/`, `shared/`, `lynxtron/`, `dist/`. Native Module methods take a function callback; do not treat them as Promises. Install with pnpm 12 (`packageManager` in `package.json`); do not use the npm CLI. Adapter checks: `pnpm test` (`node --test test/*.test.ts`). Native Module checks: `make test`, `make test-ios`, `make test-android`. Lint/format/typecheck: `pnpm lint`, `pnpm fmt`, `pnpm typecheck`.
 
+### Examples app
+
+Consumer demo lives under `examples/`. Try-it guide: `examples/README.md`. Do not put `@powersync/web` in the library install graph.
+
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.

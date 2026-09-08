@@ -1,0 +1,39 @@
+{
+  "name": "powersync-lynx-showcase",
+  "version": "0.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "bundle-factory": "pnpm --dir ../.. bundle-factory",
+    "build": "pnpm bundle-factory && rspeedy build",
+    "build:host": "pnpm bundle-factory && vite build --config host/vite.config.ts",
+    "dev": "pnpm bundle-factory && rspeedy dev",
+    "dev:web": "pnpm bundle-factory && rspeedy build && vite --config host/vite.config.ts",
+    "preview:web": "pnpm build && pnpm build:host && vite preview --config host/vite.config.ts",
+    "typecheck": "tsc -b tsconfig.json && tsc -p host/tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@lynx-js/react": "^0.126.0",
+    "@lynx-js/web-core": "^0.26.0",
+    "@powersync/common": "^2.2.0",
+    "@powersync/web": "^2.3.0",
+    "powersync-lynx": "file:../.."
+  },
+  "devDependencies": {
+    "@lynx-js/preact-devtools": "5.0.1-20260827072047-5f77e12",
+    "@lynx-js/qrcode-rsbuild-plugin": "^0.7.1",
+    "@lynx-js/react-rsbuild-plugin": "^0.20.1",
+    "@lynx-js/rspeedy": "^0.17.1",
+    "@lynx-js/types": "4.1.0",
+    "@rsbuild/plugin-type-check": "1.6.0",
+    "@types/node": "26.4.1",
+    "@types/react": "^19.2.18",
+    "typescript": "~6.0.3",
+    "vite": "8.2.2"
+  },
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
+  "packageManager": "pnpm@12.3.4"
+}

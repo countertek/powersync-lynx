@@ -1,0 +1,7 @@
+# Separate from the library workspace so the native install graph
+# does not pull @powersync/web / wa-sqlite (see test/install-graph.test.ts).
+allowBuilds:
+  esbuild: true
+autoInstallPeers: false
+onlyBuiltDependencies:
+  - esbuild

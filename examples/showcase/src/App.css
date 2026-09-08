@@ -1,0 +1,191 @@
+:root {
+  background-color: #07111f;
+  --ink: #e7eefc;
+  --muted: #93a0b8;
+  --accent: #2ee6d6;
+  --card: #121c2e;
+  --line: #24324a;
+  --warn: #ffb020;
+  --danger: #ff6b6b;
+}
+
+.Page {
+  width: 100%;
+  height: 100%;
+  padding: 20px;
+  background-color: #07111f;
+}
+
+.Hero {
+  margin-bottom: 16px;
+}
+
+.Eyebrow {
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+
+.Title {
+  color: var(--ink);
+  font-size: 28px;
+  font-weight: 800;
+  margin-top: 6px;
+}
+
+.Sub {
+  color: var(--muted);
+  font-size: 14px;
+  margin-top: 8px;
+}
+
+.Row {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.Pill {
+  background-color: #163246;
+  border-radius: 999px;
+  padding: 6px 12px;
+  margin-right: 8px;
+  margin-bottom: 8px;
+}
+
+.Pill--warn {
+  background-color: #3a2a12;
+}
+
+.PillLabel {
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.Banner {
+  background-color: #132033;
+  border-radius: 12px;
+  padding: 12px;
+  margin-bottom: 16px;
+}
+
+.Banner--error {
+  background-color: #3a1518;
+}
+
+.BannerText {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.Grid {
+  display: flex;
+  flex-direction: column;
+}
+
+.Card {
+  background-color: var(--card);
+  border-radius: 16px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.CardTitle {
+  color: var(--ink);
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+
+.CardHint {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 18px;
+  margin-bottom: 10px;
+}
+
+.Composer {
+  display: flex;
+  flex-direction: row;
+  margin-bottom: 10px;
+}
+
+.Field {
+  flex: 1;
+  height: 36px;
+  border-radius: 8px;
+  background-color: #0b1626;
+  color: var(--ink);
+  padding: 0 10px;
+  font-size: 14px;
+  margin-bottom: 8px;
+}
+
+.Btn {
+  background-color: var(--accent);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-left: 8px;
+  margin-bottom: 8px;
+  align-items: center;
+  justify-content: center;
+}
+
+.Btn--ghost {
+  background-color: #1b2a40;
+  margin-left: 0px;
+}
+
+.BtnLabel {
+  color: #06201c;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.Btn--ghost .BtnLabel {
+  color: var(--ink);
+}
+
+.Item {
+  padding: 10px 0px;
+  border-bottom-width: 1px;
+  border-bottom-color: var(--line);
+}
+
+.Item--active {
+  background-color: #17324a;
+  border-radius: 8px;
+  padding: 10px 8px;
+}
+
+.ItemTitle {
+  color: var(--ink);
+  font-size: 15px;
+}
+
+.ItemTitle--done {
+  color: var(--muted);
+}
+
+.ItemMeta {
+  color: var(--muted);
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+.LogRow {
+  margin-bottom: 8px;
+}
+
+.LogAt {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.LogMsg {
+  color: var(--ink);
+  font-size: 13px;
+}
