@@ -1,0 +1,40 @@
+{
+  "name": "powersync-lynx",
+  "version": "0.0.0",
+  "type": "module",
+  "license": "Apache-2.0",
+  "main": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./web-host": {
+      "types": "./lib/web-host/index.d.ts",
+      "default": "./lib/web-host/index.js"
+    },
+    "./lynxtron": "./lynxtron/index.cjs",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "lynxtron",
+    "android",
+    "ios",
+    "shared",
+    "dist",
+    "lynx.lib.json"
+  ],
+  "dependencies": {
+    "@powersync/common": "^2.2.0",
+    "@powersync/shared-internals": "^1.2.0"
+  },
+  "peerDependencies": {
+    "@powersync/common": "^2.2.0",
+    "@powersync/web": "^2.3.0"
+  },
+  "peerDependenciesMeta": {
+    "@powersync/web": { "optional": true }
+  }
+}

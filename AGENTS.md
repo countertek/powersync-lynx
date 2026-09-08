@@ -11,3 +11,14 @@ Default role names: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-
 ### Domain docs
 
 Single-context: root `CONTEXT.md` plus `docs/adr/`. See `docs/agents/domain.md`.
+
+### Lynx-bundle JS
+
+Normative spec: `docs/spec.md`. This package (`powersync-lynx`) ships the Autolink skeleton and Lynx-bundle JS in `lib/` (`PowerSyncDatabase`, JS Adapter, `LynxRemote`). Native dirs and `lib/web-host/` are owned by sibling work. Native Module methods take a function callback; do not treat them as Promises. Adapter checks: `node --test test/*.js`.
+
+## Maintaining this file
+
+Keep this file for knowledge useful to almost every future agent session in this project.
+Do not repeat what the codebase already shows; point to the authoritative file or command instead.
+Prefer rewriting or pruning existing entries over appending new ones.
+When updating this file, preserve this bar for all agents and keep entries concise.
