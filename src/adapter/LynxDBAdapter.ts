@@ -174,8 +174,7 @@ export class LynxDBAdapter extends DBAdapter {
       }
     } finally {
       this.writeConnection = keepWrite ? writeSemaphore : null;
-      this.readConnections =
-        remainingReaders.length > 0 ? new Semaphore(remainingReaders) : null;
+      this.readConnections = remainingReaders.length > 0 ? new Semaphore(remainingReaders) : null;
       returnWrite?.();
       returnReaders?.();
     }

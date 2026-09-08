@@ -712,7 +712,12 @@ test("last close keeps dbId when adapter.close rejects so retry can finish", asy
     },
   });
 
-  const opened = await handleNativeCall("open", { dbFilename: "retry-close.db" }, undefined, loadWeb);
+  const opened = await handleNativeCall(
+    "open",
+    { dbFilename: "retry-close.db" },
+    undefined,
+    loadWeb,
+  );
   assert.equal(opened.ok, true);
   assert.equal(mappingStats().files, 1);
   assert.equal(mappingStats().connections, 1);
@@ -753,7 +758,9 @@ test("duplicate close of one dbId does not close a sibling file share", async ()
   const failCount = [closeA, closeB].filter((result) => result.ok === false).length;
   assert.equal(okCount, 1);
   assert.equal(failCount, 1);
-  assert.ok([closeA, closeB].some((result) => result.ok === false && /unknown dbId/.test(result.message)));
+  assert.ok(
+    [closeA, closeB].some((result) => result.ok === false && /unknown dbId/.test(result.message)),
+  );
   assert.equal(calls.closes.length, 0);
   assert.equal(mappingStats().files, 1);
   assert.equal(mappingStats().connections, 1);
