@@ -39,7 +39,7 @@ function defaultSqlResult(sql, params) {
   };
 }
 
-function mockWeb(calls: WebCalls, handleSql) {
+function mockWeb(calls: WebCalls, handleSql, options = {}) {
   calls.constructs = [];
   calls.closes = [];
   calls.locks = [];
@@ -58,7 +58,13 @@ function mockWeb(calls: WebCalls, handleSql) {
         },
         async writeLock(fn) {
           calls.locks.push("write");
-          return fn(tx);
+          try {
+            return await fn(tx);
+          } finally {
+            if (options.consumeWriteHooks === true) {
+              await tx.executeRaw("SELECT powersync_update_hooks('get')", []);
+            }
+          }
         },
         async close() {
           calls.closes.push(true);
@@ -99,8 +105,8 @@ function mockWeb(calls: WebCalls, handleSql) {
   };
 }
 
-function loadMock(calls, handleSql) {
-  const web = mockWeb(calls, handleSql);
+function loadMock(calls, handleSql, options) {
+  const web = mockWeb(calls, handleSql, options);
   return async () => web;
 }
 
@@ -230,6 +236,57 @@ function appSqlHandler(store = { lists: [] }) {
     }
     return ok([], []);
   };
+}
+
+function hookTrackingSqlHandler(store = { lists: [] }) {
+  const dirty = [];
+  const base = appSqlHandler(store);
+  return function handleSql(sql, params) {
+    if (sql.includes("powersync_update_hooks('get')")) {
+      const tables = dirty.splice(0, dirty.length);
+      return {
+        insertId: 0,
+        rowsAffected: 0,
+        columnNames: ["powersync_update_hooks"],
+        rawRows: [[JSON.stringify(tables)]],
+      };
+    }
+    const result = base(sql, params);
+    if (/INSERT INTO lists/i.test(sql) || /UPDATE lists/i.test(sql)) {
+      if (!dirty.includes("lists")) {
+        dirty.push("lists");
+      }
+    }
+    return result;
+  };
+}
+
+function queryRows(result) {
+  if (result == null) {
+    return [];
+  }
+  if (Array.isArray(result.array)) {
+    return result.array;
+  }
+  return result.rows?._array ?? [];
+}
+
+function waitUntil(predicate, timeoutMs = 1000) {
+  const started = Date.now();
+  return new Promise((resolve, reject) => {
+    const tick = () => {
+      if (predicate()) {
+        resolve(undefined);
+        return;
+      }
+      if (Date.now() - started > timeoutMs) {
+        reject(new Error("timed out waiting for watch snapshot"));
+        return;
+      }
+      setTimeout(tick, 10);
+    };
+    tick();
+  });
 }
 
 test("encode/decode ArrayBuffer, Uint8Array, and bigint both directions", () => {
@@ -801,6 +858,53 @@ test("Lynx-bundle PowerSyncDatabase works through the Host helper", async () => 
     await db.close();
     assert.equal(mappingStats().connections, 0);
   } finally {
+    db.triggersImpl?.dispose();
+  }
+});
+
+test("watch refreshes after writeTransaction when WASQLite writeLock consumes hooks", async () => {
+  const store = { lists: [] };
+  const calls = {};
+  const loadWeb = loadMock(calls, hookTrackingSqlHandler(store), { consumeWriteHooks: true });
+  const hop = (name, data) => handleNativeCall(name, data, undefined, loadWeb);
+  globalThis.NativeModules = {
+    NativePowerSyncModule: createFactory({}, hop),
+  };
+  const db = new PowerSyncDatabase({
+    schema: new Schema({
+      lists: new Table({ name: column.text }),
+    }),
+    database: { dbFilename: "watch.db" },
+  });
+  const abort = new AbortController();
+  try {
+    await db.waitForReady();
+    const snapshots = [];
+    db.watch(
+      "SELECT id, name FROM lists",
+      [],
+      {
+        onResult(result) {
+          snapshots.push(queryRows(result));
+        },
+      },
+      { tables: ["lists"], throttleMs: 0, signal: abort.signal },
+    );
+    await waitUntil(() => snapshots.length >= 1);
+    assert.deepEqual(snapshots.at(-1), []);
+
+    await db.writeTransaction(async (tx) => {
+      await tx.execute("INSERT INTO lists (id, name) VALUES (?, ?)", ["list-1", "Groceries"]);
+    });
+
+    await waitUntil(() => snapshots.some((rows) => rows.some((row) => row.name === "Groceries")));
+
+    await db.execute("INSERT INTO lists (id, name) VALUES (?, ?)", ["list-2", "Hardware"]);
+    await waitUntil(() => snapshots.some((rows) => rows.some((row) => row.name === "Hardware")));
+    assert.equal(store.lists.length, 2);
+  } finally {
+    abort.abort();
+    await db.close();
     db.triggersImpl?.dispose();
   }
 });
