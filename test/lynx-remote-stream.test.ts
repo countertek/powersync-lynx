@@ -216,3 +216,128 @@ test("streaming Response body can be inspected then getReader() without body use
     globalThis.fetch = previousFetch;
   }
 });
+
+const BSON_STREAM = "application/vnd.powersync.bson-stream";
+const NDJSON_LINE = '{"checkpoint":{"last_op_id":"1"}}\n';
+/** Real /sync/stream BSON contains 0x0A; NDJSON-splitting it yields unparseable lines. */
+const BSON_WITH_NEWLINE = new Uint8Array([0xe9, 0x00, 0x00, 0x00, 0x0a, 0x03, 0x63, 0x6b]);
+
+function headerAccept(headers: unknown): string {
+  if (headers == null || typeof headers !== "object" || Array.isArray(headers)) {
+    return "";
+  }
+  const rec = headers as Record<string, unknown>;
+  return String(rec.accept ?? rec.Accept ?? "");
+}
+
+function serviceFaithfulBody(accept: string): Uint8Array {
+  if (accept.includes(BSON_STREAM)) {
+    return BSON_WITH_NEWLINE;
+  }
+  return new TextEncoder().encode(NDJSON_LINE);
+}
+
+test("fetchStream yields JSON checkpoint lines when the service honors Accept", async () => {
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = ((_url, init) => {
+    const body = serviceFaithfulBody(headerAccept(init?.headers));
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      headers: { get: () => "" },
+      body: {
+        getReader() {
+          let sent = false;
+          return {
+            async read() {
+              if (!sent) {
+                sent = true;
+                return { done: false, value: body };
+              }
+              return { done: true, value: undefined };
+            },
+            cancel() {
+              return Promise.resolve();
+            },
+            releaseLock() {},
+          };
+        },
+      },
+    } as Response);
+  }) as typeof fetch;
+  try {
+    const remote = new LynxRemote(
+      { fetchCredentials: async () => ({ endpoint: "http://127.0.0.1:8080", token: "tok" }) },
+      { log() {} },
+    );
+    const stream = await remote.fetchStream({
+      path: "/sync/stream",
+      data: {},
+      abortSignal: new AbortController().signal,
+    });
+    const first = await stream.next();
+    assert.equal(first.done, false);
+    assert.equal(typeof first.value, "string");
+    assert.deepEqual(JSON.parse(String(first.value)), { checkpoint: { last_op_id: "1" } });
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("Android LynxFetchModule fetchStream yields JSON checkpoint lines", async () => {
+  const previousLynx = (globalThis as { lynx?: unknown }).lynx;
+  const previousModules = globalThis.NativeModules;
+  const previousInfo = (globalThis as { SystemInfo?: { platform?: string } }).SystemInfo;
+  const listeners = new Map<string, (payload: unknown) => void>();
+  (globalThis as { SystemInfo?: { platform?: string } }).SystemInfo = { platform: "Android" };
+  (globalThis as { lynx?: unknown }).lynx = {
+    getJSModule(name: string) {
+      if (name !== "GlobalEventEmitter") {
+        return undefined;
+      }
+      return {
+        addListener(eventName: string, fn: (payload: unknown) => void) {
+          listeners.set(eventName, fn);
+        },
+      };
+    },
+  };
+  globalThis.NativeModules = {
+    LynxFetchModule: {
+      fetch(request: { headers?: Record<string, string> }, resolve: (response: unknown) => void) {
+        const body = serviceFaithfulBody(headerAccept(request.headers));
+        queueMicrotask(() => {
+          resolve({
+            status: 200,
+            statusText: "OK",
+            lynxExtension: { streamingId: "stream-ndjson" },
+          });
+          queueMicrotask(() => {
+            listeners.get("stream-ndjson")?.({ event: "onData", data: body });
+            listeners.get("stream-ndjson")?.({ event: "onEnd" });
+          });
+        });
+      },
+    },
+  } as typeof globalThis.NativeModules;
+  try {
+    const remote = new LynxRemote(
+      { fetchCredentials: async () => ({ endpoint: "http://127.0.0.1:8080", token: "tok" }) },
+      { log() {} },
+    );
+    const stream = await remote.fetchStream({
+      path: "/sync/stream",
+      data: {},
+      abortSignal: new AbortController().signal,
+    });
+    const first = await stream.next();
+    assert.equal(first.done, false);
+    assert.equal(typeof first.value, "string");
+    assert.deepEqual(JSON.parse(String(first.value)), { checkpoint: { last_op_id: "1" } });
+  } finally {
+    (globalThis as { lynx?: unknown }).lynx = previousLynx;
+    globalThis.NativeModules = previousModules;
+    (globalThis as { SystemInfo?: { platform?: string } }).SystemInfo = previousInfo;
+  }
+});

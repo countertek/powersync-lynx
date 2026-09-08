@@ -179,7 +179,7 @@ function headerMap(headers: HeadersInit | undefined): Record<string, string> {
         out[String(pair[0])] = String(pair[1]);
       }
     }
-    return out;
+    return preferNdjsonAccept(out);
   }
   const rec = headers as Record<string, unknown>;
   for (const key in rec) {
@@ -191,7 +191,21 @@ function headerMap(headers: HeadersInit | undefined): Record<string, string> {
       out[key] = String(value);
     }
   }
-  return out;
+  return preferNdjsonAccept(out);
+}
+
+/**
+ * AbstractRemote prefers BSON (`q=0.9`). Lynx often drops Content-Type, so
+ * fetchStreamRaw treats the body as NDJSON and splits BSON on 0x0A — rust
+ * then raises errorStreamingMalformedResponse. Request NDJSON only.
+ */
+function preferNdjsonAccept(headers: Record<string, string>): Record<string, string> {
+  for (const key of Object.keys(headers)) {
+    if (key.toLowerCase() === "accept" && headers[key]!.includes("bson-stream")) {
+      headers[key] = "application/x-ndjson";
+    }
+  }
+  return headers;
 }
 
 function copyHeaderRecord(headers: unknown): Record<string, string> {
