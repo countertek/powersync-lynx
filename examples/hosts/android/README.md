@@ -3,8 +3,8 @@
 This is a drop-in recipe for a Lynx **4.0+** Android host that loads the showcase
 bundle and Autolinks `powersync-lynx`. It is not a full Android Studio app.
 
-Lynx Explorer does **not** include `NativePowerSyncModule`. Use this host (or
-the web host).
+Lynx Explorer does **not** register `NativePowerSyncModule`. There is no
+Explorer/QR run path; see the try-it guide [`examples/README.md`](../../README.md).
 
 ## What this environment verified
 
@@ -47,8 +47,8 @@ find `lynx.lib.json`.
 Register `LynxHttpService` with `LynxServiceCenter` before creating LynxView.
 Set PageConfig `enableFetchAPIStandardStreaming = true` (LynxSDK 3.7+).
 Service registration is a prerequisite, not proof of incremental delivery.
-
-See `ShowcaseApplication.kt` in this folder.
+`ShowcaseApplication.kt` in this folder registers the HTTP Service before
+`LynxEnv` init; this recipe does not include a LynxView.
 
 ## Load the bundle
 

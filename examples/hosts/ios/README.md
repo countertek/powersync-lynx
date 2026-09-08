@@ -3,8 +3,9 @@
 This is a drop-in recipe for a Lynx **4.0+** iOS host that loads the showcase bundle
 and Autolinks `powersync-lynx`. It is not a full Xcode project.
 
-Lynx Explorer does **not** include `NativePowerSyncModule`. Loading the Rspeedy
-QR/URL in Explorer will fail at `waitForReady`. Use this host (or the web host).
+Lynx Explorer does **not** register `NativePowerSyncModule` (SQL fails at
+`waitForReady`). There is no Explorer/QR run path; see the try-it guide
+[`examples/README.md`](../../README.md).
 
 ## What this environment verified
 
@@ -48,7 +49,9 @@ Service. Without `LynxService/Http` and PageConfig
 `enableFetchAPIStandardStreaming = true` (LynxSDK 3.7+), Connector fetches and
 `/sync/stream` will not run. Incremental delivery still remains unverified.
 
-See `AppDelegate.mm` in this folder for the init order.
+`AppDelegate.mm` in this folder registers `LynxHttpService` before `LynxEnv`
+init. Set PageConfig `enableFetchAPIStandardStreaming = true` when creating
+`LynxView` (this recipe does not include a LynxView).
 
 ## Load the bundle
 

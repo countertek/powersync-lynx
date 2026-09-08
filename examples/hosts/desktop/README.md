@@ -29,6 +29,8 @@ export default defineConfig({
 
 The host `package.json` depends on `powersync-lynx` so Autolink can see
 `lynx.lib.json`. `pluginLynxtron()` `require`s `powersync-lynx/lynxtron`.
+`lynxtron.config.ts` in this folder is an unwired sketch (`plugins: []`) and
+is not built here; copy the snippet above, not the empty array.
 
 ## HTTP Service
 

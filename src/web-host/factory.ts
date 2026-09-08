@@ -13,10 +13,6 @@ interface LynxNativeModulesBag {
   NativePowerSyncModule?: NativePowerSyncFactory;
 }
 
-interface WorkerGlobalWithNativeModules {
-  NativeModules?: LynxNativeModulesBag;
-}
-
 type FactoryCallback = (envelope: NativeWireEnvelope) => void;
 
 interface HopErrorFields {
@@ -68,6 +64,8 @@ export interface NativePowerSyncFactory {
 
 /**
  * lynx-bg Native Module factory. Default export is loaded from nativeModulesMap.
+ * Assigns methods onto the NativeModules bag and the worker global because
+ * lynx-bg lookup is NativeModules.NativePowerSyncModule, not the return value.
  * Does not import @powersync/web.
  */
 export default function createNativePowerSyncModule(
@@ -89,7 +87,7 @@ export default function createNativePowerSyncModule(
     },
   };
   nativeModules.NativePowerSyncModule = methods;
-  const workerGlobal = globalThis as typeof globalThis & WorkerGlobalWithNativeModules;
-  workerGlobal.NativeModules = nativeModules;
+  // lynx-bg looks up NativeModules.NativePowerSyncModule on the worker global.
+  Object.assign(globalThis, { NativeModules: nativeModules });
   return methods;
 }

@@ -5,7 +5,12 @@ import {
   type Cloneable,
   type CloneableObject,
 } from "./cloneable.ts";
-import { copyToArrayBuffer, errorCode, hasPrimitiveConstructor } from "../values.ts";
+import {
+  copyToArrayBuffer,
+  errorCode,
+  hasPrimitiveConstructor,
+  type RuntimeValue,
+} from "../values.ts";
 import type { NativeEnvelope, NativeFailEnvelope, NativeOkEnvelope } from "../adapter/native.ts";
 
 export const MODULE_NAME = "NativePowerSyncModule";
@@ -455,7 +460,15 @@ function tablesFromJsonCell(cell: Cloneable | undefined): string[] {
     if (!Array.isArray(parsed)) {
       return [];
     }
-    return parsed.filter((table) => typeof table === "string");
+    const tables: string[] = [];
+    for (const item of parsed) {
+      // SAFETY: powersync_update_hooks('get') JSON is a list of primitive table names.
+      const value = item as RuntimeValue;
+      if (hasPrimitiveConstructor(value, String)) {
+        tables.push(value);
+      }
+    }
+    return tables;
   } catch {
     return [];
   }
@@ -474,6 +487,8 @@ async function stashUpdateHooks(tx: WASQLiteTx, entry: FileEntry | undefined): P
     return;
   }
   try {
+    // WASQLite writeLock can drain powersync_update_hooks before the Adapter's
+    // follow-up get; stash names here and merge them in mergeHookGetEnvelope.
     const result = await tx.executeRaw("SELECT powersync_update_hooks('get')", []);
     addPendingTables(entry, tablesFromJsonCell(result.rawRows?.[0]?.[0]));
   } catch {

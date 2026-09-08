@@ -48,11 +48,7 @@ function rewriteNewUrl(code: string, relative: string, absolute: string): string
 function rewriteToRuntimePaths(code: string): string {
   let next = code;
   next = rewriteNewUrl(next, "../../binary/client/client_bg.wasm", `/${RUNTIME.wasm}`);
-  next = rewriteNewUrl(
-    next,
-    "../../binary/client_legacy/client_bg.wasm",
-    `/${RUNTIME.wasmLegacy}`,
-  );
+  next = rewriteNewUrl(next, "../../binary/client_legacy/client_bg.wasm", `/${RUNTIME.wasmLegacy}`);
   next = rewriteNewUrl(next, "../decodeWorker/decode.worker.js", `/${RUNTIME.decodeWorker}`);
   next = rewriteNewUrl(next, "../background/index.js", `/${RUNTIME.lynxBg}`);
   return next;
@@ -86,9 +82,7 @@ async function bundleWorker(entry: string, root: string): Promise<string> {
   if (!("output" in output)) {
     throw new Error(`worker bundle for ${entry} did not emit output`);
   }
-  const entryChunk = output.output.find(
-    (item) => item.type === "chunk" && item.isEntry,
-  );
+  const entryChunk = output.output.find((item) => item.type === "chunk" && item.isEntry);
   if (entryChunk == null || entryChunk.type !== "chunk") {
     throw new Error(`worker bundle for ${entry} produced no entry chunk`);
   }
@@ -174,9 +168,7 @@ export function lynxWebCoreRuntimeAssets(showcaseRoot: string): Plugin {
       if (!id.includes("@lynx-js/web-core")) {
         return;
       }
-      const stripped = code.includes("webpack")
-        ? code.replace(WEBPACK_COMMENT_RE, "")
-        : code;
+      const stripped = code.includes("webpack") ? code.replace(WEBPACK_COMMENT_RE, "") : code;
       const next = rewriteToRuntimePaths(stripped);
       if (next === code) {
         return;
