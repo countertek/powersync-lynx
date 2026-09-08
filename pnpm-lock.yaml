@@ -6,6 +6,9 @@ importers:
   .:
     configDependencies: {}
     packageManagerDependencies:
+      '@pnpm/exe':
+        specifier: 12.3.4
+        version: 12.3.4
       pnpm:
         specifier: 12.3.4
         version: 12.3.4
@@ -56,6 +59,11 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  '@pnpm/exe@12.3.4':
+    resolution: {integrity: sha512-Rq7JokWAyYF9IFfn8zofB/q2AgnZlmoMuH5fMHB2+Ta61I9aD7sNm+woZpx6iH+5vb38chdSoYRvOtSqlH72YQ==}
+    engines: {node: '>=18.*'}
+    hasBin: true
+
   pnpm@12.3.4:
     resolution: {integrity: sha512-lhqkH7B32joEpEHZ+OFevAyW2o73ELLrZ7+e58sGEOq9SPH9hfUc/+c4RnhfoPh8VqOocqHYk/hEZ0G1zORUVw==}
     engines: {node: '>=18.*'}
@@ -87,6 +95,17 @@ snapshots:
   '@pnpm/exe.win32-x64@12.3.4':
     optional: true
 
+  '@pnpm/exe@12.3.4':
+    optionalDependencies:
+      '@pnpm/exe.darwin-arm64': 12.3.4
+      '@pnpm/exe.darwin-x64': 12.3.4
+      '@pnpm/exe.linux-arm64': 12.3.4
+      '@pnpm/exe.linux-arm64-musl': 12.3.4
+      '@pnpm/exe.linux-x64': 12.3.4
+      '@pnpm/exe.linux-x64-musl': 12.3.4
+      '@pnpm/exe.win32-arm64': 12.3.4
+      '@pnpm/exe.win32-x64': 12.3.4
+
   pnpm@12.3.4:
     optionalDependencies:
       '@pnpm/exe.darwin-arm64': 12.3.4
@@ -102,7 +121,7 @@ snapshots:
 lockfileVersion: '9.0'
 
 settings:
-  autoInstallPeers: true
+  autoInstallPeers: false
   excludeLinksFromLockfile: false
 
 importers:
@@ -115,14 +134,8 @@ importers:
       '@powersync/shared-internals':
         specifier: ^1.2.0
         version: 1.2.0(@powersync/common@2.2.0)
-      '@powersync/web':
-        specifier: ^2.3.0
-        version: 2.3.0(@powersync/common@2.2.0)(@powersync/shared-internals@1.2.0(@powersync/common@2.2.0))
 
 packages:
-
-  '@journeyapps/wa-sqlite@2.0.3':
-    resolution: {integrity: sha512-LEnzLL/+6z9AAOJQ1nZD5/lo5xE6ZWpkH/M6S3RAGiM047jDqKvGjx8SkGkG1bRcFbbGApf3RWlHGfrmButXcg==}
 
   '@powersync/common@2.2.0':
     resolution: {integrity: sha512-TLQE0De9TAniQIyvfkPiim5MHi/nDely7ZT7iSBHY+xtDt5pwelqwmq0IcWSqZnkTagimGXp7p1z5htWwt0Wbw==}
@@ -132,38 +145,10 @@ packages:
     peerDependencies:
       '@powersync/common': ^2.2.0
 
-  '@powersync/web@2.3.0':
-    resolution: {integrity: sha512-6NjVRB+RmxlL+insiWOZrpolrAChsfL1MpULv2Impk242y5ZSAdk+lUPn5XBYltsHorhKov8PplbDbL1sAYmIQ==}
-    hasBin: true
-    peerDependencies:
-      '@powersync/common': ^2.2.0
-      '@powersync/shared-internals': ^1.2.0
-
-  comlink@4.4.2:
-    resolution: {integrity: sha512-OxGdvBmJuNKSCMO4NTl1L47VRp6xn2wG4F/2hYzB6tiCb709otOxtEYCSvK80PtjODfXXZu8ds+Nw5kVCjqd2g==}
-
-  commander@12.1.0:
-    resolution: {integrity: sha512-Vw8qHK3bZM9y/P10u3Vib8o/DdkvA2OtPtZvD871QKjy74Wj1WSKFILMPRPSdUSx5RFK1arlJzEtA4PkFgnbuA==}
-    engines: {node: '>=18'}
-
 snapshots:
-
-  '@journeyapps/wa-sqlite@2.0.3': {}
 
   '@powersync/common@2.2.0': {}
 
   '@powersync/shared-internals@1.2.0(@powersync/common@2.2.0)':
     dependencies:
       '@powersync/common': 2.2.0
-
-  '@powersync/web@2.3.0(@powersync/common@2.2.0)(@powersync/shared-internals@1.2.0(@powersync/common@2.2.0))':
-    dependencies:
-      '@journeyapps/wa-sqlite': 2.0.3
-      '@powersync/common': 2.2.0
-      '@powersync/shared-internals': 1.2.0(@powersync/common@2.2.0)
-      comlink: 4.4.2
-      commander: 12.1.0
-
-  comlink@4.4.2: {}
-
-  commander@12.1.0: {}
