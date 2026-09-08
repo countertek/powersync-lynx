@@ -92,7 +92,8 @@ shared/build/library_entry.o: lynxtron/library_entry.cc $(NODE_VENDOR)
 shared/build/NativePowerSyncModule.o: shared/nativeModule/NativePowerSyncModule.cc $(NODE_VENDOR)
 	mkdir -p shared/build
 	$(CXX) $(CXXFLAGS) $(SQLITE_FLAGS) $(NAPI_INCLUDE) -DNAPI_VERSION=8 \
-		-DUSE_WEAK_SUFFIX_NAPI -c shared/nativeModule/NativePowerSyncModule.cc -o $@
+		-DUSE_WEAK_SUFFIX_NAPI -Ishared/nativeModule \
+		-c shared/nativeModule/NativePowerSyncModule.cc -o $@
 
 $(NODE): deps $(NODE_VENDOR) shared/build/ps_sql.o shared/build/NativePowerSyncModule.o shared/build/library_entry.o $(SQLITE_DIR)/sqlite3.o
 	mkdir -p dist/macos/arm64
@@ -120,7 +121,7 @@ win-node: deps $(NODE_VENDOR) $(SQLITE_DIR)/sqlite3.c
 		-Ishared -I$(SQLITE_DIR) $(SQLITE_FLAGS) $(NAPI_INCLUDE) -DNAPI_VERSION=8 \
 		-c lynxtron/library_entry.cc -o shared/build/win/library_entry.o
 	$(WIN_ZIG) c++ -target x86_64-windows-gnu -std=c++17 -fPIC -O2 -g0 \
-		-Ishared -I$(SQLITE_DIR) $(SQLITE_FLAGS) $(NAPI_INCLUDE) -DNAPI_VERSION=8 \
+		-Ishared -Ishared/nativeModule -I$(SQLITE_DIR) $(SQLITE_FLAGS) $(NAPI_INCLUDE) -DNAPI_VERSION=8 \
 		-DUSE_WEAK_SUFFIX_NAPI \
 		-c shared/nativeModule/NativePowerSyncModule.cc -o shared/build/win/NativePowerSyncModule.o
 	$(WIN_ZIG) cc -target x86_64-windows-gnu -std=c11 -fPIC -O2 -g0 \
