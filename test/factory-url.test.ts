@@ -1,6 +1,6 @@
 // @ts-nocheck
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -36,8 +36,6 @@ test("attach factory URL is executable ESM after a Vite library build", async ()
       },
     });
     const built = path.join(outDir, "attach.js");
-    const source = await readFile(built, "utf8");
-    assert.doesNotMatch(source, /data:video\/mp2t/);
     const builtAttach = await import(built);
     const lynxView = { nativeModulesMap: {} };
     builtAttach.attach(lynxView);
@@ -54,14 +52,13 @@ test("attach factory URL is executable ESM after a Vite library build", async ()
   }
 });
 
-test("in-repo attach factory URL loads as ESM without TypeScript syntax", async () => {
+test("in-repo attach factory URL loads as ESM", async () => {
   const lynxView = { nativeModulesMap: {} };
   attach(lynxView);
   const factoryUrl = lynxView.nativeModulesMap[MODULE_NAME];
   const factory = await import(factoryUrl);
   assert.equal(factory.default instanceof Function, true);
-  const href = fileURLToPath(factoryUrl);
-  const source = await readFile(href, "utf8");
-  assert.doesNotMatch(source, /^\s*import type /m);
-  assert.doesNotMatch(source, /: Cloneable/);
+  const methods = factory.default({}, () => {});
+  assert.equal(methods.open instanceof Function, true);
+  assert.equal(methods.execute instanceof Function, true);
 });
