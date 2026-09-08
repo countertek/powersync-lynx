@@ -13,6 +13,8 @@ IOS_TEST_BIN := shared/build/ios_module_rpc_test
 NODE := dist/macos/arm64/powersync-lynx.node
 WIN_NODE := dist/windows/x64/powersync-lynx.node
 ZIG ?= $(shell command -v zig 2>/dev/null)
+# package.json packageManager is pnpm@12.3.4. Do not use Homebrew pnpm 11.
+PNPM ?= npx --yes pnpm@12.3.4
 
 .PHONY: deps test test-ios node win-node all
 
@@ -68,8 +70,8 @@ NAPI_INCLUDE := -I$(NODE_VENDOR)/@lynx-js/weak-node-api/headers \
 
 $(NODE_VENDOR):
 	mkdir -p native-vendor
-	cd native-vendor && npm init -y >/dev/null 2>&1 || true
-	cd native-vendor && npm install --no-fund --no-audit \
+	cd native-vendor && $(PNPM) init >/dev/null 2>&1 || true
+	cd native-vendor && $(PNPM) add --ignore-scripts \
 		@lynx-js/weak-node-api@0.1.0 @lynx-js/lynx-library-headers@0.0.21
 
 shared/build/library_entry.o: lynxtron/library_entry.cc $(NODE_VENDOR)
