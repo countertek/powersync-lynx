@@ -13,8 +13,18 @@ IOS_TEST_BIN := shared/build/ios_module_rpc_test
 NODE := dist/macos/arm64/powersync-lynx.node
 WIN_NODE := dist/windows/x64/powersync-lynx.node
 ZIG ?= $(shell command -v zig 2>/dev/null)
-# package.json packageManager is pnpm@12.3.4. Do not use Homebrew pnpm 11.
-PNPM ?= npx --yes pnpm@12.3.4
+# package.json packageManager is pnpm@12.3.4.
+# Prefer pnpm 12 on PATH (Corepack or a local install). Do not use the npm CLI.
+PNPM_PIN := 12.3.4
+PNPM ?= $(shell \
+	bin=$$(command -v pnpm 2>/dev/null); \
+	if [ -n "$$bin" ] && "$$bin" --version 2>/dev/null | grep -q '^12\.'; then \
+		printf '%s\n' "$$bin"; \
+	elif command -v corepack >/dev/null 2>&1; then \
+		printf 'corepack pnpm@%s\n' "$(PNPM_PIN)"; \
+	else \
+		printf '%s\n' "pnpm"; \
+	fi)
 
 .PHONY: deps test test-ios node win-node all
 

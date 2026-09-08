@@ -1,0 +1,31 @@
+import { defineConfig } from "oxfmt";
+
+export default defineConfig({
+  ignorePatterns: [
+    ".agent/**",
+    ".agents/**",
+    ".claude/**",
+    ".codex/**",
+    ".continue/**",
+    ".cursor/**",
+    ".gemini/**",
+    ".omp/**",
+    ".opencode/**",
+    ".pi/**",
+    ".roo/**",
+    ".scratch/**",
+    ".windsurf/**",
+    "android/**",
+    "docs/**",
+    "*.md",
+    "dist/**",
+    "ios/**",
+    "lynxtron/**",
+    "native-vendor/**",
+    "node_modules/**",
+    "scripts/**",
+    "shared/**",
+    "third_party/**",
+    "tools/oxlint/anti-slop/**",
+  ],
+});
