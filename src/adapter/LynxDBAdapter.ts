@@ -126,15 +126,57 @@ export class LynxDBAdapter extends DBAdapter {
     await this.initialized;
     this.abortController.abort();
 
-    const { item: writeConnection, release: returnWrite } = await this.writers().requestOne();
-    const { items: readers, release: returnReaders } = await this.readers().requestAll();
+    const writeSemaphore = this.writeConnection;
+    const readSemaphore = this.readConnections;
+    if (writeSemaphore == null && readSemaphore == null) {
+      throw new Error("LynxDBAdapter write connection is not open");
+    }
 
+    let returnWrite: (() => void) | undefined;
+    let writeItem: LynxConnection | undefined;
+    if (writeSemaphore != null) {
+      const acquired = await writeSemaphore.requestOne();
+      writeItem = acquired.item;
+      returnWrite = acquired.release;
+    }
+
+    let returnReaders: (() => void) | undefined;
+    let readers: LynxConnection[] = [];
+    if (readSemaphore != null) {
+      const acquired = await readSemaphore.requestAll();
+      readers = acquired.items;
+      returnReaders = acquired.release;
+    }
+
+    const toClose = writeItem == null ? readers : [writeItem, ...readers];
+    let keepWrite = false;
+    const remainingReaders: LynxConnection[] = [];
+    let firstError: unknown;
     try {
-      await writeConnection.close();
-      await Promise.all(readers.map((c) => c.close()));
+      const outcomes = await Promise.allSettled(toClose.map((conn) => conn.close()));
+      for (let i = 0; i < outcomes.length; i++) {
+        const outcome = outcomes[i];
+        if (outcome.status !== "rejected") {
+          continue;
+        }
+        if (firstError === undefined) {
+          firstError = outcome.reason;
+        }
+        const conn = toClose[i];
+        if (conn === writeItem) {
+          keepWrite = true;
+        } else {
+          remainingReaders.push(conn);
+        }
+      }
+      if (firstError !== undefined) {
+        throw firstError;
+      }
     } finally {
-      returnWrite();
-      returnReaders();
+      this.writeConnection = keepWrite ? writeSemaphore : null;
+      this.readConnections = remainingReaders.length > 0 ? new Semaphore(remainingReaders) : null;
+      returnWrite?.();
+      returnReaders?.();
     }
   }
 

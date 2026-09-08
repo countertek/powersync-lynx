@@ -25,6 +25,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Matcher;
+import java.util.Locale;
 import java.util.regex.Pattern;
 
 /**
@@ -139,6 +140,7 @@ public class NativePowerSyncModule extends LynxModule {
         ok.putBoolean("ok", true);
         return ok;
       } catch (Throwable t) {
+        dbs.put(dbId, conn);
         return failFrom(t);
       }
     }
@@ -168,7 +170,9 @@ public class NativePowerSyncModule extends LynxModule {
     }
     synchronized (conn.lock) {
       SQLiteStatement stmt = null;
+      boolean startedTx = false;
       try {
+        startedTx = beginImmediate(conn.connection);
         stmt = conn.connection.prepare(sql);
         WritableArray columnNames = columnNames(stmt);
         WritableArray lastRows = Arguments.createArray();
@@ -177,6 +181,9 @@ public class NativePowerSyncModule extends LynxModule {
         int rowCount = params == null ? 0 : params.size();
         for (int r = 0; r < rowCount; r++) {
           if (params.getType(r) != ReadableType.Array) {
+            if (startedTx) {
+              execSql(conn.connection, "ROLLBACK");
+            }
             return fail("params must be an array of parameter rows");
           }
           stmt.reset();
@@ -187,10 +194,19 @@ public class NativePowerSyncModule extends LynxModule {
           insertId = lastInsertRowid(conn.connection);
           rowsAffected += changes(conn.connection);
         }
+        if (startedTx) {
+          execSql(conn.connection, "COMMIT");
+        }
         return successExecute(insertId, rowsAffected, columnNames, lastRows);
       } catch (BindException e) {
+        if (startedTx) {
+          execSqlQuiet(conn.connection, "ROLLBACK");
+        }
         return fail(e.getMessage());
       } catch (Throwable t) {
+        if (startedTx) {
+          execSqlQuiet(conn.connection, "ROLLBACK");
+        }
         return failFrom(t);
       } finally {
         if (stmt != null) {
@@ -310,9 +326,10 @@ public class NativePowerSyncModule extends LynxModule {
     if (type == ReadableType.ByteArray || type == ReadableType.ByteBuffer) {
       return params.getByteArray(i);
     }
-    if (type == ReadableType.Boolean
-        || type == ReadableType.Array
-        || type == ReadableType.Map) {
+    if (type == ReadableType.Map) {
+      return readTaggedBind(params.getMap(i));
+    }
+    if (type == ReadableType.Boolean || type == ReadableType.Array) {
       throw new BindException("unsupported bind value");
     }
     try {
@@ -385,6 +402,57 @@ public class NativePowerSyncModule extends LynxModule {
 
   private static String messageOf(Throwable t) {
     return t.getMessage() != null ? t.getMessage() : t.getClass().getName();
+  }
+
+
+  private static Object readTaggedBind(ReadableMap map) {
+    if (map != null
+        && map.hasKey("__psBig")
+        && !map.isNull("__psBig")
+        && map.getBoolean("__psBig")
+        && map.hasKey("v")
+        && !map.isNull("v")) {
+      String encoded = map.getString("v");
+      try {
+        return Long.valueOf(encoded);
+      } catch (NumberFormatException e) {
+        throw new BindException("invalid tagged bigint");
+      }
+    }
+    throw new BindException("unsupported bind value");
+  }
+
+  private static boolean beginImmediate(SQLiteConnection connection) throws Exception {
+    try {
+      execSql(connection, "BEGIN IMMEDIATE");
+      return true;
+    } catch (Throwable t) {
+      String message = messageOf(t);
+      if (message != null && message.toLowerCase(Locale.US).contains("within a transaction")) {
+        return false;
+      }
+      if (t instanceof Exception) {
+        throw (Exception) t;
+      }
+      throw new Exception(message, t);
+    }
+  }
+
+  private static void execSql(SQLiteConnection connection, String sql) throws Exception {
+    SQLiteStatement stmt = connection.prepare(sql);
+    try {
+      stmt.step();
+    } finally {
+      stmt.close();
+    }
+  }
+
+  private static void execSqlQuiet(SQLiteConnection connection, String sql) {
+    try {
+      execSql(connection, sql);
+    } catch (Throwable ignored) {
+      // ROLLBACK after a failed batch; ignore if no transaction remains.
+    }
   }
 
   private static void invoke(Callback callback, WritableMap envelope) {

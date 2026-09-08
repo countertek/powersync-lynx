@@ -101,6 +101,9 @@ int bind_one(sqlite3_stmt* stmt, int index, const BindValue& value) {
                                static_cast<int>(value.text.size()),
                                SQLITE_TRANSIENT);
     case CellKind::kBlob:
+      if (value.blob.empty()) {
+        return sqlite3_bind_zeroblob(stmt, index, 0);
+      }
       return sqlite3_bind_blob(stmt, index, value.blob.data(),
                                static_cast<int>(value.blob.size()),
                                SQLITE_TRANSIENT);
@@ -162,9 +165,14 @@ class ThreadPool {
     }
   }
 
-  ~ThreadPool() {
+  ~ThreadPool() { shutdown(); }
+
+  void shutdown() {
     {
       std::lock_guard<std::mutex> lock(mu_);
+      if (stop_ && threads_.empty()) {
+        return;
+      }
       stop_ = true;
     }
     cv_.notify_all();
@@ -173,6 +181,7 @@ class ThreadPool {
         t.join();
       }
     }
+    threads_.clear();
   }
 
   void post(std::function<void()> job) {
@@ -228,10 +237,11 @@ struct Engine::Impl {
         pool(std::max(4u, std::thread::hardware_concurrency())) {}
 
   ~Impl() {
+    pool.shutdown();
     std::lock_guard<std::mutex> lock(map_mu);
     for (auto& entry : dbs) {
       if (entry.second && entry.second->db) {
-        sqlite3_close(entry.second->db);
+        sqlite3_close_v2(entry.second->db);
         entry.second->db = nullptr;
       }
     }
@@ -382,16 +392,20 @@ struct Engine::Impl {
         return fail("unknown dbId");
       }
       conn = it->second;
-      dbs.erase(it);
     }
-    std::lock_guard<std::mutex> db_lock(conn->mu);
-    if (conn->db != nullptr) {
-      const int rc = sqlite3_close(conn->db);
-      if (rc != SQLITE_OK) {
-        Envelope env = sqlite_fail(conn->db, "sqlite3_close failed");
-        return env;
+    {
+      std::lock_guard<std::mutex> db_lock(conn->mu);
+      if (conn->db != nullptr) {
+        sqlite3_close_v2(conn->db);
+        conn->db = nullptr;
       }
-      conn->db = nullptr;
+    }
+    {
+      std::lock_guard<std::mutex> lock(map_mu);
+      auto it = dbs.find(db_id);
+      if (it != dbs.end() && it->second == conn) {
+        dbs.erase(it);
+      }
     }
     Envelope env;
     env.ok = true;
@@ -480,11 +494,29 @@ struct Engine::Impl {
       return fail("database is closed");
     }
 
+    sqlite3* db = conn->db;
+    const bool started_tx = sqlite3_get_autocommit(db) != 0;
+    if (started_tx) {
+      char* begin_err = nullptr;
+      const int begin_rc =
+          sqlite3_exec(db, "BEGIN IMMEDIATE", nullptr, nullptr, &begin_err);
+      if (begin_err != nullptr) {
+        sqlite3_free(begin_err);
+      }
+      if (begin_rc != SQLITE_OK) {
+        return sqlite_fail(db, "BEGIN IMMEDIATE failed");
+      }
+    }
+
     sqlite3_stmt* stmt = nullptr;
-    int rc = sqlite3_prepare_v2(conn->db, sql.c_str(),
-                                static_cast<int>(sql.size()), &stmt, nullptr);
+    int rc = sqlite3_prepare_v2(db, sql.c_str(), static_cast<int>(sql.size()),
+                                &stmt, nullptr);
     if (rc != SQLITE_OK) {
-      return sqlite_fail(conn->db, "sqlite3_prepare_v2 failed");
+      Envelope fail_env = sqlite_fail(db, "sqlite3_prepare_v2 failed");
+      if (started_tx) {
+        sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
+      }
+      return fail_env;
     }
 
     Envelope env;
@@ -504,8 +536,12 @@ struct Engine::Impl {
       for (std::size_t i = 0; i < params.size(); ++i) {
         rc = bind_one(stmt, static_cast<int>(i + 1), params[i]);
         if (rc != SQLITE_OK) {
+          Envelope fail_env = sqlite_fail(db, "sqlite3_bind failed");
           sqlite3_finalize(stmt);
-          return sqlite_fail(conn->db, "sqlite3_bind failed");
+          if (started_tx) {
+            sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
+          }
+          return fail_env;
         }
       }
       env.raw_rows.clear();
@@ -518,14 +554,30 @@ struct Engine::Impl {
         env.raw_rows.push_back(std::move(row));
       }
       if (rc != SQLITE_DONE) {
-        Envelope fail_env = sqlite_fail(conn->db, "sqlite3_step failed");
+        Envelope fail_env = sqlite_fail(db, "sqlite3_step failed");
         sqlite3_finalize(stmt);
+        if (started_tx) {
+          sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
+        }
         return fail_env;
       }
-      insert_id = sqlite3_last_insert_rowid(conn->db);
-      rows_affected += sqlite3_changes(conn->db);
+      insert_id = sqlite3_last_insert_rowid(db);
+      rows_affected += sqlite3_changes(db);
     }
     sqlite3_finalize(stmt);
+    if (started_tx) {
+      char* commit_err = nullptr;
+      const int commit_rc =
+          sqlite3_exec(db, "COMMIT", nullptr, nullptr, &commit_err);
+      if (commit_err != nullptr) {
+        sqlite3_free(commit_err);
+      }
+      if (commit_rc != SQLITE_OK) {
+        Envelope fail_env = sqlite_fail(db, "COMMIT failed");
+        sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
+        return fail_env;
+      }
+    }
     env.insert_id = insert_id;
     env.rows_affected = rows_affected;
     return env;

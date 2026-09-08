@@ -87,6 +87,9 @@ async function ensureCoreAsset(name, destDir) {
 
 async function main() {
   await ensureSqlite();
+  if (process.argv.includes("--sqlite")) {
+    return;
+  }
   await ensureCoreAsset(
     'libpowersync_aarch64.macos.dylib',
     path.join(ROOT, 'dist', 'macos', 'arm64'),

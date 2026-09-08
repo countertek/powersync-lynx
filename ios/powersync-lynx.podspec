@@ -1,8 +1,8 @@
 Pod::Spec.new do |s|
   s.name         = 'powersync-lynx'
-  s.version      = '0.0.1'
+  s.version      = '0.0.0'
   s.summary      = 'Lynx NativePowerSyncModule'
-  s.homepage     = 'https://github.com/powersync-ja'
+  s.homepage     = 'https://github.com/countertek/powersync-for-lynxjs'
   s.license      = { :type => 'Apache-2.0' }
   s.author       = 'PowerSync'
   s.platform     = :ios, '15.0'

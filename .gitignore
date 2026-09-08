@@ -18,3 +18,6 @@ android/host/local.properties
 /tmp/
 # Extra-arch core dylib with no matching powersync-lynx.node (not an Autolink artifact).
 dist/macos/x64/
+
+# Generated lynx-bg factory ESM (scripts/bundle-web-host-factory.mjs).
+dist/web-host/

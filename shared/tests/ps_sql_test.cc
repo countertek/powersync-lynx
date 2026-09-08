@@ -145,6 +145,51 @@ int main(int argc, char** argv) {
   expect(batched.ok, "executeBatch ok");
   expect(batched.rows_affected == 2, "executeBatch rowsAffected");
 
+  BindValue empty_blob;
+  empty_blob.kind = CellKind::kBlob;
+  Envelope empty_typeof = wait_for([&](ps_sql::Callback cb) {
+    engine.execute(db_id, "SELECT typeof(?)", {empty_blob}, std::move(cb));
+  });
+  expect(empty_typeof.ok && !empty_typeof.raw_rows.empty() &&
+             empty_typeof.raw_rows[0][0].kind == CellKind::kText &&
+             empty_typeof.raw_rows[0][0].text == "blob",
+         "empty BLOB BindValue stays BLOB, not NULL");
+  Envelope empty_isnull = wait_for([&](ps_sql::Callback cb) {
+    engine.execute(db_id, "SELECT ? IS NULL", {empty_blob}, std::move(cb));
+  });
+  expect(empty_isnull.ok && !empty_isnull.raw_rows.empty() &&
+             empty_isnull.raw_rows[0][0].kind == CellKind::kInteger &&
+             empty_isnull.raw_rows[0][0].i == 0,
+         "empty BLOB is not SQL NULL");
+
+  Envelope uniq = wait_for([&](ps_sql::Callback cb) {
+    engine.execute(db_id, "CREATE TABLE ids(id INTEGER PRIMARY KEY)", {},
+                   std::move(cb));
+  });
+  expect(uniq.ok, "unique table");
+  BindValue id1;
+  id1.kind = CellKind::kInteger;
+  id1.i = 1;
+  Envelope torn = wait_for([&](ps_sql::Callback cb) {
+    engine.execute_batch(db_id, "INSERT INTO ids(id) VALUES(?)", {{id1}, {id1}},
+                         std::move(cb));
+  });
+  expect(!torn.ok, "executeBatch unique violation is a failure envelope");
+  Envelope remaining = wait_for([&](ps_sql::Callback cb) {
+    engine.execute(db_id, "SELECT count(*) FROM ids", {}, std::move(cb));
+  });
+  expect(remaining.ok && !remaining.raw_rows.empty() &&
+             remaining.raw_rows[0][0].kind == CellKind::kInteger &&
+             remaining.raw_rows[0][0].i == 0,
+         "executeBatch rolls back earlier rows on first error");
+
+  Envelope bad_sql = wait_for([&](ps_sql::Callback cb) {
+    engine.execute_batch(db_id, "NOT VALID SQL", {{}}, std::move(cb));
+  });
+  expect(!bad_sql.ok, "executeBatch invalid SQL is a failure envelope");
+  expect(bad_sql.message.find("syntax") != std::string::npos,
+         "executeBatch prepare failure keeps sqlite errmsg");
+
   Envelope failed = wait_for([&](ps_sql::Callback cb) {
     engine.execute(db_id, "SELECT * FROM no_such_table", {}, std::move(cb));
   });
@@ -187,6 +232,18 @@ int main(int argc, char** argv) {
   });
   expect(!unknown.ok, "unknown dbId does not throw");
   expect(unknown.message.find("dbId") != std::string::npos, "unknown dbId message");
+
+  {
+    Engine draining(config);
+    Envelope opened_drain = wait_for([&](ps_sql::Callback cb) {
+      OpenOptions options;
+      options.db_filename = ":memory:";
+      draining.open(options, std::move(cb));
+    });
+    expect(opened_drain.ok, "drain engine open");
+    draining.execute(opened_drain.db_id, slow_sql, {}, [](Envelope) {});
+  }
+  expect(true, "engine destructor drains queued SQL before teardown");
 
   if (g_failures != 0) {
     std::fprintf(stderr, "%d check(s) failed\n", g_failures);

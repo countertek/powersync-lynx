@@ -1,0 +1,10 @@
+android/host
+shared/build
+shared/tests
+ios/tests
+dist/macos/x64
+native-vendor
+node_modules
+.scratch
+**/*.o
+**/*.a

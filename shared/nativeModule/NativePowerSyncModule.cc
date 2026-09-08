@@ -226,8 +226,30 @@ std::optional<BindValue> ParseBind(const Napi::Value& value, std::string* error)
     Napi::ArrayBuffer buffer = value.As<Napi::ArrayBuffer>();
     bind.kind = CellKind::kBlob;
     const auto* data = static_cast<const std::uint8_t*>(buffer.Data());
-    bind.blob.assign(data, data + buffer.ByteLength());
+    const std::size_t nbytes = buffer.ByteLength();
+    if (data != nullptr && nbytes > 0) {
+      bind.blob.assign(data, data + nbytes);
+    }
     return bind;
+  }
+  if (value.IsObject()) {
+    Napi::Object object = value.As<Napi::Object>();
+    if (object.Get("__psBig").ToBoolean()) {
+      Napi::Value encoded = object.Get("v");
+      if (!encoded.IsString()) {
+        *error = "invalid tagged bigint";
+        return std::nullopt;
+      }
+      const std::string digits = encoded.As<Napi::String>().Utf8Value();
+      try {
+        bind.kind = CellKind::kInteger;
+        bind.i = std::stoll(digits);
+        return bind;
+      } catch (...) {
+        *error = "invalid tagged bigint";
+        return std::nullopt;
+      }
+    }
   }
   *error = "unsupported bind value";
   return std::nullopt;

@@ -5,11 +5,22 @@
   "files": [
     "src",
     "lynxtron",
-    "android",
-    "ios",
-    "shared",
+    "android/src",
+    "android/build.gradle",
+    "android/gradle.properties",
+    "android/consumer-rules.pro",
+    "ios/src",
+    "ios/powersync-lynx.podspec",
+    "shared/ps_sql.cc",
+    "shared/ps_sql.h",
+    "shared/nativeModule",
+    "shared/win_host_stubs.c",
+    "shared/CMakeLists.txt",
     "dist",
-    "lynx.lib.json"
+    "lynx.lib.json",
+    "scripts",
+    "third_party/sqlite/sqlite3.c",
+    "third_party/sqlite/sqlite3.h"
   ],
   "type": "module",
   "main": "./src/index.ts",
@@ -25,7 +36,9 @@
     "lint": "oxlint .",
     "fmt": "oxfmt .",
     "test": "node --test test/*.test.ts",
-    "prepack": "tsc -p tsconfig.json"
+    "prepack": "pnpm typecheck && node scripts/bundle-web-host-factory.mjs && node scripts/fetch-native-deps.mjs --sqlite",
+    "bundle-factory": "node scripts/bundle-web-host-factory.mjs",
+    "prepare": "node scripts/bundle-web-host-factory.mjs"
   },
   "dependencies": {
     "@powersync/common": "^2.2.0",
@@ -34,9 +47,11 @@
   "devDependencies": {
     "@oxlint/plugins": "1.78.0",
     "@types/node": "26.4.1",
+    "esbuild": "0.27.2",
     "oxfmt": "0.63.0",
     "oxlint": "1.78.0",
-    "typescript": "7.0.2"
+    "typescript": "7.0.2",
+    "vite": "8.2.2"
   },
   "peerDependencies": {
     "@powersync/common": "^2.2.0",

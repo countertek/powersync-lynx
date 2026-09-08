@@ -81,13 +81,23 @@ export function decodeCloneable(value: Cloneable): Cloneable {
     const source = value as CloneableObject;
     const taggedAb = source[AB_TAG];
     const u8 = source.u8;
-    if (taggedAb === true && Array.isArray(u8) && isNumberArray(u8)) {
+    if (taggedAb === true) {
+      if (!Array.isArray(u8) || !isNumberArray(u8)) {
+        throw new Error("invalid tagged ArrayBuffer");
+      }
       return copyToArrayBuffer(Uint8Array.from(u8));
     }
     const taggedBig = source[BIG_TAG];
     const encoded = source.v;
-    if (taggedBig === true && hasPrimitiveConstructor(encoded, String)) {
-      return BigInt(encoded);
+    if (taggedBig === true) {
+      if (!hasPrimitiveConstructor(encoded, String) || encoded.length === 0) {
+        throw new Error("invalid tagged bigint");
+      }
+      try {
+        return BigInt(encoded);
+      } catch {
+        throw new Error("invalid tagged bigint");
+      }
     }
     const mutable: { [key: string]: Cloneable } = {};
     for (const key of Object.keys(source)) {
