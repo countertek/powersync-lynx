@@ -132,6 +132,8 @@ export class LynxDBAdapter extends DBAdapter {
     try {
       await writeConnection.close();
       await Promise.all(readers.map((c) => c.close()));
+      this.writeConnection = null;
+      this.readConnections = null;
     } finally {
       returnWrite();
       returnReaders();

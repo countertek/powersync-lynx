@@ -95,9 +95,16 @@ interface FileEntry {
   pending: Promise<void> | null;
 }
 
+interface HeldLease {
+  tx: WASQLiteTx;
+  release(): Promise<void>;
+}
+
 interface ConnectionEntry {
   fileKey: string;
   readOnly: boolean;
+  lease: HeldLease | null;
+  tail: Promise<void>;
 }
 
 const files = new Map<string, FileEntry>();
@@ -366,7 +373,12 @@ async function dispatchOpen(
   const key = fileKey(dbFilename, dbLocation);
   await openFile(key, dbFilename, dbLocation, attachOptions, loadWeb);
   const dbId = `ps-${++nextDbId}`;
-  connections.set(dbId, { fileKey: key, readOnly: request.readOnly === true });
+  connections.set(dbId, {
+    fileKey: key,
+    readOnly: request.readOnly === true,
+    lease: null,
+    tail: Promise.resolve(),
+  });
   return { ok: true, dbId };
 }
 
@@ -384,28 +396,31 @@ async function dispatchClose(data: Cloneable): Promise<NativeEnvelope> {
   if (conn == null) {
     return { ok: false, message: `unknown dbId: ${dbId}` };
   }
-  connections.delete(dbId);
-  const entry = files.get(conn.fileKey);
-  if (entry) {
-    entry.refCount -= 1;
-    if (entry.refCount <= 0) {
-      const adapter = entry.adapter;
-      entry.adapter = null;
-      const closing = Promise.resolve(adapter?.close?.()).then(() => undefined);
-      entry.pending = closing;
-      try {
-        await closing;
-      } finally {
-        if (entry.pending === closing) {
-          entry.pending = null;
-        }
-        if (files.get(conn.fileKey) === entry && entry.refCount <= 0 && entry.adapter == null) {
-          files.delete(conn.fileKey);
+  return enqueueConnection(conn, async () => {
+    await abortHeldLease(conn);
+    connections.delete(dbId);
+    const entry = files.get(conn.fileKey);
+    if (entry) {
+      entry.refCount -= 1;
+      if (entry.refCount <= 0) {
+        const adapter = entry.adapter;
+        entry.adapter = null;
+        const closing = Promise.resolve(adapter?.close?.()).then(() => undefined);
+        entry.pending = closing;
+        try {
+          await closing;
+        } finally {
+          if (entry.pending === closing) {
+            entry.pending = null;
+          }
+          if (files.get(conn.fileKey) === entry && entry.refCount <= 0 && entry.adapter == null) {
+            files.delete(conn.fileKey);
+          }
         }
       }
     }
-  }
-  return { ok: true };
+    return { ok: true };
+  });
 }
 
 async function withLock<T>(
@@ -427,6 +442,138 @@ function asExecuteRequest(data: Cloneable): ExecuteRequest {
   return {};
 }
 
+function transactionControl(sql: string): "begin" | "commit" | "rollback" | null {
+  const trimmed = sql.trim();
+  const ended = trimmed.endsWith(";") ? trimmed.slice(0, -1).trim() : trimmed;
+  const upper = ended.toUpperCase();
+  if (upper === "BEGIN" || upper.startsWith("BEGIN ")) {
+    return "begin";
+  }
+  if (
+    upper === "COMMIT" ||
+    upper === "END" ||
+    upper.startsWith("COMMIT ") ||
+    upper.startsWith("END ")
+  ) {
+    return "commit";
+  }
+  if (upper === "ROLLBACK" || upper.startsWith("ROLLBACK ")) {
+    if (upper.startsWith("ROLLBACK TO")) {
+      return null;
+    }
+    return "rollback";
+  }
+  return null;
+}
+
+async function enqueueConnection<T>(conn: ConnectionEntry, run: () => Promise<T>): Promise<T> {
+  const previous = conn.tail;
+  let releaseQueue = (): void => {};
+  conn.tail = new Promise<void>((resolve) => {
+    releaseQueue = resolve;
+  });
+  await previous;
+  try {
+    return await run();
+  } finally {
+    releaseQueue();
+  }
+}
+
+async function acquireHeldLease(adapter: WASQLiteAdapter, readOnly: boolean): Promise<HeldLease> {
+  let releaseLock = (): void => {};
+  const held = new Promise<void>((resolve) => {
+    releaseLock = resolve;
+  });
+  let settleTx: ((tx: WASQLiteTx) => void) | undefined;
+  let failTx: ((reason: Error) => void) | undefined;
+  const ready = new Promise<WASQLiteTx>((resolve, reject) => {
+    settleTx = resolve;
+    failTx = reject;
+  });
+  const finished = withLock(adapter, readOnly, async (tx) => {
+    if (settleTx) {
+      settleTx(tx);
+    }
+    await held;
+  });
+  finished.catch((reason: Error) => {
+    if (failTx) {
+      failTx(reason);
+    }
+  });
+  const tx = await ready;
+  return {
+    tx,
+    async release() {
+      releaseLock();
+      await finished;
+    },
+  };
+}
+
+async function abortHeldLease(conn: ConnectionEntry): Promise<void> {
+  const lease = conn.lease;
+  if (lease == null) {
+    return;
+  }
+  conn.lease = null;
+  try {
+    await lease.tx.executeRaw("ROLLBACK", []);
+  } catch {
+    // The statement had no transaction, or lock recovery already rolled it back.
+  }
+  await lease.release();
+}
+
+async function executeOnHeldOrLock(
+  adapter: WASQLiteAdapter,
+  conn: ConnectionEntry,
+  sql: string,
+  params: WASQLiteBindValue,
+): Promise<NativeOkEnvelope> {
+  const control = transactionControl(sql);
+  if (control === "begin") {
+    const started = conn.lease == null;
+    if (started) {
+      conn.lease = await acquireHeldLease(adapter, conn.readOnly);
+    }
+    const lease = conn.lease;
+    if (lease == null) {
+      throw new Error("failed to acquire WASQLite lease");
+    }
+    try {
+      const result = await lease.tx.executeRaw(sql, params);
+      return toNativeEnvelope(result);
+    } catch (failure) {
+      if (started) {
+        await abortHeldLease(conn);
+      }
+      throw failure;
+    }
+  }
+  if (control === "commit" || control === "rollback") {
+    const lease = conn.lease;
+    if (lease == null) {
+      const result = await withLock(adapter, conn.readOnly, (tx) => tx.executeRaw(sql, params));
+      return toNativeEnvelope(result);
+    }
+    try {
+      const result = await lease.tx.executeRaw(sql, params);
+      return toNativeEnvelope(result);
+    } finally {
+      conn.lease = null;
+      await lease.release();
+    }
+  }
+  if (conn.lease != null) {
+    const result = await conn.lease.tx.executeRaw(sql, params);
+    return toNativeEnvelope(result);
+  }
+  const result = await withLock(adapter, conn.readOnly, (tx) => tx.executeRaw(sql, params));
+  return toNativeEnvelope(result);
+}
+
 async function dispatchExecute(data: Cloneable): Promise<NativeEnvelope> {
   const request = asExecuteRequest(data);
   const dbId = request.dbId;
@@ -445,9 +592,9 @@ async function dispatchExecute(data: Cloneable): Promise<NativeEnvelope> {
   if (!hasPrimitiveConstructor(sql, String)) {
     return { ok: false, message: "execute requires sql" };
   }
+  const adapter = entry.adapter;
   const params = toSqliteParams(request.params ?? []);
-  const result = await withLock(entry.adapter, conn.readOnly, (tx) => tx.executeRaw(sql, params));
-  return toNativeEnvelope(result);
+  return enqueueConnection(conn, () => executeOnHeldOrLock(adapter, conn, sql, params));
 }
 
 async function dispatchExecuteBatch(data: Cloneable): Promise<NativeEnvelope> {
@@ -468,11 +615,35 @@ async function dispatchExecuteBatch(data: Cloneable): Promise<NativeEnvelope> {
   if (!hasPrimitiveConstructor(sql, String)) {
     return { ok: false, message: "executeBatch requires sql" };
   }
+  const adapter = entry.adapter;
   const params = toSqliteParams(request.params ?? []);
-  const result = await withLock(entry.adapter, conn.readOnly, (tx) =>
-    conn.readOnly ? tx.executeRaw(sql, params) : tx.executeBatch(sql, params),
-  );
-  return toNativeEnvelope(result);
+  return enqueueConnection(conn, async () => {
+    if (conn.lease != null) {
+      const result = conn.readOnly
+        ? await conn.lease.tx.executeRaw(sql, params)
+        : await conn.lease.tx.executeBatch(sql, params);
+      return toNativeEnvelope(result);
+    }
+    const result = await withLock(adapter, conn.readOnly, async (tx) => {
+      if (conn.readOnly) {
+        return tx.executeRaw(sql, params);
+      }
+      await tx.executeRaw("BEGIN IMMEDIATE", []);
+      try {
+        const batchResult = await tx.executeBatch(sql, params);
+        await tx.executeRaw("COMMIT", []);
+        return batchResult;
+      } catch (failure) {
+        try {
+          await tx.executeRaw("ROLLBACK", []);
+        } catch {
+          // Batch already failed; keep the original error.
+        }
+        throw failure;
+      }
+    });
+    return toNativeEnvelope(result);
+  });
 }
 
 function envelopeToCloneable(result: NativeEnvelope): Cloneable {
@@ -501,8 +672,8 @@ export async function handleNativeCall(
   attachOptions: AttachOptions | undefined,
   loadWeb: LoadWeb,
 ): Promise<Cloneable> {
-  const data = decodeCloneable(encodedData);
   try {
+    const data = decodeCloneable(encodedData);
     let result: NativeEnvelope;
     switch (name) {
       case "open":

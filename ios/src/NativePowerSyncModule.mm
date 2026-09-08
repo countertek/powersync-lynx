@@ -2,7 +2,9 @@
 
 #include "ps_sql.h"
 
+#include <cerrno>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <string>
@@ -28,21 +30,44 @@ Engine& SharedEngine() {
   return *engine;
 }
 
+NSString* NSStringFromUtf8(const std::string& text) {
+  if (text.empty()) {
+    return @"";
+  }
+  NSString* result = [[NSString alloc] initWithBytes:text.data()
+                                              length:text.size()
+                                            encoding:NSUTF8StringEncoding];
+  return result != nil ? result : @"";
+}
+
+std::string Utf8FromNSString(NSString* value) {
+  if (value == nil) {
+    return {};
+  }
+  NSData* data = [value dataUsingEncoding:NSUTF8StringEncoding];
+  if (data == nil || data.length == 0) {
+    return {};
+  }
+  const auto* bytes = static_cast<const char*>(data.bytes);
+  return std::string(bytes, bytes + data.length);
+}
+
 id CellToId(const Cell& cell) {
   switch (cell.kind) {
     case CellKind::kNull:
       return [NSNull null];
     case CellKind::kInteger:
-      // Lynx iOS BigInt mapping: INTEGER outside MAX_SAFE_INTEGER is a
-      // decimal NSString. Do not box those cells as NSNumber.
       if (cell.integer_as_bigint) {
-        return [NSString stringWithFormat:@"%lld", (long long)cell.i];
+        return @{
+          @"__psBig" : @YES,
+          @"v" : [NSString stringWithFormat:@"%lld", (long long)cell.i]
+        };
       }
       return @(cell.i);
     case CellKind::kFloat:
       return @(cell.f);
     case CellKind::kText:
-      return [NSString stringWithUTF8String:cell.text.c_str()];
+      return NSStringFromUtf8(cell.text);
     case CellKind::kBlob:
       return [NSData dataWithBytes:cell.blob.data() length:cell.blob.size()];
   }
@@ -53,20 +78,20 @@ NSDictionary* EnvelopeToDict(const Envelope& envelope) {
   NSMutableDictionary* dict = [NSMutableDictionary dictionary];
   dict[@"ok"] = @(envelope.ok);
   if (!envelope.ok) {
-    dict[@"message"] = [NSString stringWithUTF8String:envelope.message.c_str()];
+    dict[@"message"] = NSStringFromUtf8(envelope.message);
     if (envelope.code.has_value()) {
       dict[@"code"] = @(*envelope.code);
     }
     return dict;
   }
   if (!envelope.db_id.empty()) {
-    dict[@"dbId"] = [NSString stringWithUTF8String:envelope.db_id.c_str()];
+    dict[@"dbId"] = NSStringFromUtf8(envelope.db_id);
   }
   dict[@"insertId"] = @(envelope.insert_id);
   dict[@"rowsAffected"] = @(envelope.rows_affected);
   NSMutableArray* names = [NSMutableArray arrayWithCapacity:envelope.column_names.size()];
   for (const auto& name : envelope.column_names) {
-    [names addObject:[NSString stringWithUTF8String:name.c_str()]];
+    [names addObject:NSStringFromUtf8(name)];
   }
   dict[@"columnNames"] = names;
   NSMutableArray* rows = [NSMutableArray arrayWithCapacity:envelope.raw_rows.size()];
@@ -79,6 +104,34 @@ NSDictionary* EnvelopeToDict(const Envelope& envelope) {
   }
   dict[@"rawRows"] = rows;
   return dict;
+}
+
+bool ParseTaggedBigInt(NSDictionary* dict, BindValue* out, NSString** error) {
+  id tag = dict[@"__psBig"];
+  if (![tag respondsToSelector:@selector(boolValue)] || ![tag boolValue]) {
+    *error = @"unsupported bind value";
+    return false;
+  }
+  id encoded = dict[@"v"];
+  if (![encoded isKindOfClass:[NSString class]]) {
+    *error = @"invalid tagged bigint";
+    return false;
+  }
+  const std::string digits = Utf8FromNSString((NSString*)encoded);
+  if (digits.empty()) {
+    *error = @"invalid tagged bigint";
+    return false;
+  }
+  errno = 0;
+  char* end = nullptr;
+  const long long parsed = std::strtoll(digits.c_str(), &end, 10);
+  if (end == digits.c_str() || *end != '\0' || errno == ERANGE) {
+    *error = @"invalid tagged bigint";
+    return false;
+  }
+  out->kind = CellKind::kInteger;
+  out->i = parsed;
+  return true;
 }
 
 bool ParseBind(id value, BindValue* out, NSString** error) {
@@ -104,19 +157,25 @@ bool ParseBind(id value, BindValue* out, NSString** error) {
     }
     return true;
   }
+  if ([value isKindOfClass:[NSDictionary class]]) {
+    return ParseTaggedBigInt((NSDictionary*)value, out, error);
+  }
   if ([value isKindOfClass:[NSString class]]) {
     // Lynx maps JS string and JS BigInt to NSString. Bind NSString as TEXT so
     // spec string BindValue (snowflake/id) matches Android ReadableType.String
-    // and N-API IsString. Do not treat canonical decimals as INTEGER.
+    // and N-API IsString. Do not treat canonical decimals as INTEGER. Bigint
+    // identity uses the tagged { __psBig, v } dictionary instead.
     out->kind = CellKind::kText;
-    out->text = [((NSString*)value) UTF8String];
+    out->text = Utf8FromNSString((NSString*)value);
     return true;
   }
   if ([value isKindOfClass:[NSData class]]) {
     NSData* data = (NSData*)value;
     out->kind = CellKind::kBlob;
     const auto* bytes = static_cast<const std::uint8_t*>(data.bytes);
-    out->blob.assign(bytes, bytes + data.length);
+    if (bytes != nullptr && data.length > 0) {
+      out->blob.assign(bytes, bytes + data.length);
+    }
     return true;
   }
   *error = @"unsupported bind value";
@@ -142,8 +201,12 @@ void Finish(void (^callback)(id), Envelope envelope) {
   if (callback == nil) {
     return;
   }
-  NSDictionary* dict = EnvelopeToDict(envelope);
-  callback(dict);
+  // Lynx NativeModule Invocation: "any thread may invoke and execute
+  // callback-related logic." Do not hop to the main queue.
+  @autoreleasepool {
+    NSDictionary* dict = EnvelopeToDict(envelope);
+    callback(dict);
+  }
 }
 
 }  // namespace
@@ -172,7 +235,7 @@ void Finish(void (^callback)(id), Envelope envelope) {
     Finish(cb, ps_sql::fail("dbFilename is required"));
     return;
   }
-  open_options.db_filename = [filename UTF8String];
+  open_options.db_filename = Utf8FromNSString((NSString*)filename);
   id location = options[@"dbLocation"];
   if ([location isKindOfClass:[NSString class]]) {
     BOOL isDir = NO;
@@ -182,12 +245,12 @@ void Finish(void (^callback)(id), Envelope envelope) {
       Finish(cb, ps_sql::fail("dbLocation does not exist"));
       return;
     }
-    open_options.db_location = [location UTF8String];
+    open_options.db_location = Utf8FromNSString((NSString*)location);
   } else {
     NSArray* paths = NSSearchPathForDirectoriesInDomains(
         NSDocumentDirectory, NSUserDomainMask, YES);
     if (paths.count > 0) {
-      open_options.db_location = [paths[0] UTF8String];
+      open_options.db_location = Utf8FromNSString(paths[0]);
     }
   }
   id readOnly = options[@"readOnly"];
@@ -204,7 +267,7 @@ void Finish(void (^callback)(id), Envelope envelope) {
     Finish(cb, ps_sql::fail("close expects a dbId string"));
     return;
   }
-  SharedEngine().close([dbId UTF8String],
+  SharedEngine().close(Utf8FromNSString(dbId),
                        [cb](Envelope env) { Finish(cb, std::move(env)); });
 }
 
@@ -220,10 +283,10 @@ void Finish(void (^callback)(id), Envelope envelope) {
   std::vector<BindValue> binds;
   NSString* error = nil;
   if (!ParseParams(params, &binds, &error)) {
-    Finish(cb, ps_sql::fail([error UTF8String]));
+    Finish(cb, ps_sql::fail(Utf8FromNSString(error)));
     return;
   }
-  SharedEngine().execute([dbId UTF8String], [sql UTF8String], std::move(binds),
+  SharedEngine().execute(Utf8FromNSString(dbId), Utf8FromNSString(sql), std::move(binds),
                          [cb](Envelope env) { Finish(cb, std::move(env)); });
 }
 
@@ -246,14 +309,14 @@ void Finish(void (^callback)(id), Envelope envelope) {
       }
       std::vector<BindValue> binds;
       if (!ParseParams((NSArray*)row, &binds, &error)) {
-        Finish(cb, ps_sql::fail([error UTF8String]));
+        Finish(cb, ps_sql::fail(Utf8FromNSString(error)));
         return;
       }
       rows.push_back(std::move(binds));
     }
   }
   SharedEngine().execute_batch(
-      [dbId UTF8String], [sql UTF8String], std::move(rows),
+      Utf8FromNSString(dbId), Utf8FromNSString(sql), std::move(rows),
       [cb](Envelope env) { Finish(cb, std::move(env)); });
 }
 

@@ -242,13 +242,15 @@ test("converts Uint8Array and number[] blobs to ArrayBuffer inbound and ArrayBuf
   assert.deepEqual([...new Uint8Array(fromArray)], [4, 5]);
   const encoded = encodeBindParams(["ok", 1n, new Uint8Array([9]), [7, 8], null]);
   assert.equal(encoded[0], "ok");
-  assert.equal(encoded[1], 1n);
+  assert.deepEqual(encoded[1], { __psBig: true, v: "1" });
   assert.ok(isArrayBuffer(encoded[2]));
   assert.ok(isArrayBuffer(encoded[3]));
   assert.equal(encoded[4], null);
   const out = decodeCell(Uint8Array.from([1, 2]).buffer);
   assert.ok(out instanceof Uint8Array);
   assert.deepEqual([...out], [1, 2]);
+  assert.equal(decodeCell({ __psBig: true, v: "9007199254740993" }), 9007199254740993n);
+  assert.equal(decodeCell("9007199254740993"), "9007199254740993");
 });
 
 test("execute sends ArrayBuffers and returns Uint8Array cells", async () => {
@@ -425,6 +427,14 @@ test("executeBatch returns QueryResult without rows", async () => {
   assert.equal(mock.batches.length, 1);
   assert.equal(mock.batches[0].sql, "INSERT INTO t VALUES (?)");
   await adapter.close();
+});
+
+test("close nulls connections so a second close cannot re-close dbIds", async () => {
+  const { adapter, mock } = await openAdapter();
+  await adapter.close();
+  assert.equal(mock.closes.length, 6);
+  await assert.rejects(() => adapter.close(), /not open/);
+  assert.equal(mock.closes.length, 6);
 });
 
 test("BEGIN IMMEDIATE is issued in JS for writeTransaction", async () => {

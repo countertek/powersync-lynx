@@ -142,11 +142,63 @@ int main() {
     PrintEnvelope("SELECT 9007199254740993", outgoing);
     expect([outgoing[@"ok"] boolValue], "unsafe INTEGER select ok");
     id outgoing_cell = FirstCell(outgoing);
-    expect([outgoing_cell isKindOfClass:[NSString class]] &&
-               [(NSString*)outgoing_cell isEqualToString:@"9007199254740993"],
-           "INTEGER past MAX_SAFE_INTEGER maps to decimal NSString");
+    expect([outgoing_cell isKindOfClass:[NSDictionary class]],
+           "INTEGER past MAX_SAFE_INTEGER maps to tagged __psBig dict");
     expect(![outgoing_cell isKindOfClass:[NSNumber class]],
            "unsafe INTEGER is not boxed as NSNumber");
+    expect(![outgoing_cell isKindOfClass:[NSString class]],
+           "unsafe INTEGER is not a bare decimal NSString");
+    if ([outgoing_cell isKindOfClass:[NSDictionary class]]) {
+      NSDictionary* tagged_out = (NSDictionary*)outgoing_cell;
+      expect([tagged_out[@"__psBig"] boolValue] &&
+                 [tagged_out[@"v"] isKindOfClass:[NSString class]] &&
+                 [(NSString*)tagged_out[@"v"]
+                     isEqualToString:@"9007199254740993"],
+             "tagged INTEGER carries decimal v without coercing to NSNumber");
+    }
+
+    NSDictionary* tagged_bind = WaitFor(^(void (^cb)(id)) {
+      [module execute:dbId
+                  sql:@"SELECT typeof(?)"
+               params:@[ @{ @"__psBig" : @YES, @"v" : @"99" } ]
+             callback:cb];
+    });
+    PrintEnvelope("typeof tagged bigint 99", tagged_bind);
+    id tagged_type = FirstCell(tagged_bind);
+    expect([tagged_type isKindOfClass:[NSString class]] &&
+               [(NSString*)tagged_type isEqualToString:@"integer"],
+           "tagged __psBig BindValue binds as INTEGER");
+
+    const char nul_bytes[] = {'a', '\0', 'b'};
+    NSString* nul_text =
+        [[NSString alloc] initWithBytes:nul_bytes
+                                 length:3
+                               encoding:NSUTF8StringEncoding];
+    NSDictionary* nul_round = WaitFor(^(void (^cb)(id)) {
+      [module execute:dbId
+                  sql:@"SELECT typeof(?), hex(?), length(CAST(? AS BLOB))"
+               params:@[ nul_text, nul_text, nul_text ]
+             callback:cb];
+    });
+    PrintEnvelope("embedded NUL text", nul_round);
+    expect([nul_round[@"ok"] boolValue], "embedded NUL execute ok");
+    NSArray* nul_row = nul_round[@"rawRows"][0];
+    expect([nul_row[0] isKindOfClass:[NSString class]] &&
+               [(NSString*)nul_row[0] isEqualToString:@"text"],
+           "embedded NUL stays TEXT");
+    expect([nul_row[1] isKindOfClass:[NSString class]] &&
+               [(NSString*)nul_row[1] isEqualToString:@"610062"],
+           "embedded NUL round-trips all three UTF-8 bytes");
+    expect([nul_row[2] isKindOfClass:[NSNumber class]] &&
+               [nul_row[2] intValue] == 3,
+           "embedded NUL CAST-to-BLOB length is 3, not truncated at NUL");
+    NSDictionary* nul_select = WaitFor(^(void (^cb)(id)) {
+      [module execute:dbId sql:@"SELECT ?" params:@[ nul_text ] callback:cb];
+    });
+    id nul_cell = FirstCell(nul_select);
+    expect([nul_cell isKindOfClass:[NSString class]] &&
+               [(NSString*)nul_cell length] == 3,
+           "embedded NUL NSString round-trips 3 UTF-16 units");
 
     NSDictionary* safe = WaitFor(^(void (^cb)(id)) {
       [module execute:dbId sql:@"SELECT 42" params:@[] callback:cb];

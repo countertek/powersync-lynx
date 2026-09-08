@@ -31,7 +31,7 @@ export function attach(lynxView: LynxViewHost, options?: AttachOptions): AttachH
     throw new Error("attach requires a <lynx-view> element");
   }
 
-  const factoryUrl = new URL("./factory.ts", import.meta.url).href;
+  const factoryUrl = new URL("../../dist/web-host/factory.js", import.meta.url).href;
   const previousMap = lynxView.nativeModulesMap ?? {};
   const nextMap = asMutableMap({ ...previousMap });
   nextMap[MODULE_NAME] = factoryUrl;

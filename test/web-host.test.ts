@@ -1,5 +1,6 @@
 // @ts-nocheck
 import assert from "node:assert/strict";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, test } from "node:test";
 
 import { Schema, Table, column } from "../src/index.ts";
@@ -103,6 +104,77 @@ function loadMock(calls, handleSql) {
   return async () => web;
 }
 
+function sqliteBinds(params) {
+  if (!Array.isArray(params)) {
+    return [];
+  }
+  return params.map((value) => (value instanceof Uint8Array ? Buffer.from(value) : value));
+}
+
+function runSqlite(db, sql, params) {
+  const stmt = db.prepare(sql);
+  stmt.setReturnArrays(true);
+  const binds = sqliteBinds(params);
+  const columns = stmt.columns();
+  if (columns.length > 0) {
+    const rawRows = stmt.all(...binds);
+    return {
+      insertId: 0,
+      rowsAffected: 0,
+      columnNames: columns.map((column) => column.name),
+      rawRows,
+    };
+  }
+  const info = stmt.run(...binds);
+  return {
+    insertId: Number(info.lastInsertRowid),
+    rowsAffected: info.changes,
+    columnNames: [],
+    rawRows: [],
+  };
+}
+
+function leaseRecoveringLoadWeb() {
+  const db = new DatabaseSync(":memory:");
+  const tx = {
+    async executeRaw(sql, params) {
+      return runSqlite(db, sql, params);
+    },
+    async executeBatch(sql, params) {
+      let rowsAffected = 0;
+      let insertId = 0;
+      for (const row of params ?? []) {
+        const result = runSqlite(db, sql, row);
+        rowsAffected += result.rowsAffected;
+        insertId = result.insertId;
+      }
+      return { insertId, rowsAffected, columnNames: [], rawRows: [] };
+    },
+  };
+  class WASQLiteOpenFactory {
+    openDB() {
+      return {
+        async readLock(fn) {
+          if (db.isTransaction) {
+            db.exec("ROLLBACK");
+          }
+          return fn(tx);
+        },
+        async writeLock(fn) {
+          if (db.isTransaction) {
+            db.exec("ROLLBACK");
+          }
+          return fn(tx);
+        },
+        async close() {
+          db.close();
+        },
+      };
+    }
+  }
+  return async () => ({ WASQLiteOpenFactory });
+}
+
 function installHostHelper(handleSql) {
   const calls = {};
   const loadWeb = loadMock(calls, handleSql);
@@ -189,9 +261,9 @@ test("attach merges nativeModulesMap and wraps onNativeModulesCall; detach resto
   assert.equal(lynxView.nativeModulesMap.bridge, "bridge://x");
   assert.equal(lynxView.nativeModulesMap.OtherMod, "other.js");
   assert.ok(factoryUrl.constructor === String);
-  assert.match(factoryUrl, /factory\.ts$/);
+  assert.match(factoryUrl, /factory\.js$/);
   assert.doesNotMatch(factoryUrl, /^blob:/);
-  assert.equal(factoryUrl, new URL("../src/web-host/factory.ts", import.meta.url).href);
+  assert.equal(factoryUrl, new URL("../dist/web-host/factory.js", import.meta.url).href);
   assert.notEqual(lynxView.onNativeModulesCall, previous);
 
   const passthrough = await lynxView.onNativeModulesCall("ping", { a: 1 }, "bridge");
@@ -312,7 +384,9 @@ test("readOnly routes execute to readLock+executeRaw; writes use writeLock", asy
   );
 
   assert.deepEqual(calls.locks, ["write", "read", "write"]);
-  assert.equal(calls.executeRaw.length, 2);
+  assert.equal(calls.executeRaw.filter((call) => call.sql === "select 1").length, 2);
+  assert.ok(calls.executeRaw.some((call) => call.sql === "BEGIN IMMEDIATE"));
+  assert.ok(calls.executeRaw.some((call) => call.sql === "COMMIT"));
   assert.equal(calls.executeBatch.length, 1);
 });
 
@@ -344,6 +418,148 @@ test("page catch returns ok:false envelope with optional code", async () => {
   assert.equal(result.ok, false);
   assert.equal(result.message, "boom");
   assert.equal(result.code, 19);
+});
+
+test("JS BEGIN/INSERT/COMMIT RPCs keep one WASQLite lease so COMMIT is active", async () => {
+  const loadWeb = leaseRecoveringLoadWeb();
+  const opened = await handleNativeCall("open", { dbFilename: "txn.db" }, undefined, loadWeb);
+  assert.equal(opened.ok, true);
+
+  const created = await handleNativeCall(
+    "execute",
+    { dbId: opened.dbId, sql: "CREATE TABLE t(x INTEGER)", params: [] },
+    undefined,
+    loadWeb,
+  );
+  assert.equal(created.ok, true);
+
+  const begin = await handleNativeCall(
+    "execute",
+    { dbId: opened.dbId, sql: "BEGIN IMMEDIATE", params: [] },
+    undefined,
+    loadWeb,
+  );
+  assert.equal(begin.ok, true);
+
+  const inserted = await handleNativeCall(
+    "execute",
+    { dbId: opened.dbId, sql: "INSERT INTO t VALUES (1)", params: [] },
+    undefined,
+    loadWeb,
+  );
+  assert.equal(inserted.ok, true);
+
+  const committed = await handleNativeCall(
+    "execute",
+    { dbId: opened.dbId, sql: "COMMIT", params: [] },
+    undefined,
+    loadWeb,
+  );
+  assert.equal(committed.ok, true, committed.message);
+
+  const selected = await handleNativeCall(
+    "execute",
+    { dbId: opened.dbId, sql: "SELECT x FROM t", params: [] },
+    undefined,
+    loadWeb,
+  );
+  assert.equal(selected.ok, true);
+  assert.deepEqual(selected.rawRows, [[1]]);
+});
+
+test("JS BEGIN/INSERT/ROLLBACK RPCs roll the insert back", async () => {
+  const loadWeb = leaseRecoveringLoadWeb();
+  const opened = await handleNativeCall("open", { dbFilename: "rollback.db" }, undefined, loadWeb);
+  assert.equal(opened.ok, true);
+  const created = await handleNativeCall(
+    "execute",
+    { dbId: opened.dbId, sql: "CREATE TABLE t(x INTEGER)", params: [] },
+    undefined,
+    loadWeb,
+  );
+  assert.equal(created.ok, true);
+  const begin = await handleNativeCall(
+    "execute",
+    { dbId: opened.dbId, sql: "BEGIN IMMEDIATE", params: [] },
+    undefined,
+    loadWeb,
+  );
+  assert.equal(begin.ok, true);
+  const inserted = await handleNativeCall(
+    "execute",
+    { dbId: opened.dbId, sql: "INSERT INTO t VALUES (1)", params: [] },
+    undefined,
+    loadWeb,
+  );
+  assert.equal(inserted.ok, true);
+  const rolledBack = await handleNativeCall(
+    "execute",
+    { dbId: opened.dbId, sql: "ROLLBACK", params: [] },
+    undefined,
+    loadWeb,
+  );
+  assert.equal(rolledBack.ok, true, rolledBack.message);
+  const selected = await handleNativeCall(
+    "execute",
+    { dbId: opened.dbId, sql: "SELECT x FROM t", params: [] },
+    undefined,
+    loadWeb,
+  );
+  assert.equal(selected.ok, true);
+  assert.deepEqual(selected.rawRows, []);
+});
+
+test("executeBatch rolls back earlier rows on the first error", async () => {
+  const loadWeb = leaseRecoveringLoadWeb();
+  const opened = await handleNativeCall("open", { dbFilename: "batch.db" }, undefined, loadWeb);
+  assert.equal(opened.ok, true);
+  const created = await handleNativeCall(
+    "execute",
+    { dbId: opened.dbId, sql: "CREATE TABLE ids(id INTEGER PRIMARY KEY)", params: [] },
+    undefined,
+    loadWeb,
+  );
+  assert.equal(created.ok, true);
+  const batched = await handleNativeCall(
+    "executeBatch",
+    { dbId: opened.dbId, sql: "INSERT INTO ids(id) VALUES(?)", params: [[1], [1]] },
+    undefined,
+    loadWeb,
+  );
+  assert.equal(batched.ok, false);
+  const selected = await handleNativeCall(
+    "execute",
+    { dbId: opened.dbId, sql: "SELECT count(*) FROM ids", params: [] },
+    undefined,
+    loadWeb,
+  );
+  assert.equal(selected.ok, true);
+  assert.deepEqual(selected.rawRows, [[0]]);
+});
+
+test("malformed tagged bigint resolves ok:false instead of rejecting", async () => {
+  const loadWeb = loadMock({});
+  const result = await handleNativeCall(
+    "execute",
+    { __psBig: true, v: "invalid" },
+    undefined,
+    loadWeb,
+  );
+  assert.equal(result.ok, false);
+  assert.equal(result.message.constructor, String);
+  assert.ok(result.message.length > 0);
+});
+
+test("malformed tagged ArrayBuffer resolves ok:false instead of rejecting", async () => {
+  const loadWeb = loadMock({});
+  const result = await handleNativeCall(
+    "execute",
+    { __psAb: true, u8: ["nope"] },
+    undefined,
+    loadWeb,
+  );
+  assert.equal(result.ok, false);
+  assert.equal(result.message.constructor, String);
 });
 
 test("factory encodes params and decodes envelopes; Adapter sees ArrayBuffer/bigint", async () => {
