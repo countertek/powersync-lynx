@@ -1,0 +1,44 @@
+buildscript {
+  repositories {
+    google()
+    mavenCentral()
+  }
+  dependencies {
+    classpath "com.android.tools.build:gradle:8.7.2"
+  }
+}
+
+apply plugin: "com.android.library"
+
+android {
+  namespace "com.powersync.lynx"
+  compileSdkVersion 35
+
+  defaultConfig {
+    minSdkVersion 24
+    targetSdkVersion 35
+    consumerProguardFiles "consumer-rules.pro"
+  }
+
+  compileOptions {
+    sourceCompatibility JavaVersion.VERSION_11
+    targetCompatibility JavaVersion.VERSION_11
+  }
+
+  sourceSets {
+    main {
+      java.srcDirs = ["src/main/java"]
+    }
+  }
+}
+
+repositories {
+  google()
+  mavenCentral()
+}
+
+dependencies {
+  implementation "com.powersync:powersync-sqlite-core:0.5.3"
+  implementation "androidx.sqlite:sqlite-bundled:2.5.2"
+  compileOnly "org.lynxsdk.lynx:lynx:4.0.1"
+}

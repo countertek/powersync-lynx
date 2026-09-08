@@ -14,7 +14,7 @@ Single-context: root `CONTEXT.md` plus `docs/adr/`. See `docs/agents/domain.md`.
 
 ### Lynx-bundle JS
 
-Normative spec: `docs/spec.md`. This package (`powersync-lynx`) ships the Autolink skeleton and Lynx-bundle JS in `lib/` (`PowerSyncDatabase`, JS Adapter, `LynxRemote`). Native dirs and `lib/web-host/` are owned by sibling work. Native Module methods take a function callback; do not treat them as Promises. Adapter checks: `node --test test/*.js`.
+Normative spec: `docs/spec.md`. This package (`powersync-lynx`) ships the Autolink skeleton, Lynx-bundle JS in `lib/` (`PowerSyncDatabase`, JS Adapter, `LynxRemote`), Host helper in `lib/web-host/`, and Native Module dirs (`android/`, `ios/`, `shared/`, `lynxtron/`, `dist/`). Native Module methods take a function callback; do not treat them as Promises. Install with pnpm 12 (`packageManager` in `package.json`); do not use the npm CLI. Adapter checks: `node --test test/*.js`.
 
 ## Maintaining this file
 
