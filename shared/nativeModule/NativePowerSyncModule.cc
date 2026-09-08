@@ -387,8 +387,7 @@ void BindNativePowerSyncModule(napi_env env, napi_value exports) {
 
 }  // namespace
 
-napi_value CreateNativePowerSyncModule(::lynx::registration::LynxNapiEnv env,
-                                       ::lynx::registration::LynxNapiValue exports,
+napi_value CreateNativePowerSyncModule(napi_env env, napi_value exports,
                                        const char* module_name, void* opaque) {
   (void)module_name;
   (void)opaque;
