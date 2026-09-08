@@ -4,9 +4,9 @@ import {
   encodeCloneable,
   type Cloneable,
   type CloneableObject,
-} from "./cloneable.js";
-import { copyToArrayBuffer, errorCode, hasPrimitiveConstructor } from "../values.js";
-import type { NativeEnvelope, NativeFailEnvelope, NativeOkEnvelope } from "../adapter/native.js";
+} from "./cloneable.ts";
+import { copyToArrayBuffer, errorCode, hasPrimitiveConstructor } from "../values.ts";
+import type { NativeEnvelope, NativeFailEnvelope, NativeOkEnvelope } from "../adapter/native.ts";
 
 export const MODULE_NAME = "NativePowerSyncModule";
 

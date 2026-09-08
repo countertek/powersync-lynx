@@ -20,7 +20,6 @@ export default defineConfig({
     "*.md",
     "dist/**",
     "ios/**",
-    "lib/**",
     "lynxtron/**",
     "native-vendor/**",
     "node_modules/**",

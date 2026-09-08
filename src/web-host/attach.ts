@@ -3,7 +3,7 @@ import {
   createOnNativeModulesCall,
   type AttachOptions,
   type NativeModulesCallHandler,
-} from "./page-rpc.js";
+} from "./page-rpc.ts";
 
 export interface NativeModulesMap {
   NativePowerSyncModule?: string;
@@ -31,7 +31,7 @@ export function attach(lynxView: LynxViewHost, options?: AttachOptions): AttachH
     throw new Error("attach requires a <lynx-view> element");
   }
 
-  const factoryUrl = new URL("./factory.js", import.meta.url).href;
+  const factoryUrl = new URL("./factory.ts", import.meta.url).href;
   const previousMap = lynxView.nativeModulesMap ?? {};
   const nextMap = asMutableMap({ ...previousMap });
   nextMap[MODULE_NAME] = factoryUrl;
@@ -60,8 +60,12 @@ export function attach(lynxView: LynxViewHost, options?: AttachOptions): AttachH
   };
 }
 
-async function loadWeb(): Promise<import("./page-rpc.js").PowerSyncWebModule> {
-  return import("@powersync/web");
+async function loadWeb(): Promise<import("./page-rpc.ts").PowerSyncWebModule> {
+  // Native installs omit the optional @powersync/web peer.
+  // @ts-expect-error TS2307: optional peer is not present for native typecheck.
+  const loaded = await import("@powersync/web");
+  // SAFETY: Lynx-for-Web loads @powersync/web as WASQLiteOpenFactory + optional createConsoleLogger.
+  return loaded as import("./page-rpc.ts").PowerSyncWebModule;
 }
 
 export type { AttachOptions };

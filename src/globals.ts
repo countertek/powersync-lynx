@@ -1,5 +1,5 @@
-import type { NativeModulesHost } from "../lib/adapter/native.js";
-import type { LynxTextCodecHelper } from "../lib/sync/LynxRemote.js";
+import type { NativeModulesHost } from "./adapter/native.ts";
+import type { LynxTextCodecHelper } from "./sync/LynxRemote.ts";
 
 export {};
 

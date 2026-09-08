@@ -2,10 +2,10 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 
-import { attach } from "../lib/web-host/index.js";
-import { decodeCloneable, encodeCloneable } from "../lib/web-host/cloneable.js";
-import createFactory from "../lib/web-host/factory.js";
-import { MODULE_NAME, mappingStats, resetWebHostMapping } from "../lib/web-host/page-rpc.js";
+import { attach } from "../src/web-host/index.ts";
+import { decodeCloneable, encodeCloneable } from "../src/web-host/cloneable.ts";
+import createFactory from "../src/web-host/factory.ts";
+import { MODULE_NAME, mappingStats, resetWebHostMapping } from "../src/web-host/page-rpc.ts";
 
 interface WebCalls {
   constructs: object[];
@@ -101,9 +101,9 @@ test("attach merges nativeModulesMap and wraps onNativeModulesCall; detach resto
   assert.equal(lynxView.nativeModulesMap.bridge, "bridge://x");
   assert.equal(lynxView.nativeModulesMap.OtherMod, "other.js");
   assert.ok(factoryUrl.constructor === String);
-  assert.match(factoryUrl, /factory\.js$/);
+  assert.match(factoryUrl, /factory\.ts$/);
   assert.doesNotMatch(factoryUrl, /^blob:/);
-  assert.equal(factoryUrl, new URL("../lib/web-host/factory.js", import.meta.url).href);
+  assert.equal(factoryUrl, new URL("../src/web-host/factory.ts", import.meta.url).href);
   assert.notEqual(lynxView.onNativeModulesCall, previous);
 
   const passthrough = await lynxView.onNativeModulesCall("ping", { a: 1 }, "bridge");
@@ -142,7 +142,7 @@ test("detach unwraps only when still current; reverse order restores", () => {
 });
 
 test("one WASQLiteOpenFactory per dbFilename+dbLocation; extra opens refcount", async () => {
-  const { handleNativeCall } = await import("../lib/web-host/page-rpc.js");
+  const { handleNativeCall } = await import("../src/web-host/page-rpc.ts");
   const calls = {};
   const loadWeb = loadMock(calls);
   const options = { vfs: "IDBBatchAtomicVFS", additionalReaders: 4 };
@@ -191,7 +191,7 @@ test("one WASQLiteOpenFactory per dbFilename+dbLocation; extra opens refcount", 
 });
 
 test("readOnly routes execute to readLock+executeRaw; writes use writeLock", async () => {
-  const { handleNativeCall } = await import("../lib/web-host/page-rpc.js");
+  const { handleNativeCall } = await import("../src/web-host/page-rpc.ts");
   const calls = {};
   const loadWeb = loadMock(calls);
 
@@ -229,7 +229,7 @@ test("readOnly routes execute to readLock+executeRaw; writes use writeLock", asy
 });
 
 test("page catch returns ok:false envelope with optional code", async () => {
-  const { handleNativeCall } = await import("../lib/web-host/page-rpc.js");
+  const { handleNativeCall } = await import("../src/web-host/page-rpc.ts");
   const loadWeb = async () => ({
     WASQLiteOpenFactory: class {
       constructor() {}
@@ -260,7 +260,7 @@ test("page catch returns ok:false envelope with optional code", async () => {
 });
 
 test("factory encodes params and decodes envelopes; Adapter sees ArrayBuffer/bigint", async () => {
-  const { handleNativeCall } = await import("../lib/web-host/page-rpc.js");
+  const { handleNativeCall } = await import("../src/web-host/page-rpc.ts");
   const calls = {};
   const loadWeb = loadMock(calls);
   const handler = async (name, data) => handleNativeCall(name, data, undefined, loadWeb);

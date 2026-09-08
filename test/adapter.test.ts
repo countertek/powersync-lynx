@@ -1,7 +1,7 @@
 // @ts-nocheck
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { LynxDBAdapter } from "../lib/adapter/LynxDBAdapter.js";
+import { LynxDBAdapter } from "../src/adapter/LynxDBAdapter.ts";
 import {
   blobToArrayBuffer,
   callNative,
@@ -13,7 +13,7 @@ import {
   type NativePowerSyncModule,
   type NativeWireEnvelope,
   type OpenPayload,
-} from "../lib/adapter/native.js";
+} from "../src/adapter/native.ts";
 
 function isArrayBuffer(value: ArrayBuffer | Uint8Array | number[] | string | null): boolean {
   return value instanceof ArrayBuffer;

@@ -1,2 +1,2 @@
-export { attach } from "./attach.js";
-export type { AttachHandle, AttachOptions, LynxViewHost } from "./attach.js";
+export { attach } from "./attach.ts";
+export type { AttachHandle, AttachOptions, LynxViewHost } from "./attach.ts";

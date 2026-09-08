@@ -8,7 +8,7 @@ import {
   type BindValueRows,
   type BindValues,
   type NativeOkEnvelope,
-} from "./native.js";
+} from "./native.ts";
 
 export class LynxConnection extends LockContext {
   readonly dbId: string;

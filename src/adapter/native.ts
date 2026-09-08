@@ -1,5 +1,5 @@
 import type { SqliteValue } from "@powersync/common";
-import { copyToArrayBuffer, isNumberArray } from "../values.js";
+import { copyToArrayBuffer, isNumberArray } from "../values.ts";
 
 export type BindValue =
   | string

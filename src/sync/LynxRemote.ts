@@ -1,4 +1,4 @@
-import "../abort-controller.js";
+import "../abort-controller.ts";
 import { AbstractRemote } from "@powersync/shared-internals";
 import type { PowerSyncBackendConnector, PowerSyncLogger } from "@powersync/common";
 import type { FetchOptions } from "@powersync/shared-internals";
@@ -6,7 +6,7 @@ import type {
   WebSocketSupport,
   WebSocketSyncStreamPlatform,
 } from "@powersync/shared-internals/websockets";
-import { copyToArrayBuffer } from "../values.js";
+import { copyToArrayBuffer } from "../values.ts";
 
 let websockets: WebSocketSupport | undefined;
 

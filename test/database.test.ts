@@ -1,11 +1,11 @@
 // @ts-nocheck
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Schema, Table, column, SyncStreamConnectionMethod } from "../lib/index.js";
-import { PowerSyncDatabase } from "../lib/PowerSyncDatabase.js";
-import { LynxRemote } from "../lib/sync/LynxRemote.js";
-import { LynxStreamingSyncImplementation } from "../lib/sync/LynxStreamingSyncImplementation.js";
-import type { BindValueRows, OpenPayload } from "../lib/adapter/native.js";
+import { Schema, Table, column, SyncStreamConnectionMethod } from "../src/index.ts";
+import { PowerSyncDatabase } from "../src/PowerSyncDatabase.ts";
+import { LynxRemote } from "../src/sync/LynxRemote.ts";
+import { LynxStreamingSyncImplementation } from "../src/sync/LynxStreamingSyncImplementation.ts";
+import type { BindValueRows, OpenPayload } from "../src/adapter/native.ts";
 
 function installAppNative(store: { lists: { id: string; name: string }[] } = { lists: [] }) {
   let nextId = 1;

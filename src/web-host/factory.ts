@@ -3,9 +3,9 @@ import {
   decodeCloneable,
   encodeCloneable,
   type Cloneable,
-} from "./cloneable.js";
-import { errorCode } from "../values.js";
-import type { NativeWireEnvelope } from "../adapter/native.js";
+} from "./cloneable.ts";
+import { errorCode } from "../values.ts";
+import type { NativeWireEnvelope } from "../adapter/native.ts";
 
 type NativeModulesCall = (name: string, data: Cloneable) => Cloneable | Promise<Cloneable>;
 

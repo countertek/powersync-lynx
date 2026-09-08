@@ -1,4 +1,4 @@
-import "./abort-controller.js";
+import "./abort-controller.ts";
 import { SyncStreamConnectionMethod } from "@powersync/common";
 import type {
   BasePowerSyncDatabaseOptions,
@@ -10,9 +10,9 @@ import type {
 } from "@powersync/common";
 import { BasePowerSyncDatabase, openDatabase } from "@powersync/shared-internals";
 import type { CreateSyncImplementationOptions } from "@powersync/shared-internals";
-import { LynxDBAdapter } from "./adapter/LynxDBAdapter.js";
-import { LynxRemote } from "./sync/LynxRemote.js";
-import { LynxStreamingSyncImplementation } from "./sync/LynxStreamingSyncImplementation.js";
+import { LynxDBAdapter } from "./adapter/LynxDBAdapter.ts";
+import { LynxRemote } from "./sync/LynxRemote.ts";
+import { LynxStreamingSyncImplementation } from "./sync/LynxStreamingSyncImplementation.ts";
 
 export type LynxPowerSyncDatabaseOptions = BasePowerSyncDatabaseOptions &
   DatabaseSource<SQLOpenOptions>;

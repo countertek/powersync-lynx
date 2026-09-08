@@ -17,7 +17,6 @@ const ignorePatterns = [
   "android/**",
   "dist/**",
   "ios/**",
-  "lib/**",
   "lynxtron/**",
   "native-vendor/**",
   "node_modules/**",

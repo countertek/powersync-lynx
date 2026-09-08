@@ -4,6 +4,7 @@
     "lib": ["ES2024", "DOM"],
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
+    "allowImportingTsExtensions": true,
     "strict": false,
     "skipLibCheck": true,
     "verbatimModuleSyntax": true,

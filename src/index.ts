@@ -1,4 +1,4 @@
-import "./abort-controller.js";
+import "./abort-controller.ts";
 export * from "@powersync/common";
-export { PowerSyncDatabase } from "./PowerSyncDatabase.js";
-export type { LynxPowerSyncDatabaseOptions } from "./PowerSyncDatabase.js";
+export { PowerSyncDatabase } from "./PowerSyncDatabase.ts";
+export type { LynxPowerSyncDatabaseOptions } from "./PowerSyncDatabase.ts";

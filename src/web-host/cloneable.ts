@@ -1,4 +1,4 @@
-import { copyToArrayBuffer, hasPrimitiveConstructor, isNumberArray } from "../values.js";
+import { copyToArrayBuffer, hasPrimitiveConstructor, isNumberArray } from "../values.ts";
 
 export const AB_TAG = "__psAb";
 export const BIG_TAG = "__psBig";
