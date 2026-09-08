@@ -33,6 +33,7 @@ add_library(powersync_lynx_napi MODULE
 target_link_libraries(powersync_lynx_napi PRIVATE ps_sql)
 target_include_directories(powersync_lynx_napi PRIVATE
   "${CMAKE_CURRENT_LIST_DIR}"
+  "${CMAKE_CURRENT_LIST_DIR}/nativeModule"
   "${CMAKE_CURRENT_LIST_DIR}/../native-vendor/node_modules/@lynx-js/weak-node-api/headers"
   "${CMAKE_CURRENT_LIST_DIR}/../native-vendor/node_modules/@lynx-js/lynx-library-headers/include"
 )

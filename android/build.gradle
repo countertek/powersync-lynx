@@ -39,6 +39,6 @@ repositories {
 
 dependencies {
   implementation "com.powersync:powersync-sqlite-core:0.5.3"
-  implementation "androidx.sqlite:sqlite-bundled:2.5.2"
+  implementation "androidx.sqlite:sqlite-bundled:2.6.2"
   compileOnly "org.lynxsdk.lynx:lynx:4.0.1"
 }

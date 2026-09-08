@@ -26,7 +26,12 @@ PNPM ?= $(shell \
 		printf '%s\n' "pnpm"; \
 	fi)
 
-.PHONY: deps test test-ios node win-node all
+ANDROID_SDK ?= $(ANDROID_HOME)
+ADB := $(ANDROID_SDK)/platform-tools/adb
+EMULATOR := $(ANDROID_SDK)/emulator/emulator
+ANDROID_AVD ?= Pixel_10_Pro
+
+.PHONY: deps test test-ios test-android node win-node all
 
 all: test node
 
@@ -73,6 +78,15 @@ $(IOS_TEST_BIN): deps ios/tests/ios_module_rpc_test.mm ios/src/NativePowerSyncMo
 test-ios: $(IOS_TEST_BIN)
 	$(IOS_TEST_BIN)
 
+test-android: android/host/gradlew
+	@if ! "$(ADB)" devices | awk 'NR>1 && $$2=="device"{found=1} END{exit !found}'; then \
+		echo "starting $(ANDROID_AVD)"; \
+		"$(EMULATOR)" -avd "$(ANDROID_AVD)" -no-window -no-audio -no-boot-anim -gpu auto >/tmp/powersync-lynx-emulator.log 2>&1 & \
+		"$(ADB)" wait-for-device; \
+		until [ "$$("$(ADB)" shell getprop sys.boot_completed | tr -d '\r')" = "1" ]; do sleep 2; done; \
+	fi
+	cd android/host && ./gradlew connectedDebugAndroidTest
+
 NODE_VENDOR := native-vendor/node_modules
 NAPI_INCLUDE := -I$(NODE_VENDOR)/@lynx-js/weak-node-api/headers \
 	-I$(NODE_VENDOR)/@lynx-js/lynx-library-headers/include \
@@ -92,7 +106,8 @@ shared/build/library_entry.o: lynxtron/library_entry.cc $(NODE_VENDOR)
 shared/build/NativePowerSyncModule.o: shared/nativeModule/NativePowerSyncModule.cc $(NODE_VENDOR)
 	mkdir -p shared/build
 	$(CXX) $(CXXFLAGS) $(SQLITE_FLAGS) $(NAPI_INCLUDE) -DNAPI_VERSION=8 \
-		-DUSE_WEAK_SUFFIX_NAPI -c shared/nativeModule/NativePowerSyncModule.cc -o $@
+		-DUSE_WEAK_SUFFIX_NAPI -Ishared/nativeModule \
+		-c shared/nativeModule/NativePowerSyncModule.cc -o $@
 
 $(NODE): deps $(NODE_VENDOR) shared/build/ps_sql.o shared/build/NativePowerSyncModule.o shared/build/library_entry.o $(SQLITE_DIR)/sqlite3.o
 	mkdir -p dist/macos/arm64
@@ -120,7 +135,7 @@ win-node: deps $(NODE_VENDOR) $(SQLITE_DIR)/sqlite3.c
 		-Ishared -I$(SQLITE_DIR) $(SQLITE_FLAGS) $(NAPI_INCLUDE) -DNAPI_VERSION=8 \
 		-c lynxtron/library_entry.cc -o shared/build/win/library_entry.o
 	$(WIN_ZIG) c++ -target x86_64-windows-gnu -std=c++17 -fPIC -O2 -g0 \
-		-Ishared -I$(SQLITE_DIR) $(SQLITE_FLAGS) $(NAPI_INCLUDE) -DNAPI_VERSION=8 \
+		-Ishared -Ishared/nativeModule -I$(SQLITE_DIR) $(SQLITE_FLAGS) $(NAPI_INCLUDE) -DNAPI_VERSION=8 \
 		-DUSE_WEAK_SUFFIX_NAPI \
 		-c shared/nativeModule/NativePowerSyncModule.cc -o shared/build/win/NativePowerSyncModule.o
 	$(WIN_ZIG) cc -target x86_64-windows-gnu -std=c11 -fPIC -O2 -g0 \

@@ -24,6 +24,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Lookup name: NativePowerSyncModule. Autolink via {@code @LynxNativeModule}.
@@ -33,6 +35,8 @@ import java.util.concurrent.atomic.AtomicLong;
 @LynxNativeModule(name = "NativePowerSyncModule")
 public class NativePowerSyncModule extends LynxModule {
   private static final long MAX_SAFE = 9007199254740991L;
+  // androidx.sqlite throwSQLiteException: "Error code: N, message: ..."
+  private static final Pattern SQLITE_ERROR_CODE = Pattern.compile("Error code: (-?\\d+)");
   private static final int SQLITE_INTEGER = 1;
   private static final int SQLITE_FLOAT = 2;
   private static final int SQLITE_TEXT = 3;
@@ -119,7 +123,7 @@ public class NativePowerSyncModule extends LynxModule {
       ok.putString("dbId", dbId);
       return ok;
     } catch (Throwable t) {
-      return fail(messageOf(t));
+      return failFrom(t);
     }
   }
 
@@ -135,7 +139,7 @@ public class NativePowerSyncModule extends LynxModule {
         ok.putBoolean("ok", true);
         return ok;
       } catch (Throwable t) {
-        return fail(messageOf(t));
+        return failFrom(t);
       }
     }
   }
@@ -148,11 +152,11 @@ public class NativePowerSyncModule extends LynxModule {
     synchronized (conn.lock) {
       try {
         List<Object> binds = readParams(params);
-        return run(conn.connection, sql, binds, false);
+        return run(conn.connection, sql, binds);
       } catch (BindException e) {
         return fail(e.getMessage());
       } catch (Throwable t) {
-        return fail(messageOf(t));
+        return failFrom(t);
       }
     }
   }
@@ -172,6 +176,9 @@ public class NativePowerSyncModule extends LynxModule {
         long insertId = 0;
         int rowCount = params == null ? 0 : params.size();
         for (int r = 0; r < rowCount; r++) {
+          if (params.getType(r) != ReadableType.Array) {
+            return fail("params must be an array of parameter rows");
+          }
           stmt.reset();
           stmt.clearBindings();
           ReadableArray row = params.getArray(r);
@@ -184,7 +191,7 @@ public class NativePowerSyncModule extends LynxModule {
       } catch (BindException e) {
         return fail(e.getMessage());
       } catch (Throwable t) {
-        return fail(messageOf(t));
+        return failFrom(t);
       } finally {
         if (stmt != null) {
           stmt.close();
@@ -193,8 +200,7 @@ public class NativePowerSyncModule extends LynxModule {
     }
   }
 
-  private WritableMap run(
-      SQLiteConnection connection, String sql, List<Object> binds, boolean unused)
+  private WritableMap run(SQLiteConnection connection, String sql, List<Object> binds)
       throws Exception {
     SQLiteStatement stmt = connection.prepare(sql);
     try {
@@ -348,10 +354,33 @@ public class NativePowerSyncModule extends LynxModule {
   }
 
   private static WritableMap fail(String message) {
+    return fail(message, null);
+  }
+
+  private static WritableMap failFrom(Throwable t) {
+    String message = messageOf(t);
+    return fail(message, sqliteCode(message));
+  }
+
+  private static WritableMap fail(String message, Integer code) {
     WritableMap map = Arguments.createMap();
     map.putBoolean("ok", false);
     map.putString("message", message != null ? message : "native error");
+    if (code != null) {
+      map.putDouble("code", code.doubleValue());
+    }
     return map;
+  }
+
+  private static Integer sqliteCode(String message) {
+    if (message == null) {
+      return null;
+    }
+    Matcher matcher = SQLITE_ERROR_CODE.matcher(message);
+    if (!matcher.find()) {
+      return null;
+    }
+    return Integer.valueOf(matcher.group(1));
   }
 
   private static String messageOf(Throwable t) {

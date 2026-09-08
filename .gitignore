@@ -4,6 +4,11 @@ native-vendor/
 shared/build/
 android/build/
 android/.cxx/
+android/.gradle/
+android/host/build/
+android/host/.gradle/
+android/local.properties
+android/host/local.properties
 *.o
 *.a
 *.pdb

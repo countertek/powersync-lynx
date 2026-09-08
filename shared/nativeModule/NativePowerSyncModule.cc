@@ -1,5 +1,6 @@
 #include <lynx/registration.h>
 
+#include "NativePowerSyncModule.h"
 #include "ps_sql.h"
 
 #include "napi.h"
@@ -384,16 +385,15 @@ void BindNativePowerSyncModule(napi_env env, napi_value exports) {
   object.Set("executeBatch", Napi::Function::New(napi_env, ExecuteBatch));
 }
 
-napi_value CreateNativePowerSyncModule(::lynx::registration::LynxNapiEnv env,
-                                       ::lynx::registration::LynxNapiValue exports,
+}  // namespace
+
+napi_value CreateNativePowerSyncModule(napi_env env, napi_value exports,
                                        const char* module_name, void* opaque) {
   (void)module_name;
   (void)opaque;
   BindNativePowerSyncModule(env, exports);
   return exports;
 }
-
-}  // namespace
 
 LYNX_REGISTER_NATIVE_MODULE("NativePowerSyncModule", CreateNativePowerSyncModule,
                             nullptr);
