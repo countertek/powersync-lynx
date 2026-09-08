@@ -1,0 +1,29 @@
+diff --git a/dist/client/mainthread/createIFrameRealm.js b/dist/client/mainthread/createIFrameRealm.js
+index bb7cfa29ab283a789b26a5aee5f7534300114523..43e596989e06bad2facece37df941823c10582b4 100644
+--- a/dist/client/mainthread/createIFrameRealm.js
++++ b/dist/client/mainthread/createIFrameRealm.js
+@@ -11,9 +11,14 @@ const nonce = existingScript?.nonce || existingScript?.getAttribute('nonce');
+  */
+ export async function createIFrameRealm(parent) {
+     const iframe = document.createElement('iframe');
++    // powersync-lynx demo patch: correlate the ready message with a unique
++    // per-realm token instead of `event.source === iframe.contentWindow`.
++    // The WindowProxy identity check can fail when the card boots while the
++    // host page is still loading, which hung the boot silently on first load.
++    const readyToken = 'lynx:mtsready:' + Math.random().toString(36).slice(2) + ':' + Date.now().toString(36);
+     const iframeReadyPromise = new Promise((resolve) => {
+         const listener = (event) => {
+-            if (event.data === 'lynx:mtsready' && event.source === iframe.contentWindow) {
++            if (event.data === readyToken) {
+                 resolve();
+                 globalThis.removeEventListener('message', listener);
+             }
+@@ -22,7 +27,7 @@ export async function createIFrameRealm(parent) {
+     });
+     iframe.style.display = 'none';
+     iframe.srcdoc = '<!DOCTYPE html><html><head><script nonce="' + nonce
+-        + '">parent.postMessage("lynx:mtsready","*")</script></head><body style="display:none"></body></html>';
++        + '">parent.postMessage(' + JSON.stringify(readyToken) + ',"*")</script></head><body style="display:none"></body></html>';
+     iframe.sandbox = 'allow-same-origin allow-scripts'; // Restrict capabilities for security
+     iframe.loading = 'eager';
+     parent.appendChild(iframe);

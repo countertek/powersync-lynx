@@ -5,3 +5,5 @@ allowBuilds:
 autoInstallPeers: false
 onlyBuiltDependencies:
   - esbuild
+patchedDependencies:
+  '@lynx-js/web-core@0.26.0': patches/@lynx-js__web-core@0.26.0.patch

@@ -8,7 +8,7 @@ import {
   setConnectorLog,
   setDemoCredentials,
 } from "./connector.ts";
-import { db, waitForDemoReady } from "./database.ts";
+import { getDb, waitForDemoReady } from "./database.ts";
 import type { TodoRow } from "./schema.ts";
 import { deviceId, errorMessage, hostLabel, newId, nowIso, rowArray } from "./util.ts";
 
@@ -94,7 +94,7 @@ export function App() {
     let lastUploading = false;
     let lastDownloading = false;
     let everConnected = false;
-    const stopStatus = db.registerListener({
+    const stopStatus = getDb().registerListener({
       statusChanged(status) {
         const connected = status.connected === true;
         const uploading = status.dataFlowStatus?.uploading === true;
@@ -145,7 +145,7 @@ export function App() {
             return;
           }
           setDemoCredentials(creds);
-          await db.connect(demoConnector);
+          await getDb().connect(demoConnector);
           log(`connect: ${DEMO_POWERSYNC_URL} as ${device}`);
         } catch (err) {
           log(
@@ -174,7 +174,7 @@ export function App() {
       return;
     }
     const abort = new AbortController();
-    db.watch(
+    getDb().watch(
       TODO_WATCH_SQL,
       [],
       {
@@ -199,7 +199,7 @@ export function App() {
       return;
     }
     try {
-      await db.execute(
+      await getDb().execute(
         "INSERT INTO todos (id, description, completed, created_at, completed_at) VALUES (?, ?, ?, ?, ?)",
         [newId(), description, 0, nowIso(), null],
       );
@@ -216,7 +216,7 @@ export function App() {
       const completed = todo.completed ? 0 : 1;
       const completedAt = completed === 1 ? nowIso() : null;
       try {
-        await db.execute("UPDATE todos SET completed = ?, completed_at = ? WHERE id = ?", [
+        await getDb().execute("UPDATE todos SET completed = ?, completed_at = ? WHERE id = ?", [
           completed,
           completedAt,
           todo.id,
@@ -232,7 +232,7 @@ export function App() {
   const deleteTodo = useCallback(
     async (todo: TodoRow) => {
       try {
-        await db.execute("DELETE FROM todos WHERE id = ?", [todo.id]);
+        await getDb().execute("DELETE FROM todos WHERE id = ?", [todo.id]);
         log(`delete: "${todo.description}"`);
       } catch (err) {
         log(`delete failed: ${errorMessage(err)}`);
@@ -244,7 +244,7 @@ export function App() {
   const goOffline = useCallback(async () => {
     setWantSync(false);
     try {
-      await db.disconnect();
+      await getDb().disconnect();
       log("offline: disconnected; local writes will queue");
     } catch (err) {
       log(`offline failed: ${errorMessage(err)}`);
@@ -260,7 +260,7 @@ export function App() {
           setDemoCredentials(creds);
         }
       }
-      await db.connect(demoConnector);
+      await getDb().connect(demoConnector);
       log("reconnect: connect() called");
     } catch (err) {
       log(`reconnect failed: ${errorMessage(err)}`);

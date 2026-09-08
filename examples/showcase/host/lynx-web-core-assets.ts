@@ -161,9 +161,16 @@ export function lynxWebCoreRuntimeAssets(showcaseRoot: string): Plugin {
     next();
   }
 
+  let isServe = false;
+
   return {
     name: "lynx-web-core-runtime-assets",
     enforce: "pre",
+    configResolved(config) {
+      // In serve mode the middleware below serves the runtime assets;
+      // emitFile is build-only and vite warns on every call otherwise.
+      isServe = config.command === "serve";
+    },
     transform(code, id) {
       if (!id.includes("@lynx-js/web-core")) {
         return;
@@ -177,6 +184,9 @@ export function lynxWebCoreRuntimeAssets(showcaseRoot: string): Plugin {
     },
     async buildStart() {
       await ensureWorkers();
+      if (isServe) {
+        return;
+      }
       this.emitFile({
         type: "asset",
         fileName: RUNTIME.wasm,
