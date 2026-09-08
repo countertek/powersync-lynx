@@ -17,7 +17,7 @@ export async function bundleWebHostFactory() {
     target: "es2022",
     outfile,
     legalComments: "none",
-    logLevel: "silent",
+    logLevel: "warning",
   });
   const generated = fs.readFileSync(outfile, "utf8");
   fs.writeFileSync(
@@ -29,5 +29,7 @@ export async function bundleWebHostFactory() {
 
 const invoked = process.argv[1] != null && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (invoked) {
-  await bundleWebHostFactory();
+  const written = await bundleWebHostFactory();
+  const bytes = fs.statSync(written).size;
+  console.log(`bundle-factory: wrote ${written} (${bytes} bytes)`);
 }

@@ -1,11 +1,14 @@
-# Examples: PowerSync Lynx showcase
+# Examples: PowerSync Lynx TODO
 
-A ReactLynx demo app that consumes `powersync-lynx` as a **package consumer**
-(not part of the published Client). It exercises the locked MVP slice: open a
-DB, declare a Schema, `connect` with a Connector, `get` / `getAll` / `execute` /
-`writeTransaction`, `watch`, Sync Stream subscribe, and `waitForFirstSync`.
+A ReactLynx **TODO app** that consumes `powersync-lynx` as a **package consumer**
+(not part of the published Client). One screen: add, complete-toggle, delete,
+filter (all / active / done). A collapsible sync log is part of the show.
 
-License: Apache-2.0. Lynx **4.0+**.
+The demo story is **two browser windows on one account against one Postgres
+database**, talking to a local PowerSync service. There is no cloud account and
+no hand-pasted JWT: the compose stack mints a static HS256 demo token.
+
+License: Apache-2.0. Lynx **4.0+**. pnpm **12** only.
 
 ## How this app consumes the Client
 
@@ -17,56 +20,76 @@ the library. That keeps the library's native install graph free of
 |---|---|
 | Dependency | `"powersync-lynx": "file:../.."` |
 | Why not `workspace:*` | A shared workspace virtual store would install the optional web peer at the library root |
-| Why not a packed tarball | Same TypeScript entry (`src/*.ts`) the package publishes; `file:` is the local stand-in for that consumer install |
-| Web extra | Showcase **directly** depends on `@powersync/web` (optional peer of the Client) and `@lynx-js/web-core` |
-
-Install **the library first**, then the showcase:
+| Why not a packed tarball | Same TypeScript entry (`src/*.ts`) the package publishes; `file:` is the local stand-in. Prove the tarball with `pnpm publish-dry-run` |
+| Web extra | The app **directly** depends on `@powersync/web` (optional peer of the Client) and `@lynx-js/web-core` |
 
 ```bash
 # from the repository root — pnpm 12 only, no npm CLI
 pnpm install
-pnpm bundle-factory   # writes dist/web-host/factory.js (gitignored, required by attach)
+pnpm bundle-factory   # writes dist/web-host/factory.js and prints outfile + byte size
 
 cd examples/showcase
 pnpm install
 ```
 
-`file:../..` uses the Client sources in-place. A published consumer would
-depend on the npm tarball instead; the import names do not change.
+## What is verified vs not
 
-## Verification labels (read this first)
-
-The captain chose to ship examples without gating on real-host streaming or
-cancellation evidence. This app and this guide use those labels:
+Read this before treating a green web preview as "sync works".
 
 | Claim | Status |
 |---|---|
-| Open DB, Schema, `get` / `getAll` / `execute` / `writeTransaction`, `watch` | **Exercised** in library tests and in the showcase source. **Built** for Rspeedy `web` (`lynx-dist/main.web.bundle`) and `lynx` (`lynx-dist/main.lynx.bundle`) in this environment |
-| Connector `connect` + Sync Stream `subscribe` + `waitForFirstSync` call path | **Exercised** as source (optional UI button). Resolves only with a real PowerSync Service; otherwise the UI reports the error/timeout |
-| Lynx-for-Web Host helper (`attach` + WASQLite factory ESM URL) | **Built** (`host-dist/`, factory hashed ESM with a function default export). **Served** at `http://127.0.0.1:4173/` in this environment (`index.html`, `/main.web.bundle`, factory JS all HTTP 200). Factory URL is executable ESM, not a Blob URL |
-| In-browser WASQLite open through `<lynx-view>` | **Not driven** here (no headless Lynx+IndexedDB pass). Open Chrome at the preview URL to exercise it |
+| Open DB, Schema, `get` / `execute` / `watch`, add / toggle / delete / filter | **Exercised** in the TODO app source. **Built** for Rspeedy `web` and `lynx` |
+| First-load / refresh race (lost or duplicated rows) | **Fix in source + unit tests** (`test/first-load-race.test.ts`). Watch-only UI, exclusive `waitForReady`, per-device local DB filename. **Not** an in-browser IndexedDB flush proof |
+| Lynx-for-Web Host helper (`attach` + WASQLite factory ESM URL) | **Built**. Served by `pnpm dev:web` / `pnpm preview:web` |
+| Compose profile `sync` (Postgres + PowerSync + demo-api) | **Checked in**. Image pull / container start is **not verified** in every environment. If `journeyapps/powersync-service` cannot be pulled or exits, the app stays a local offline queue |
+| Demo token endpoint | **Static HS256 JWT** minted by `demo-api` with the compose-stack secret. **Not** a JourneyApps / PowerSync Cloud account. **Not** RS256/JWKS from a real IdP |
+| `uploadData` | POSTs CRUD to `demo-api`, which writes Postgres. **Not** a production app backend |
+| Two-window money shot (A writes, B sees it via PowerSync) | **Documented procedure below**. **Not verified** in this checkout against a live PowerSync container |
+| Offline / reconnect beat (queue writes, reconnect, watch them sync) | **Documented**. In-app **Go offline / Reconnect** is `disconnect()` / `connect()`, not an OS network drop. Chrome DevTools "Offline" is the network-drop variant. **Not verified** here against a live service |
 | Live `/sync/stream` incremental delivery on iOS / Android / Windows / macOS | **Not verified** |
-| `disconnect()` cancelling a live stream (native `fetch` honoring `AbortSignal`) | **Not verified** |
-| Physical iOS / Android / Windows / macOS Autolink host run | **Not verified** in this environment. Native hosts are scaffolded |
+| `disconnect()` cancelling a live native stream | **Not verified** |
+| Physical iOS / Android / Windows / macOS Autolink host run | **Not verified**. Native hosts remain recipe-only |
 | Lynx Explorer | **Will not work** for SQL: Explorer does not register `NativePowerSyncModule` |
+| `pnpm publish` to npmjs | **Workflow checked in** (`.github/workflows/publish.yml`). **Not run** from this task |
+| Publish dry-run to local Verdaccio | **Scripted** (`pnpm publish-dry-run`). Requires compose profile `registry` |
 
 Do not treat a successful web build as proof of per-platform sync.
 
+## Prerequisites
 
-## What you should see
+- pnpm **12** (`package.json` `packageManager` is `pnpm@12.3.4`)
+- Node 20.19+ or 22.12+
+- Docker with Compose v2 (profiles)
+- Two browser windows for the money shot
 
-The UI is a todo showcase:
+## 1. Start the local sync stack
 
-1. **DB ready** pill after `waitForReady`
-2. Three seeded lists (Groceries, Weekend project, Showcase) via `writeTransaction`
-3. Todos update through `watch` when you add or toggle items
-4. **writeTransaction batch** inserts three todos atomically
-5. Workflow log records each API (`get`, `getAll`, `execute`, `watch`, `connect`, `syncStream`)
-6. Connector defaults to **offline demo** (`fetchCredentials` returns `null`). Optional endpoint + JWT calls `connect` + `syncStream("todos").subscribe()` + `waitForFirstSync` (4s timeout)
+From `examples/`:
 
-`uploadData` **completes the local CRUD queue**. It does not POST to an app backend.
+```bash
+docker compose --profile sync up --build
+```
 
-## Run: Lynx-for-Web (the path to try first)
+This starts:
+
+| Service | Port | What it is |
+|---|---|---|
+| `postgres` | 5432 | Demo schema (`todos`) + `powersync` publication, `wal_level=logical` |
+| `mongo` + `mongo-rs-init` | internal | PowerSync **bucket storage**. Same approach as the official self-host demo. Not the app data model |
+| `powersync` | 8080 | `journeyapps/powersync-service` replicating Postgres |
+| `demo-api` | 8081 | `GET /token` (HS256 JWT) and `POST /upload` (CRUD → Postgres) |
+
+The JWT is a **dev token**: HS256, subject `demo-user`, 12h expiry, signed with the compose-stack secret. The TODO app fetches it on boot. You do not paste a JWT.
+
+If the PowerSync image cannot run in your environment, the TODO app still opens, logs `connect skipped: …`, and queues writes locally.
+
+```bash
+# optional: confirm the token endpoint
+curl -s http://127.0.0.1:8081/health
+curl -s http://127.0.0.1:8081/token
+```
+
+## 2. Run the web TODO app
 
 From `examples/showcase`:
 
@@ -74,68 +97,90 @@ From `examples/showcase`:
 pnpm dev:web
 ```
 
-This:
+This bundles `dist/web-host/factory.js`, builds Rspeedy `web` + `lynx`, and
+starts the Vite host at **http://localhost:4173**.
 
-1. Bundles `dist/web-host/factory.js` in the library
-2. Builds Rspeedy `web` + `lynx` artifacts into `lynx-dist/`
-3. Starts the Vite host at **http://localhost:4173**
-
-The host page imports `attach` from `powersync-lynx/web-host`, calls it on
-`<lynx-view>` **before** setting `url` to `/main.web.bundle`. Vite rewrites
-`import.meta.url` so the lynx-bg factory and `@powersync/web` workers stay
-executable ESM (the PR 7 factory mechanism).
+Production-style preview:
 
 ```bash
-pnpm build          # rspeedy web + lynx
-pnpm preview:web    # production host-dist
+pnpm build
+pnpm preview:web
 ```
 
-Rspeedy `source.include` compiles `@powersync/common`, `@powersync/shared-internals`,
-and the Client TypeScript (PrimJS does not accept untransformed `??=`).
+## 3. Money shot (two windows, one account)
 
-## Run: iOS (native host)
+Each `?device=` value gets its **own WASQLite file**. Two windows on the same
+origin without that query param share IndexedDB and would fake the demo.
 
-1. `pnpm build` in `examples/showcase` (lynx bundle)
-2. Follow [`hosts/ios/README.md`](hosts/ios/README.md): Autolink Podfile,
-   `LynxService/Http`, PageConfig `enableFetchAPIStandardStreaming = true`
-3. Point `LynxView` at `lynx-dist/main.lynx.bundle`
+1. Window A: http://localhost:4173/?device=a
+2. Window B: http://localhost:4173/?device=b
+3. Wait until both show **DB ready**. Sync pill should move to **connected** if the compose stack is up (otherwise both stay offline — that is not the money shot).
+4. In A, add a todo. Open the **Sync log** drawer: you should see `insert:` then `upload:`.
+5. In B, the same todo should appear via `watch` after PowerSync downloads it. Toggle complete in A; B should follow. Delete in A; B should drop it.
 
-**Not verified here:** Xcode build, simulator/device, live streaming, cancellation.
+If B never updates: the stack is down, `uploadData` failed (log it), or the two windows share a device id. Filter pills are local-only (they do not sync).
 
-## Run: Android (native host)
+## 4. Offline / reconnect beat
 
-1. `pnpm build` in `examples/showcase`
-2. Follow [`hosts/android/README.md`](hosts/android/README.md): Autolink Gradle
-   plugins, `lynx-service-http`, `LynxHttpService` registration, streaming flag
-3. Point LynxView at `lynx-dist/main.lynx.bundle`
+In window A:
 
-**Not verified here:** Gradle APK, emulator/device, live streaming, cancellation.
+1. Tap **Go offline**. Log: `disconnected` / `offline: disconnected; local writes will queue`.
+2. Add or toggle a todo. It stays local. Window B does not see it yet.
+3. Tap **Reconnect**. Log: `reconnect:` then `upload:` then B catches up.
 
-## Run: Windows and macOS (native hosts)
+Chrome DevTools → Network → Offline is the OS-drop variant of the same beat. The in-app button is `db.disconnect()` / `db.connect()`, which is enough to queue CRUD and replay it.
 
-Scaffold only: [`hosts/desktop/README.md`](hosts/desktop/README.md).
-`pluginLynxtron()` + `powersync-lynx/lynxtron`. Desktop HTTP Service is a stub
-in Lynx's own integration guide. **Not launched in this environment.**
+## 5. Publish dry-run (Verdaccio)
+
+```bash
+# from examples/
+docker compose --profile registry up -d
+
+# from the repository root — pnpm 12
+pnpm publish-dry-run
+```
+
+That publishes `powersync-lynx` to `http://localhost:4873`, installs it into a
+scratch consumer, and checks `src/index.ts` plus `dist/web-host/factory.js`
+(the factory default export is a function). Real npm publish is
+`.github/workflows/publish.yml` (`workflow_dispatch` and `v*` tags, provenance).
+That workflow is **not** test/lint CI.
+
+Both profiles at once:
+
+```bash
+docker compose --profile sync --profile registry up --build
+```
+
+## What you should see in the app
+
+1. **DB ready** after `waitForReady`
+2. Empty list on first load (no local seed — Postgres is the source of truth when the stack is up)
+3. Add / complete-toggle / delete / filter
+4. Collapsible **Sync log**: connect, disconnect, upload/download, CRUD, errors, timestamps
+5. **Go offline / Reconnect**
+
+`uploadData` writes Postgres through `demo-api`. It does not POST to a cloud backend.
+
+## Run: iOS / Android / Windows / macOS
+
+Web is the path to try first. Native hosts are still recipe-only:
+
+- iOS: [`hosts/ios/README.md`](hosts/ios/README.md)
+- Android: [`hosts/android/README.md`](hosts/android/README.md)
+- Windows / macOS: [`hosts/desktop/README.md`](hosts/desktop/README.md)
+
+**Not verified here:** Xcode / Gradle / Lynxtron launch, live streaming, cancellation.
 
 ## Lint / format
 
-`examples/` is a ReactLynx consumer (component props, JSX, Rspeedy/Vite). The
-library anti-slop plugin (`no-object-parameters`) is incompatible with React
-function components, so **root oxlint ignores `examples/`**. oxfmt still
-formats showcase TypeScript. Generated `lynx-dist/`, `host-dist/`, and
-`node_modules/` are ignored.
-
-Root checks (library):
+`examples/` is a ReactLynx consumer. Root oxlint ignores `examples/` (anti-slop
+`no-object-parameters` vs React props). oxfmt still formats showcase TypeScript.
 
 ```bash
 pnpm lint
 pnpm typecheck
 pnpm test
-```
-
-Showcase checks:
-
-```bash
 pnpm --dir examples/showcase typecheck
 pnpm --dir examples/showcase build
 ```
@@ -145,12 +190,12 @@ pnpm --dir examples/showcase build
 ```
 examples/
   README.md                 this guide
-  showcase/                 ReactLynx app + Lynx-for-Web host
-    src/                    Lynx bundle (Schema, Connector, UI)
+  docker-compose.yml        profiles: sync, registry
+  sync/                     PowerSync config, Postgres init, demo-api
+  registry/                 Verdaccio config
+  scripts/publish-dry-run.mjs
+  showcase/                 ReactLynx TODO + Lynx-for-Web host
+    src/                    Schema, Connector, UI, log drawer
     host/                   attach() page (Vite)
-    lynx.config.ts          environments.web + environments.lynx
-  hosts/
-    ios/                    Autolink + HTTP Service recipe
-    android/                Autolink + HTTP Service recipe
-    desktop/                Lynxtron scaffold
+  hosts/                    Autolink recipes (unverified runs)
 ```

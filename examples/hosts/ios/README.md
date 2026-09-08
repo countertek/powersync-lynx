@@ -1,6 +1,6 @@
 # iOS native host (Autolink)
 
-This is a drop-in recipe for a Lynx **4.0+** iOS host that loads the showcase bundle
+This is a drop-in recipe for a Lynx **4.0+** iOS host that loads the TODO app bundle
 and Autolinks `powersync-lynx`. It is not a full Xcode project.
 
 Lynx Explorer does **not** register `NativePowerSyncModule` (SQL fails at

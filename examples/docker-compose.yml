@@ -1,0 +1,134 @@
+# Local demo stack for the examples TODO app.
+#
+#   docker compose --profile sync up --build
+#   docker compose --profile registry up
+#   docker compose --profile sync --profile registry up --build
+#
+# Profile `sync`:
+#   Postgres (logical replication) + MongoDB (PowerSync bucket storage, same
+#   as the official self-host demo) + journeyapps/powersync-service + a tiny
+#   demo-api that mints an HS256 JWT and applies CRUD to Postgres.
+#
+# Profile `registry`:
+#   Verdaccio on :4873 for `pnpm publish-dry-run`.
+#
+# The PowerSync image is public on Docker Hub. This stack does not require a
+# JourneyApps cloud account. If the image cannot be pulled or the container
+# exits, the TODO app still runs as a local offline queue.
+
+name: powersync-lynx-examples
+
+services:
+  postgres:
+    profiles: ["sync"]
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./sync/postgres-init.sql:/docker-entrypoint-initdb.d/01-todos.sql:ro
+    command: ["postgres", "-c", "wal_level=logical"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  mongo:
+    profiles: ["sync"]
+    image: mongo:7.0
+    command: --replSet rs0 --bind_ip_all --quiet
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  mongo-rs-init:
+    profiles: ["sync"]
+    image: mongo:7.0
+    depends_on:
+      mongo:
+        condition: service_healthy
+    restart: on-failure
+    entrypoint:
+      - bash
+      - -c
+      - >
+        mongosh --host mongo:27017 --eval
+        'try{rs.status().ok && quit(0)} catch(e){}
+        rs.initiate({_id:"rs0", version:1, members:[{_id:0, host:"mongo:27017"}]})'
+
+  powersync:
+    profiles: ["sync"]
+    image: journeyapps/powersync-service:latest
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mongo-rs-init:
+        condition: service_completed_successfully
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./sync:/config:ro
+    environment:
+      POWERSYNC_CONFIG_PATH: /config/config.yaml
+      PS_PORT: "8080"
+      PS_DATA_SOURCE_URI: postgres://postgres:postgres@postgres:5432/postgres
+      PS_MONGO_URI: mongodb://mongo:27017/powersync_demo?replicaSet=rs0
+      # base64url of a 32-byte local-demo secret. Same value is used by demo-api to sign JWTs.
+      PS_CLIENT_AUTH_KEY: ZGV2LXNoYXJlZC1zZWNyZXQtZm9yLWRlbW8tb25seS0zMmI
+    command: ["start"]
+    restart: unless-stopped
+
+  demo-api:
+    profiles: ["sync"]
+    build:
+      context: ./sync
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8081:8081"
+    environment:
+      TOKEN_PORT: "8081"
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: postgres
+      POWERSYNC_PUBLIC_URL: http://127.0.0.1:8080
+      DEMO_USER_ID: demo-user
+      PS_CLIENT_AUTH_KEY: ZGV2LXNoYXJlZC1zZWNyZXQtZm9yLWRlbW8tb25seS0zMmI
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8081/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  registry:
+    profiles: ["registry"]
+    image: verdaccio/verdaccio:6
+    ports:
+      - "4873:4873"
+    volumes:
+      - ./registry/config.yaml:/verdaccio/conf/config.yaml:ro
+      - verdaccio_storage:/verdaccio/storage
+
+volumes:
+  postgres_data:
+  mongo_data:
+  verdaccio_storage:

@@ -25,6 +25,19 @@ export function hostLabel(): string {
   return "unknown";
 }
 
+export function deviceId(): string {
+  try {
+    const lynxGlobal = lynx as { __globalProps?: { device?: string } };
+    const device = lynxGlobal.__globalProps?.device;
+    if (device != null && device.length > 0) {
+      return device;
+    }
+  } catch {
+    // globalProps is optional; default isolates one local DB per origin.
+  }
+  return "web";
+}
+
 export interface QueryRows {
   array?: unknown[];
   rows?: { _array?: unknown[] };

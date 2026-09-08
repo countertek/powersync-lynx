@@ -1,6 +1,6 @@
 # Android native host (Autolink)
 
-This is a drop-in recipe for a Lynx **4.0+** Android host that loads the showcase
+This is a drop-in recipe for a Lynx **4.0+** Android host that loads the TODO app
 bundle and Autolinks `powersync-lynx`. It is not a full Android Studio app.
 
 Lynx Explorer does **not** register `NativePowerSyncModule`. There is no

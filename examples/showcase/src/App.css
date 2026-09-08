@@ -1,19 +1,18 @@
 :root {
-  background-color: #07111f;
+  --bg: #050910;
   --ink: #e7eefc;
   --muted: #93a0b8;
   --accent: #2ee6d6;
-  --card: #121c2e;
+  --card: #0c1422;
   --line: #24324a;
-  --warn: #ffb020;
-  --danger: #ff6b6b;
+  --warn: #3a2a12;
+  --error: #3a1518;
 }
 
 .Page {
-  width: 100%;
-  height: 100%;
+  min-height: 100%;
   padding: 20px;
-  background-color: #07111f;
+  background-color: var(--bg);
 }
 
 .Hero {
@@ -22,22 +21,22 @@
 
 .Eyebrow {
   color: var(--accent);
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 1px;
+  font-size: 12px;
+  letter-spacing: 0.08em;
 }
 
 .Title {
   color: var(--ink);
   font-size: 28px;
-  font-weight: 800;
-  margin-top: 6px;
+  font-weight: 700;
+  margin-top: 4px;
 }
 
 .Sub {
   color: var(--muted);
   font-size: 14px;
-  margin-top: 8px;
+  margin-top: 6px;
+  line-height: 1.4;
 }
 
 .Row {
@@ -48,15 +47,13 @@
 }
 
 .Pill {
-  background-color: #163246;
+  background-color: var(--card);
+  border-color: var(--line);
+  border-width: 1px;
   border-radius: 999px;
   padding: 6px 12px;
   margin-right: 8px;
   margin-bottom: 8px;
-}
-
-.Pill--warn {
-  background-color: #3a2a12;
 }
 
 .PillLabel {
@@ -65,25 +62,20 @@
 }
 
 .Banner {
-  background-color: #132033;
+  background-color: var(--card);
   border-radius: 12px;
   padding: 12px;
   margin-bottom: 16px;
 }
 
 .Banner--error {
-  background-color: #3a1518;
+  background-color: var(--error);
 }
 
 .BannerText {
-  color: var(--muted);
+  color: var(--ink);
   font-size: 13px;
-  line-height: 20px;
-}
-
-.Grid {
-  display: flex;
-  flex-direction: column;
+  line-height: 1.4;
 }
 
 .Card {
@@ -95,54 +87,53 @@
 
 .CardTitle {
   color: var(--ink);
-  font-size: 18px;
-  font-weight: 700;
-  margin-bottom: 10px;
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 8px;
 }
 
 .CardHint {
   color: var(--muted);
-  font-size: 13px;
-  line-height: 18px;
-  margin-bottom: 10px;
+  font-size: 12px;
+  margin-bottom: 8px;
 }
 
 .Composer {
   display: flex;
   flex-direction: row;
-  margin-bottom: 10px;
+  margin-bottom: 12px;
 }
 
 .Field {
   flex: 1;
   height: 36px;
-  border-radius: 8px;
-  background-color: #0b1626;
-  color: var(--ink);
   padding: 0 10px;
-  font-size: 14px;
-  margin-bottom: 8px;
+  margin-right: 8px;
+  color: var(--ink);
+  background-color: var(--bg);
+  border-color: var(--line);
+  border-width: 1px;
+  border-radius: 8px;
 }
 
 .Btn {
   background-color: var(--accent);
   border-radius: 8px;
   padding: 8px 12px;
-  margin-left: 8px;
+  margin-right: 8px;
   margin-bottom: 8px;
-  align-items: center;
-  justify-content: center;
 }
 
 .Btn--ghost {
-  background-color: #1b2a40;
-  margin-left: 0px;
+  background-color: transparent;
+  border-color: var(--line);
+  border-width: 1px;
 }
 
 .BtnLabel {
-  color: #06201c;
+  color: #04221f;
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .Btn--ghost .BtnLabel {
@@ -150,15 +141,17 @@
 }
 
 .Item {
-  padding: 10px 0px;
-  border-bottom-width: 1px;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  padding: 8px 0;
   border-bottom-color: var(--line);
+  border-bottom-width: 1px;
 }
 
-.Item--active {
-  background-color: #17324a;
-  border-radius: 8px;
-  padding: 10px 8px;
+.ItemMain {
+  flex: 1;
+  padding-right: 8px;
 }
 
 .ItemTitle {
@@ -170,10 +163,8 @@
   color: var(--muted);
 }
 
-.ItemMeta {
-  color: var(--muted);
-  font-size: 11px;
-  margin-top: 2px;
+.LogHead {
+  margin-bottom: 8px;
 }
 
 .LogRow {

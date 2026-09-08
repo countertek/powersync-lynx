@@ -1,12 +1,21 @@
 import { useCallback, useEffect, useState } from "@lynx-js/react";
 
-import { demoConnector, hasDemoCredentials, setDemoCredentials } from "./connector.ts";
-import { db } from "./database.ts";
-import { seedIfEmpty } from "./seed.ts";
-import type { ListRow, TodoRow } from "./schema.ts";
-import { errorMessage, hostLabel, newId, nowIso, rowArray } from "./util.ts";
+import { createSnapshotGate } from "./boot.ts";
+import {
+  DEMO_POWERSYNC_URL,
+  demoConnector,
+  fetchDemoCredentials,
+  hasDemoCredentials,
+  setConnectorLog,
+  setDemoCredentials,
+} from "./connector.ts";
+import { db, waitForDemoReady } from "./database.ts";
+import type { TodoRow } from "./schema.ts";
+import { deviceId, errorMessage, hostLabel, newId, nowIso, rowArray } from "./util.ts";
 
 import "./App.css";
+
+type Filter = "all" | "active" | "done";
 
 interface LogEntry {
   id: string;
@@ -18,147 +27,166 @@ interface LynxInputEvent {
   detail: { value: string };
 }
 
-const LIST_WATCH_SQL = "SELECT * FROM lists ORDER BY created_at";
-const TODO_WATCH_SQL = "SELECT * FROM todos WHERE list_id = ? ORDER BY created_at";
-
-const MISSING_MODULE_HINT =
-  "NativePowerSyncModule is not registered on this host. Lynx Explorer does not ship it. Use the Lynx-for-Web host (attach + WASQLite) or an Autolink native host. See examples/README.md.";
-
 interface FatalState {
   title: string;
   detail: string;
 }
 
-interface LiveTodos {
-  unsubscribe(): void;
-}
+const TODO_WATCH_SQL = "SELECT * FROM todos ORDER BY created_at";
 
-let liveTodos: LiveTodos | null = null;
+const MISSING_MODULE_HINT =
+  "NativePowerSyncModule is not registered on this host. Lynx Explorer does not ship it. Use the Lynx-for-Web host (attach + WASQLite) or an Autolink native host. See examples/README.md.";
 
 function isMissingNativeModule(message: string): boolean {
   return message.includes("NativePowerSyncModule is not registered");
 }
 
 function fatalFromError(err: unknown): FatalState {
-  const message = errorMessage(err);
-  if (isMissingNativeModule(message)) {
-    return {
-      title: "Native Module missing",
-      detail: `${message}\n\n${MISSING_MODULE_HINT}`,
-    };
+  const detail = errorMessage(err);
+  if (isMissingNativeModule(detail)) {
+    return { title: "NativePowerSyncModule is not registered", detail: MISSING_MODULE_HINT };
   }
-  return { title: "Could not open", detail: message };
-}
-
-function asListRows(value: unknown[]): ListRow[] {
-  return value.filter(
-    (row): row is ListRow => row instanceof Object && "id" in row && "name" in row,
-  );
+  return { title: "Database failed to open", detail };
 }
 
 function asTodoRows(value: unknown[]): TodoRow[] {
   return value.filter(
     (row): row is TodoRow =>
-      row instanceof Object && "id" in row && "list_id" in row && "description" in row,
+      row instanceof Object && "id" in row && "description" in row && "completed" in row,
   );
+}
+
+function matchesFilter(todo: TodoRow, filter: Filter): boolean {
+  if (filter === "active") {
+    return todo.completed === 0;
+  }
+  if (filter === "done") {
+    return todo.completed === 1;
+  }
+  return true;
 }
 
 export function App() {
   const [ready, setReady] = useState(false);
   const [fatal, setFatal] = useState<FatalState | null>(null);
-  const [lists, setLists] = useState<ListRow[]>([]);
   const [todos, setTodos] = useState<TodoRow[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [listDraft, setListDraft] = useState("");
-  const [todoDraft, setTodoDraft] = useState("");
-  const [listField, setListField] = useState(0);
-  const [todoField, setTodoField] = useState(0);
-  const [endpoint, setEndpoint] = useState("");
-  const [token, setToken] = useState("");
-  const [syncLabel, setSyncLabel] = useState("offline demo");
+  const [filter, setFilter] = useState<Filter>("all");
+  const [draft, setDraft] = useState("");
+  const [draftField, setDraftField] = useState(0);
+  const [syncLabel, setSyncLabel] = useState("offline");
+  const [wantSync, setWantSync] = useState(true);
+  const [logOpen, setLogOpen] = useState(true);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const platform = hostLabel();
+  const device = deviceId();
 
   const log = useCallback((message: string) => {
-    setLogs((prev) => [{ id: newId(), at: nowIso(), message }, ...prev].slice(0, 24));
+    setLogs((prev) => [{ id: newId(), at: nowIso(), message }, ...prev].slice(0, 40));
   }, []);
 
   useEffect(() => {
+    setConnectorLog(log);
+    return () => setConnectorLog(() => {});
+  }, [log]);
+
+  useEffect(() => {
     let cancelled = false;
+    let lastConnected = false;
+    let lastUploading = false;
+    let lastDownloading = false;
+    let everConnected = false;
     const stopStatus = db.registerListener({
       statusChanged(status) {
-        const connected = status.connected ? "connected" : "not connected";
-        setSyncLabel(status.connecting ? "connecting" : connected);
+        const connected = status.connected === true;
+        const uploading = status.dataFlowStatus?.uploading === true;
+        const downloading = status.dataFlowStatus?.downloading === true;
+        if (status.connecting === true) {
+          setSyncLabel("connecting");
+        } else {
+          setSyncLabel(connected ? "connected" : "offline");
+        }
+        if (connected && !lastConnected) {
+          log(everConnected ? "reconnected" : "connected");
+          everConnected = true;
+        }
+        if (!connected && lastConnected) {
+          log("disconnected");
+        }
+        if (uploading && !lastUploading) {
+          log("upload in progress");
+        }
+        if (!uploading && lastUploading) {
+          log("upload idle");
+        }
+        if (downloading && !lastDownloading) {
+          log("download in progress");
+        }
+        if (!downloading && lastDownloading) {
+          log("download idle");
+        }
+        lastConnected = connected;
+        lastUploading = uploading;
+        lastDownloading = downloading;
       },
     });
-    (async () => {
-      try {
-        await db.waitForReady();
+
+    waitForDemoReady()
+      .then(async () => {
         if (cancelled) {
           return;
         }
         log("waitForReady: database open");
-        const seeded = await seedIfEmpty(db);
-        log(
-          seeded
-            ? "writeTransaction: seeded lists + todos"
-            : "seed skipped (lists already present)",
-        );
-        const first = await db.getOptional<ListRow>(
-          "SELECT * FROM lists ORDER BY created_at LIMIT 1",
-        );
-        if (first != null) {
-          setSelectedId(first.id);
-          log(`get: first list "${first.name}"`);
+        try {
+          const creds = await fetchDemoCredentials();
+          if (cancelled) {
+            return;
+          }
+          if (creds == null) {
+            log("token: demo API returned no credentials; staying offline");
+            return;
+          }
+          setDemoCredentials(creds);
+          await db.connect(demoConnector);
+          log(`connect: ${DEMO_POWERSYNC_URL} as ${device}`);
+        } catch (err) {
+          log(
+            `connect skipped: ${errorMessage(err)}. Start the sync profile (examples/README.md). Writes still queue locally.`,
+          );
         }
-        const all = await db.getAll<ListRow>("SELECT * FROM lists ORDER BY created_at");
-        log(`getAll: ${all.length} lists`);
-        setReady(true);
-      } catch (err) {
+      })
+      .then(() => {
+        if (!cancelled) {
+          setReady(true);
+        }
+      })
+      .catch((err: unknown) => {
         setFatal(fatalFromError(err));
         log(`open failed: ${errorMessage(err)}`);
-      }
-    })();
+      });
+
     return () => {
       cancelled = true;
       stopStatus();
     };
-  }, [log]);
+  }, [device, log]);
 
   useEffect(() => {
     if (!ready) {
       return;
     }
     const abort = new AbortController();
+    const gate = createSnapshotGate();
     db.watch(
-      LIST_WATCH_SQL,
+      TODO_WATCH_SQL,
       [],
       {
         onResult(result) {
-          const next = asListRows(rowArray(result));
-          setLists(next);
-        },
-        onError(err) {
-          log(`lists watch: ${errorMessage(err)}`);
-        },
-      },
-      { signal: abort.signal },
-    );
-    return () => abort.abort();
-  }, [log, ready]);
-
-  useEffect(() => {
-    if (!ready || selectedId == null) {
-      setTodos([]);
-      return;
-    }
-    const abort = new AbortController();
-    db.watch(
-      TODO_WATCH_SQL,
-      [selectedId],
-      {
-        onResult(result) {
-          setTodos(asTodoRows(rowArray(result)));
+          const token = gate.take();
+          const next = asTodoRows(rowArray(result));
+          if (!gate.isCurrent(token)) {
+            return;
+          }
+          setTodos(next);
         },
         onError(err) {
           log(`todos watch: ${errorMessage(err)}`);
@@ -167,131 +195,83 @@ export function App() {
       { signal: abort.signal },
     );
     return () => abort.abort();
-  }, [log, ready, selectedId]);
-
-  const addList = useCallback(async () => {
-    const name = listDraft.trim();
-    if (name.length === 0) {
-      return;
-    }
-    const id = newId();
-    try {
-      await db.execute("INSERT INTO lists (id, name, created_at, owner_id) VALUES (?, ?, ?, ?)", [
-        id,
-        name,
-        nowIso(),
-        "demo",
-      ]);
-      setListDraft("");
-      setListField((n) => n + 1);
-      setSelectedId(id);
-      log(`execute: inserted list "${name}"`);
-    } catch (err) {
-      log(`execute failed: ${errorMessage(err)}`);
-    }
-  }, [listDraft, log]);
+  }, [log, ready]);
 
   const addTodo = useCallback(async () => {
-    if (selectedId == null) {
-      return;
-    }
-    const description = todoDraft.trim();
+    const description = draft.trim();
     if (description.length === 0) {
       return;
     }
     try {
       await db.execute(
-        "INSERT INTO todos (id, list_id, description, completed, created_at, completed_at) VALUES (?, ?, ?, ?, ?, ?)",
-        [newId(), selectedId, description, 0, nowIso(), null],
+        "INSERT INTO todos (id, description, completed, created_at, completed_at) VALUES (?, ?, ?, ?, ?)",
+        [newId(), description, 0, nowIso(), null],
       );
-      setTodoDraft("");
-      setTodoField((n) => n + 1);
-      log(`execute: inserted todo "${description}"`);
+      setDraft("");
+      setDraftField((n) => n + 1);
+      log(`insert: "${description}"`);
     } catch (err) {
-      log(`execute failed: ${errorMessage(err)}`);
+      log(`insert failed: ${errorMessage(err)}`);
     }
-  }, [log, selectedId, todoDraft]);
+  }, [draft, log]);
 
   const toggleTodo = useCallback(
     async (todo: TodoRow) => {
       const completed = todo.completed ? 0 : 1;
       const completedAt = completed === 1 ? nowIso() : null;
       try {
-        await db.writeTransaction(async (tx) => {
-          await tx.execute("UPDATE todos SET completed = ?, completed_at = ? WHERE id = ?", [
-            completed,
-            completedAt,
-            todo.id,
-          ]);
-        });
-        log(`writeTransaction: toggled "${todo.description}"`);
+        await db.execute("UPDATE todos SET completed = ?, completed_at = ? WHERE id = ?", [
+          completed,
+          completedAt,
+          todo.id,
+        ]);
+        log(`toggle: "${todo.description}" -> ${completed === 1 ? "done" : "active"}`);
       } catch (err) {
-        log(`writeTransaction failed: ${errorMessage(err)}`);
+        log(`toggle failed: ${errorMessage(err)}`);
       }
     },
     [log],
   );
 
-  const addBatch = useCallback(async () => {
-    if (selectedId == null) {
-      return;
-    }
-    const createdAt = nowIso();
-    try {
-      await db.writeTransaction(async (tx) => {
-        for (const description of ["Batch item A", "Batch item B", "Batch item C"]) {
-          await tx.execute(
-            "INSERT INTO todos (id, list_id, description, completed, created_at, completed_at) VALUES (?, ?, ?, ?, ?, ?)",
-            [newId(), selectedId, description, 0, createdAt, null],
-          );
-        }
-      });
-      log("writeTransaction: inserted 3 batch todos");
-    } catch (err) {
-      log(`writeTransaction failed: ${errorMessage(err)}`);
-    }
-  }, [log, selectedId]);
-
-  const connectLive = useCallback(async () => {
-    setDemoCredentials({ endpoint, token });
-    if (!hasDemoCredentials()) {
-      log("connect skipped: endpoint and token are required");
-      return;
-    }
-    try {
-      liveTodos?.unsubscribe();
-      liveTodos = null;
-      await db.disconnect();
-      await db.connect(demoConnector);
-      log("connect: Connector attached (HTTP). Live streaming is not verified on this host.");
-      setSyncLabel("connecting");
+  const deleteTodo = useCallback(
+    async (todo: TodoRow) => {
       try {
-        const sub = await db.syncStream("todos").subscribe();
-        liveTodos = sub;
-        log('syncStream("todos").subscribe() returned');
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        try {
-          const timeout = new Promise<never>((_resolve, reject) => {
-            timer = setTimeout(() => reject(new Error("waitForFirstSync timed out")), 4000);
-          });
-          await Promise.race([sub.waitForFirstSync(), timeout]);
-          log("waitForFirstSync: resolved");
-        } finally {
-          if (timer != null) {
-            clearTimeout(timer);
-          }
-        }
+        await db.execute("DELETE FROM todos WHERE id = ?", [todo.id]);
+        log(`delete: "${todo.description}"`);
       } catch (err) {
-        log(
-          `sync subscribe / waitForFirstSync: ${errorMessage(err)} (not verified on a live host)`,
-        );
+        log(`delete failed: ${errorMessage(err)}`);
       }
-    } catch (err) {
-      log(`connect failed: ${errorMessage(err)}`);
-    }
-  }, [endpoint, log, token]);
+    },
+    [log],
+  );
 
-  const selected = lists.find((row) => row.id === selectedId) ?? null;
+  const goOffline = useCallback(async () => {
+    setWantSync(false);
+    try {
+      await db.disconnect();
+      log("offline: disconnected; local writes will queue");
+    } catch (err) {
+      log(`offline failed: ${errorMessage(err)}`);
+    }
+  }, [log]);
+
+  const goOnline = useCallback(async () => {
+    setWantSync(true);
+    try {
+      if (!hasDemoCredentials()) {
+        const creds = await fetchDemoCredentials();
+        if (creds != null) {
+          setDemoCredentials(creds);
+        }
+      }
+      await db.connect(demoConnector);
+      log("reconnect: connect() called");
+    } catch (err) {
+      log(`reconnect failed: ${errorMessage(err)}`);
+    }
+  }, [log]);
+
+  const visible = todos.filter((todo) => matchesFilter(todo, filter));
 
   if (fatal != null) {
     return (
@@ -311,9 +291,9 @@ export function App() {
     <scroll-view className="Page" scroll-y>
       <view className="Hero">
         <text className="Eyebrow">PowerSync on Lynx</text>
-        <text className="Title">Todo showcase</text>
+        <text className="Title">TODO</text>
         <text className="Sub">
-          Schema, local CRUD, watch, Connector, and Sync Stream subscribe on {platform}
+          One screen. Add, complete, delete, filter. Device {device} on {platform}.
         </text>
       </view>
 
@@ -324,104 +304,82 @@ export function App() {
         <view className="Pill">
           <text className="PillLabel">sync {syncLabel}</text>
         </view>
-        <view className="Pill Pill--warn">
-          <text className="PillLabel">live stream unverified</text>
+        <view className="Pill">
+          <text className="PillLabel">device {device}</text>
         </view>
       </view>
 
-      <view className="Banner">
-        <text className="BannerText">
-          Verified here: SQL RPC, CRUD, watch, and the sync subscribe call path. Not verified: live
-          /sync/stream incremental delivery or disconnect cancellation on a physical iOS / Android /
-          Windows / macOS device.
-        </text>
+      <view className="Row">
+        <view
+          className={wantSync ? "Btn Btn--ghost" : "Btn"}
+          bindtap={wantSync ? goOffline : goOnline}
+        >
+          <text className="BtnLabel">{wantSync ? "Go offline" : "Reconnect"}</text>
+        </view>
       </view>
 
-      <view className="Grid">
-        <view className="Card">
-          <text className="CardTitle">Lists</text>
-          <view className="Composer">
-            <input
-              key={listField}
-              className="Field"
-              placeholder="New list"
-              default-value=""
-              bindinput={(e: LynxInputEvent) => setListDraft(e.detail.value)}
-            />
-            <view className="Btn" bindtap={addList}>
-              <text className="BtnLabel">Add</text>
-            </view>
+      <view className="Card">
+        <text className="CardTitle">Todos</text>
+        <view className="Composer">
+          <input
+            key={draftField}
+            className="Field"
+            placeholder="What needs doing?"
+            default-value=""
+            bindinput={(e: LynxInputEvent) => setDraft(e.detail.value)}
+          />
+          <view className="Btn" bindtap={addTodo}>
+            <text className="BtnLabel">Add</text>
           </view>
-          {lists.map((list) => (
-            <view
-              key={list.id}
-              className={selectedId === list.id ? "Item Item--active" : "Item"}
-              bindtap={() => setSelectedId(list.id)}
-            >
-              <text className="ItemTitle">{list.name}</text>
-              <text className="ItemMeta">{list.created_at}</text>
-            </view>
-          ))}
         </view>
-
-        <view className="Card">
-          <text className="CardTitle">{selected != null ? selected.name : "Todos"}</text>
-          <view className="Composer">
-            <input
-              key={todoField}
-              className="Field"
-              placeholder="New todo"
-              default-value=""
-              bindinput={(e: LynxInputEvent) => setTodoDraft(e.detail.value)}
-            />
-            <view className="Btn" bindtap={addTodo}>
-              <text className="BtnLabel">Add</text>
-            </view>
+        <view className="Row">
+          <view
+            className={filter === "all" ? "Btn" : "Btn Btn--ghost"}
+            bindtap={() => setFilter("all")}
+          >
+            <text className="BtnLabel">All</text>
           </view>
-          <view className="Btn Btn--ghost" bindtap={addBatch}>
-            <text className="BtnLabel">writeTransaction batch</text>
+          <view
+            className={filter === "active" ? "Btn" : "Btn Btn--ghost"}
+            bindtap={() => setFilter("active")}
+          >
+            <text className="BtnLabel">Active</text>
           </view>
-          {todos.map((todo) => (
-            <view key={todo.id} className="Item" bindtap={() => toggleTodo(todo)}>
+          <view
+            className={filter === "done" ? "Btn" : "Btn Btn--ghost"}
+            bindtap={() => setFilter("done")}
+          >
+            <text className="BtnLabel">Done</text>
+          </view>
+        </view>
+        {visible.map((todo) => (
+          <view key={todo.id} className="Item">
+            <view className="ItemMain" bindtap={() => toggleTodo(todo)}>
               <text className={todo.completed ? "ItemTitle ItemTitle--done" : "ItemTitle"}>
-                {todo.completed ? "✓ " : "○ "}
+                {todo.completed ? "[x] " : "[ ] "}
                 {todo.description}
               </text>
             </view>
-          ))}
-        </view>
-      </view>
-
-      <view className="Card">
-        <text className="CardTitle">Connector</text>
-        <text className="CardHint">
-          Default is offline demo (fetchCredentials returns null). Optional live connect needs a
-          PowerSync Service endpoint and JWT. uploadData completes locally; it does not POST to an
-          app backend.
-        </text>
-        <input
-          className="Field"
-          placeholder="PowerSync endpoint"
-          bindinput={(e: LynxInputEvent) => setEndpoint(e.detail.value)}
-        />
-        <input
-          className="Field"
-          placeholder="PowerSync JWT"
-          bindinput={(e: LynxInputEvent) => setToken(e.detail.value)}
-        />
-        <view className="Btn" bindtap={connectLive}>
-          <text className="BtnLabel">connect + subscribe</text>
-        </view>
-      </view>
-
-      <view className="Card">
-        <text className="CardTitle">Workflow log</text>
-        {logs.map((entry) => (
-          <view key={entry.id} className="LogRow">
-            <text className="LogAt">{entry.at}</text>
-            <text className="LogMsg">{entry.message}</text>
+            <view className="Btn Btn--ghost" bindtap={() => deleteTodo(todo)}>
+              <text className="BtnLabel">Delete</text>
+            </view>
           </view>
         ))}
+      </view>
+
+      <view className="Card">
+        <view className="LogHead" bindtap={() => setLogOpen((open) => !open)}>
+          <text className="CardTitle">Sync log {logOpen ? "v" : ">"}</text>
+          <text className="CardHint">{logs.length} events</text>
+        </view>
+        {logOpen
+          ? logs.map((entry) => (
+              <view key={entry.id} className="LogRow">
+                <text className="LogAt">{entry.at}</text>
+                <text className="LogMsg">{entry.message}</text>
+              </view>
+            ))
+          : null}
       </view>
     </scroll-view>
   );

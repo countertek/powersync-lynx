@@ -6,7 +6,7 @@ fallback, not a second product.
 
 ## What this environment verified
 
-- The ReactLynx **lynx** bundle compiles (same artifact as iOS/Android).
+- The ReactLynx **lynx** bundle compiles (same artifact as the web TODO app).
 - A Lynxtron desktop host was **not** launched here. Windows and macOS
   streaming are undocumented; the integration guide's HTTP Service example is
   a stub. Incremental delivery and `RequestInit.signal` cancellation are
