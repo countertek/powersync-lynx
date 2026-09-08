@@ -25,6 +25,7 @@ export type Cloneable =
   | boolean
   | bigint
   | ArrayBuffer
+  | Uint8Array
   | Cloneable[]
   | TaggedArrayBuffer
   | TaggedBigInt
@@ -49,6 +50,9 @@ export function encodeCloneable(value: Cloneable): Cloneable {
   }
   if (value instanceof ArrayBuffer) {
     return asCloneable({ [AB_TAG]: true, u8: Array.from(new Uint8Array(value)) });
+  }
+  if (value instanceof Uint8Array) {
+    return asCloneable({ [AB_TAG]: true, u8: Array.from(value) });
   }
   if (Array.isArray(value)) {
     return value.map(encodeCloneable);

@@ -277,15 +277,11 @@ async function openFile(
   loadWeb: LoadWeb,
 ): Promise<FileEntry> {
   let entry = files.get(fileKeyValue);
-  if (entry?.adapter) {
-    entry.refCount += 1;
-    return entry;
-  }
   if (entry?.pending) {
     await entry.pending;
-    if (!entry.adapter) {
-      throw new Error(`WASQLite open failed for ${dbFilename}`);
-    }
+    entry = files.get(fileKeyValue);
+  }
+  if (entry?.adapter) {
     entry.refCount += 1;
     return entry;
   }
@@ -316,13 +312,17 @@ async function openFile(
   try {
     await opening.pending;
   } catch (err) {
-    files.delete(fileKeyValue);
+    if (files.get(fileKeyValue) === opening) {
+      files.delete(fileKeyValue);
+    }
     throw err;
   } finally {
     opening.pending = null;
   }
   if (!opening.adapter) {
-    files.delete(fileKeyValue);
+    if (files.get(fileKeyValue) === opening) {
+      files.delete(fileKeyValue);
+    }
     throw new Error(`WASQLite open failed for ${dbFilename}`);
   }
   opening.refCount += 1;
@@ -389,8 +389,20 @@ async function dispatchClose(data: Cloneable): Promise<NativeEnvelope> {
   if (entry) {
     entry.refCount -= 1;
     if (entry.refCount <= 0) {
-      files.delete(conn.fileKey);
-      await entry.adapter?.close?.();
+      const adapter = entry.adapter;
+      entry.adapter = null;
+      const closing = Promise.resolve(adapter?.close?.()).then(() => undefined);
+      entry.pending = closing;
+      try {
+        await closing;
+      } finally {
+        if (entry.pending === closing) {
+          entry.pending = null;
+        }
+        if (files.get(conn.fileKey) === entry && entry.refCount <= 0 && entry.adapter == null) {
+          files.delete(conn.fileKey);
+        }
+      }
     }
   }
   return { ok: true };
