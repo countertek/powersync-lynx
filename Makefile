@@ -26,7 +26,12 @@ PNPM ?= $(shell \
 		printf '%s\n' "pnpm"; \
 	fi)
 
-.PHONY: deps test test-ios node win-node all
+ANDROID_SDK ?= $(ANDROID_HOME)
+ADB := $(ANDROID_SDK)/platform-tools/adb
+EMULATOR := $(ANDROID_SDK)/emulator/emulator
+ANDROID_AVD ?= Pixel_10_Pro
+
+.PHONY: deps test test-ios test-android node win-node all
 
 all: test node
 
@@ -72,6 +77,15 @@ $(IOS_TEST_BIN): deps ios/tests/ios_module_rpc_test.mm ios/src/NativePowerSyncMo
 
 test-ios: $(IOS_TEST_BIN)
 	$(IOS_TEST_BIN)
+
+test-android: android/host/gradlew
+	@if ! "$(ADB)" devices | awk 'NR>1 && $$2=="device"{found=1} END{exit !found}'; then \
+		echo "starting $(ANDROID_AVD)"; \
+		"$(EMULATOR)" -avd "$(ANDROID_AVD)" -no-window -no-audio -no-boot-anim -gpu auto >/tmp/powersync-lynx-emulator.log 2>&1 & \
+		"$(ADB)" wait-for-device; \
+		until [ "$$("$(ADB)" shell getprop sys.boot_completed | tr -d '\r')" = "1" ]; do sleep 2; done; \
+	fi
+	cd android/host && ./gradlew connectedDebugAndroidTest
 
 NODE_VENDOR := native-vendor/node_modules
 NAPI_INCLUDE := -I$(NODE_VENDOR)/@lynx-js/weak-node-api/headers \

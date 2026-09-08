@@ -1,0 +1,45 @@
+buildscript {
+  repositories {
+    google()
+    mavenCentral()
+  }
+  dependencies {
+    classpath "com.android.tools.build:gradle:8.7.2"
+  }
+}
+
+apply plugin: "com.android.application"
+
+android {
+  namespace "com.powersync.lynx.host"
+  compileSdk 36
+  buildToolsVersion "36.0.0"
+
+  defaultConfig {
+    applicationId "com.powersync.lynx.host"
+    minSdk 24
+    targetSdk 36
+    versionCode 1
+    versionName "1.0"
+    testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+  }
+
+  compileOptions {
+    sourceCompatibility JavaVersion.VERSION_11
+    targetCompatibility JavaVersion.VERSION_11
+  }
+
+  sourceSets {
+    main {
+      java.srcDirs = ["src/main/java", "../src/main/java"]
+    }
+  }
+}
+
+dependencies {
+  implementation "com.powersync:powersync-sqlite-core:0.5.3"
+  implementation "androidx.sqlite:sqlite-bundled:2.6.2"
+  implementation "androidx.annotation:annotation:1.9.1"
+  androidTestImplementation "androidx.test.ext:junit:1.2.1"
+  androidTestImplementation "androidx.test:runner:1.6.2"
+}
