@@ -285,6 +285,141 @@ test("fetchStream yields JSON checkpoint lines when the service honors Accept", 
   }
 });
 
+test("identifier fetchStream keeps NDJSON that arrived before addListener", async () => {
+  const listeners = new Map<string, (payload: unknown) => void>();
+  const previousLynx = (globalThis as { lynx?: unknown }).lynx;
+  const previousFetch = globalThis.fetch;
+  (globalThis as { lynx?: unknown }).lynx = {
+    getJSModule(name: string) {
+      if (name !== "GlobalEventEmitter") {
+        return undefined;
+      }
+      return {
+        addListener(eventName: string, fn: (payload: unknown) => void) {
+          listeners.set(eventName, fn);
+        },
+        emit(eventName: string, payload: unknown) {
+          listeners.get(eventName)?.(payload);
+        },
+      };
+    },
+  };
+  globalThis.fetch = ((_url, init) => {
+    const extension = (init as { lynxExtension?: { useStreaming?: boolean } } | undefined)?.lynxExtension;
+    if (extension?.useStreaming !== true) {
+      return new Promise(() => {});
+    }
+    queueMicrotask(() => {
+      const emitter = (
+        globalThis as {
+          lynx?: { getJSModule?: (name: string) => { emit?: (eventName: string, payload: unknown) => void } };
+        }
+      ).lynx?.getJSModule?.("GlobalEventEmitter");
+      emitter?.emit?.("stream-early", { event: "onData", data: NDJSON_LINE });
+      emitter?.emit?.("stream-early", { event: "onEnd" });
+    });
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      headers: { get: () => "application/x-ndjson" },
+      lynxExtension: { streamingId: "stream-early" },
+      get body() {
+        throw new Error("body used");
+      },
+    } as Response);
+  }) as typeof fetch;
+  try {
+    const remote = new LynxRemote(
+      { fetchCredentials: async () => ({ endpoint: "http://127.0.0.1:8080", token: "tok" }) },
+      { log() {} },
+    );
+    const stream = await remote.fetchStream({
+      path: "/sync/stream",
+      data: {},
+      abortSignal: new AbortController().signal,
+    });
+    const first = await Promise.race([
+      stream.next(),
+      new Promise<{ done: true; value: undefined }>((resolve) => {
+        setTimeout(() => resolve({ done: true, value: undefined }), 80);
+      }),
+    ]);
+    assert.equal(first.done, false, "checkpoint must not be dropped if onData raced ahead of addListener");
+    assert.deepEqual(JSON.parse(String(first.value)), { checkpoint: { last_op_id: "1" } });
+  } finally {
+    (globalThis as { lynx?: unknown }).lynx = previousLynx;
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("Android fetchStream keeps NDJSON that arrived before addListener", async () => {
+  const listeners = new Map<string, (payload: unknown) => void>();
+  const previousLynx = (globalThis as { lynx?: unknown }).lynx;
+  const previousModules = globalThis.NativeModules;
+  const previousInfo = (globalThis as { SystemInfo?: { platform?: string } }).SystemInfo;
+  (globalThis as { SystemInfo?: { platform?: string } }).SystemInfo = { platform: "Android" };
+  (globalThis as { lynx?: unknown }).lynx = {
+    getJSModule(name: string) {
+      if (name !== "GlobalEventEmitter") {
+        return undefined;
+      }
+      return {
+        addListener(eventName: string, fn: (payload: unknown) => void) {
+          listeners.set(eventName, fn);
+        },
+        emit(eventName: string, payload: unknown) {
+          listeners.get(eventName)?.(payload);
+        },
+      };
+    },
+  };
+  globalThis.NativeModules = {
+    LynxFetchModule: {
+      fetch(request: { headers?: Record<string, string> }, resolve: (response: unknown) => void) {
+        const body = serviceFaithfulBody(headerAccept(request.headers));
+        queueMicrotask(() => {
+          const emitter = (
+            globalThis as {
+              lynx?: { getJSModule?: (name: string) => { emit?: (eventName: string, payload: unknown) => void } };
+            }
+          ).lynx?.getJSModule?.("GlobalEventEmitter");
+          emitter?.emit?.("stream-early-and", { event: "onData", data: body });
+          emitter?.emit?.("stream-early-and", { event: "onEnd" });
+          resolve({
+            status: 200,
+            statusText: "OK",
+            lynxExtension: { streamingId: "stream-early-and" },
+          });
+        });
+      },
+    },
+  } as typeof globalThis.NativeModules;
+  try {
+    const remote = new LynxRemote(
+      { fetchCredentials: async () => ({ endpoint: "http://127.0.0.1:8080", token: "tok" }) },
+      { log() {} },
+    );
+    const stream = await remote.fetchStream({
+      path: "/sync/stream",
+      data: {},
+      abortSignal: new AbortController().signal,
+    });
+    const first = await Promise.race([
+      stream.next(),
+      new Promise<{ done: true; value: undefined }>((resolve) => {
+        setTimeout(() => resolve({ done: true, value: undefined }), 80);
+      }),
+    ]);
+    assert.equal(first.done, false, "checkpoint must not be dropped if onData raced ahead of addListener");
+    assert.deepEqual(JSON.parse(String(first.value)), { checkpoint: { last_op_id: "1" } });
+  } finally {
+    (globalThis as { lynx?: unknown }).lynx = previousLynx;
+    globalThis.NativeModules = previousModules;
+    (globalThis as { SystemInfo?: { platform?: string } }).SystemInfo = previousInfo;
+  }
+});
+
 test("Android LynxFetchModule fetchStream yields JSON checkpoint lines", async () => {
   const previousLynx = (globalThis as { lynx?: unknown }).lynx;
   const previousModules = globalThis.NativeModules;
@@ -335,6 +470,47 @@ test("Android LynxFetchModule fetchStream yields JSON checkpoint lines", async (
     assert.equal(first.done, false);
     assert.equal(typeof first.value, "string");
     assert.deepEqual(JSON.parse(String(first.value)), { checkpoint: { last_op_id: "1" } });
+  } finally {
+    (globalThis as { lynx?: unknown }).lynx = previousLynx;
+    globalThis.NativeModules = previousModules;
+    (globalThis as { SystemInfo?: { platform?: string } }).SystemInfo = previousInfo;
+  }
+});
+
+test("Android LynxFetchModule JSON fetch exposes json() for checkpoint-request", async () => {
+  const previousLynx = (globalThis as { lynx?: unknown }).lynx;
+  const previousModules = globalThis.NativeModules;
+  const previousInfo = (globalThis as { SystemInfo?: { platform?: string } }).SystemInfo;
+  (globalThis as { SystemInfo?: { platform?: string } }).SystemInfo = { platform: "Android" };
+  (globalThis as { lynx?: unknown }).lynx = {
+    getJSModule() {
+      return { addListener() {} };
+    },
+  };
+  globalThis.NativeModules = {
+    LynxFetchModule: {
+      fetch(_request: unknown, resolve: (response: unknown) => void) {
+        queueMicrotask(() => {
+          resolve({
+            status: 200,
+            statusText: "OK",
+            body: '{"data":{"checkpoint_request_id":"ck1"}}',
+          });
+        });
+      },
+    },
+  } as typeof globalThis.NativeModules;
+  try {
+    const remote = new LynxRemote(
+      { fetchCredentials: async () => ({ endpoint: "http://127.0.0.1:8080", token: "tok" }) },
+      { log() {} },
+    );
+    const decoded = await remote.fetchAndDecodeJson({
+      path: "/sync/checkpoint-request",
+      method: "POST",
+      body: "{}",
+    });
+    assert.deepEqual(decoded, { data: { checkpoint_request_id: "ck1" } });
   } finally {
     (globalThis as { lynx?: unknown }).lynx = previousLynx;
     globalThis.NativeModules = previousModules;

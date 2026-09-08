@@ -272,6 +272,9 @@ class LynxFetchResponse {
     }
     return decodeUtf8(copyToArrayBuffer(joined));
   }
+  async json(): Promise<unknown> {
+    return JSON.parse(await this.text());
+  }
 }
 
 function readerFromChunks(chunks: Uint8Array[]): ReadableStreamDefaultReader<Uint8Array> {
@@ -294,29 +297,122 @@ function readerFromChunks(chunks: Uint8Array[]): ReadableStreamDefaultReader<Uin
   } as ReadableStreamDefaultReader<Uint8Array>;
 }
 
+interface StreamEmitter {
+  addListener(name: string, fn: (payload: unknown) => void): void;
+  emit?(name: string, data?: unknown): void;
+  trigger?(name: string, params?: unknown): void;
+}
+
+const earlyEvents = new Map<string, unknown[]>();
+const liveStreamNames = new Set<string>();
+const hookedEmitters = new WeakSet<object>();
+const hookedLynxHosts = new WeakSet<object>();
+
+function isStreamEvent(payload: unknown): boolean {
+  if (payload == null || typeof payload !== "object") {
+    return false;
+  }
+  const event = (payload as { event?: unknown }).event;
+  return event === "onData" || event === "onEnd" || event === "onError";
+}
+
+function rememberEarly(name: string, payload: unknown): void {
+  if (liveStreamNames.has(name) || !isStreamEvent(payload)) {
+    return;
+  }
+  const pending = earlyEvents.get(name);
+  if (pending == null) {
+    earlyEvents.set(name, [payload]);
+    return;
+  }
+  pending.push(payload);
+}
+
+function drainEarly(name: string, deliver: (payload: unknown) => void): void {
+  const pending = earlyEvents.get(name);
+  earlyEvents.delete(name);
+  if (pending == null) {
+    return;
+  }
+  for (const payload of pending) {
+    deliver(payload);
+  }
+}
+
+function lynxHost(): { getJSModule?: (name: string) => StreamEmitter } | undefined {
+  try {
+    // Bare `lynx` so the Lynx bundler keeps the runtime global (eval/globalThis miss it).
+    return lynx as { getJSModule?: (name: string) => StreamEmitter };
+  } catch {
+    return (
+      globalThis as unknown as {
+        lynx?: { getJSModule?: (name: string) => StreamEmitter };
+      }
+    ).lynx;
+  }
+}
+
+function lookupEmitter(): StreamEmitter | undefined {
+  return lynxHost()?.getJSModule?.("GlobalEventEmitter");
+}
+
+function hookEmitter(emitter: StreamEmitter): void {
+  if (hookedEmitters.has(emitter)) {
+    return;
+  }
+  hookedEmitters.add(emitter);
+  const origAdd = emitter.addListener.bind(emitter);
+  const origEmit = typeof emitter.emit === "function" ? emitter.emit.bind(emitter) : undefined;
+  const origTrigger = typeof emitter.trigger === "function" ? emitter.trigger.bind(emitter) : undefined;
+  emitter.addListener = (name, fn) => {
+    liveStreamNames.add(name);
+    origAdd(name, fn);
+  };
+  emitter.emit = (name, data) => {
+    rememberEarly(name, data);
+    return origEmit?.(name, data);
+  };
+  emitter.trigger = (name, params) => {
+    rememberEarly(name, params);
+    return origTrigger?.(name, params);
+  };
+}
+
+function wrapLynxGetJSModule(): void {
+  const host = lynxHost();
+  if (host == null || typeof host.getJSModule !== "function" || hookedLynxHosts.has(host)) {
+    return;
+  }
+  hookedLynxHosts.add(host);
+  const orig = host.getJSModule.bind(host);
+  host.getJSModule = (name: string) => {
+    const mod = orig(name);
+    if (name === "GlobalEventEmitter" && mod != null && typeof mod === "object") {
+      hookEmitter(mod);
+    }
+    return mod;
+  };
+}
+
+function enterEarlyCapture(): void {
+  wrapLynxGetJSModule();
+  const emitter = lookupEmitter();
+  if (emitter != null) {
+    hookEmitter(emitter);
+  }
+}
+
 function streamingReader(eventName: string): ReadableStreamDefaultReader<Uint8Array> {
   const queue: Uint8Array[] = [];
   let finished = false;
   let failure: Error | undefined;
   let wake: (() => void) | undefined;
-  let emitter: { addListener(name: string, fn: (payload: unknown) => void): void } | undefined;
-  try {
-    // Bare `lynx` so the Lynx bundler keeps the runtime global (eval/globalThis miss it).
-    emitter = (
-      lynx as {
-        getJSModule?: (name: string) => { addListener(name: string, fn: (payload: unknown) => void): void };
-      }
-    ).getJSModule?.("GlobalEventEmitter");
-  } catch {
-    emitter = (
-      globalThis as unknown as {
-        lynx?: { getJSModule?: (name: string) => { addListener(name: string, fn: (payload: unknown) => void): void } };
-      }
-    ).lynx?.getJSModule?.("GlobalEventEmitter");
-  }
+  wrapLynxGetJSModule();
+  const emitter = lookupEmitter();
   if (emitter == null) {
     throw new Error("GlobalEventEmitter is not registered");
   }
+  hookEmitter(emitter);
   const onEvent = (payload: unknown) => {
     const event =
       payload != null && typeof payload === "object" && "event" in payload
@@ -341,6 +437,7 @@ function streamingReader(eventName: string): ReadableStreamDefaultReader<Uint8Ar
     wake?.();
   };
   emitter.addListener(eventName, onEvent);
+  drainEarly(eventName, onEvent);
   return {
     async read() {
       for (;;) {
@@ -431,10 +528,21 @@ function stabilizeStreamingResponse(response: Response): Response {
     },
     body: captured,
     text: () => response.text(),
+    json: () => {
+      const withJson = response as Response & { json?: () => Promise<unknown> };
+      if (typeof withJson.json === "function") {
+        return withJson.json();
+      }
+      return response.text().then((text) => JSON.parse(text) as unknown);
+    },
   } as Response;
 }
 
-function fetchViaLynxModule(resource: string, request: RequestInit): Promise<Response> {
+function fetchViaLynxModule(
+  resource: string,
+  request: RequestInit,
+  expectStreamingResponse: boolean,
+): Promise<Response> {
   const native = lynxFetchModule();
   if (native == null) {
     throw new Error("LynxFetchModule is not registered");
@@ -444,8 +552,11 @@ function fetchViaLynxModule(resource: string, request: RequestInit): Promise<Res
     method: String(request.method ?? "GET"),
     url: resource,
     headers,
-    lynxExtension: { enableFetchAPIStandardStreaming: true },
   };
+  const extension = streamingExtension(expectStreamingResponse);
+  if (Object.keys(extension).length > 0) {
+    payload.lynxExtension = extension;
+  }
   if (typeof request.body === "string") {
     payload.body = encodeUtf8(request.body);
   }
@@ -477,8 +588,11 @@ export class LynxRemote extends AbstractRemote {
 
   async fetch({ resource, request, expectStreamingResponse }: FetchOptions): Promise<Response> {
     const url = String(resource);
+    if (expectStreamingResponse) {
+      enterEarlyCapture();
+    }
     if (isLynxAndroid() && lynxFetchModule() != null) {
-      return fetchViaLynxModule(url, request);
+      return fetchViaLynxModule(url, request, expectStreamingResponse);
     }
     const init: RequestInit & { lynxExtension?: Record<string, boolean> } = {
       method: request.method ?? "GET",
