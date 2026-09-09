@@ -43,6 +43,20 @@
         "{\"data\":{\"bucket\":\"a\",\"data\":[]}}\n"
       ],
       "events": []
+    },
+    {
+      "id": "split-multibyte",
+      "path": "streamingId",
+      "comment": "3-byte UTF-8 euro (E2 82 AC) split after the lead byte. wireChunksHex is the socket/read split; chunks are well-formed onData after the hold.",
+      "chunks": [
+        "{\"checkpoint\":{\"last_op_id\":\"",
+        "€\"}}\n"
+      ],
+      "wireChunksHex": [
+        "7b22636865636b706f696e74223a7b226c6173745f6f705f6964223a22e2",
+        "82ac227d7d0a"
+      ],
+      "events": ["onData", "onData", "onEnd"]
     }
   ]
 }

@@ -1,44 +1,12 @@
 #import "StreamingHttp.h"
 
 #include "sync_http_policy.h"
+#include "utf8_hold.h"
 
 namespace {
 
 NSTimeInterval StreamReadTimeoutSec() {
   return PS_SYNC_HTTP_STREAM_READ_TIMEOUT_MS / 1000.0;
-}
-
-NSUInteger TrailingIncompleteUtf8Bytes(NSData *data) {
-  if (data.length == 0) {
-    return 0;
-  }
-  const uint8_t *bytes = (const uint8_t *)data.bytes;
-  NSInteger i = (NSInteger)data.length - 1;
-  NSUInteger continuation = 0;
-  while (i >= 0 && (bytes[i] & 0xc0) == 0x80) {
-    continuation++;
-    i--;
-  }
-  if (i < 0) {
-    return data.length;
-  }
-  uint8_t lead = bytes[i];
-  NSUInteger expected = 0;
-  if ((lead & 0x80) == 0) {
-    expected = 0;
-  } else if ((lead & 0xe0) == 0xc0) {
-    expected = 1;
-  } else if ((lead & 0xf0) == 0xe0) {
-    expected = 2;
-  } else if ((lead & 0xf8) == 0xf0) {
-    expected = 3;
-  } else {
-    return 0;
-  }
-  if (continuation < expected) {
-    return continuation + 1;
-  }
-  return 0;
 }
 
 } // namespace
@@ -208,7 +176,8 @@ didReceiveResponse:(NSURLResponse *)response
       return;
     }
     [self.utf8Carry appendData:data];
-    NSUInteger hold = TrailingIncompleteUtf8Bytes(self.utf8Carry);
+    NSUInteger hold = (NSUInteger)ps_utf8_trailing_incomplete(
+        (const uint8_t *)self.utf8Carry.bytes, (size_t)self.utf8Carry.length);
     NSUInteger complete = self.utf8Carry.length - hold;
     if (complete > 0 && self.onData) {
       NSData *slice = [self.utf8Carry subdataWithRange:NSMakeRange(0, complete)];

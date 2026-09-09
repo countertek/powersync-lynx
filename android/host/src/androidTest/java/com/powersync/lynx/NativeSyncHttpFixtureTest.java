@@ -40,9 +40,19 @@ public class NativeSyncHttpFixtureTest {
     JSONObject catalog = loadCatalog(context);
     JSONObject checkpoint = scenario(catalog, "checkpoint-ops");
     JSONObject idle = scenario(catalog, "idle-complete");
+    JSONObject split = scenario(catalog, "split-multibyte");
     String contentType = catalog.getString("contentType");
     String checkpointBody = joinedChunks(checkpoint);
     String idleBody = joinedChunks(idle);
+
+    new NativePowerSyncModule(context);
+    byte[] firstWire = hexBytes(split.getJSONArray("wireChunksHex").getString(0));
+    expect(
+        StreamingHttp.trailingIncompleteUtf8Bytes(firstWire) == 1,
+        "JNI hold counts the 3-byte euro lead from split-multibyte");
+    expect(
+        StreamingHttp.trailingIncompleteUtf8Bytes(joinedWire(split)) == 0,
+        "JNI hold is 0 for complete split-multibyte wire");
 
     try (ReplayServer streamServer = ReplayServer.start(contentType, checkpointBody)) {
       RecordingLynxContext lynx = new RecordingLynxContext(context);
@@ -127,6 +137,24 @@ public class NativeSyncHttpFixtureTest {
       body.append(chunks.getString(i));
     }
     return body.toString();
+  }
+
+  private static byte[] hexBytes(String hex) {
+    int n = hex.length() / 2;
+    byte[] out = new byte[n];
+    for (int i = 0; i < n; i++) {
+      out[i] = (byte) Integer.parseInt(hex.substring(i * 2, i * 2 + 2), 16);
+    }
+    return out;
+  }
+
+  private static byte[] joinedWire(JSONObject scenario) throws Exception {
+    JSONArray hex = scenario.getJSONArray("wireChunksHex");
+    ByteArrayOutputStream out = new ByteArrayOutputStream();
+    for (int i = 0; i < hex.length(); i++) {
+      out.write(hexBytes(hex.getString(i)));
+    }
+    return out.toByteArray();
   }
 
   private static ReadableMap await(RpcCall call) throws Exception {

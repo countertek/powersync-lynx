@@ -105,6 +105,7 @@ final class StreamingHttp {
 
     byte[] chunk = new byte[8192];
     // Carry incomplete UTF-8 so PrimJS always receives well-formed string chunks.
+    // Hold count is shared/utf8_hold.h (JNI), not a Java copy of bytes.ts.
     byte[] carry = new byte[0];
     try (InputStream in = stream) {
       while (!cancelled.get()) {
@@ -157,38 +158,8 @@ final class StreamingHttp {
     }
   }
 
-  /** Same incomplete-UTF-8 hold as LynxRemote.createLynxTextDecoder. */
-  static int trailingIncompleteUtf8Bytes(byte[] bytes) {
-    if (bytes == null || bytes.length == 0) {
-      return 0;
-    }
-    int i = bytes.length - 1;
-    int continuation = 0;
-    while (i >= 0 && (bytes[i] & 0xc0) == 0x80) {
-      continuation++;
-      i--;
-    }
-    if (i < 0) {
-      return bytes.length;
-    }
-    int lead = bytes[i] & 0xff;
-    int expected;
-    if ((lead & 0x80) == 0) {
-      expected = 0;
-    } else if ((lead & 0xe0) == 0xc0) {
-      expected = 1;
-    } else if ((lead & 0xf0) == 0xe0) {
-      expected = 2;
-    } else if ((lead & 0xf8) == 0xf0) {
-      expected = 3;
-    } else {
-      return 0;
-    }
-    if (continuation < expected) {
-      return continuation + 1;
-    }
-    return 0;
-  }
+  /** Incomplete UTF-8 hold; {@code shared/utf8_hold.h} via JNI. */
+  static native int trailingIncompleteUtf8Bytes(byte[] bytes);
 
   private static final int HTTP_BAD_REQUEST = 400;
 

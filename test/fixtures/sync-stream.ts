@@ -11,6 +11,8 @@ export interface SyncStreamScenario {
   chunks: string[];
   events: string[];
   error: string | undefined;
+  /** Raw socket/read splits as hex; absent when `chunks` are already wire UTF-8. */
+  wireChunksHex: string[] | undefined;
 }
 
 export interface SyncStreamFixtureCatalog {
@@ -26,6 +28,7 @@ interface CatalogJson {
   chunks?: unknown;
   events?: unknown;
   error?: unknown;
+  wireChunksHex?: unknown;
   contentType?: unknown;
   idleCompleteEnvelopeKeys?: unknown;
   streamingEnvelopeKeys?: unknown;
@@ -69,12 +72,14 @@ function parseScenario(row: CatalogJson): SyncStreamScenario {
     throw new Error(`fixture ${row.id} path must be a string`);
   }
   const error = row.error;
+  const wireChunksHex = isStringArray(row.wireChunksHex) ? row.wireChunksHex : undefined;
   return {
     id: row.id,
     path: parsePath(row.path),
     chunks: row.chunks,
     events: row.events,
     error: isString(error) ? error : undefined,
+    wireChunksHex,
   };
 }
 
@@ -110,13 +115,33 @@ export function loadSyncStreamFixtures(): SyncStreamFixtureCatalog {
   };
 }
 
-export function requireScenario(
-  catalog: SyncStreamFixtureCatalog,
-  id: string,
-): SyncStreamScenario {
+export function requireScenario(catalog: SyncStreamFixtureCatalog, id: string): SyncStreamScenario {
   const found = catalog.scenarios.find((scenario) => scenario.id === id);
   if (found == null) {
     throw new Error(`missing sync-stream scenario: ${id}`);
   }
   return found;
+}
+
+export function hexToBytes(hex: string): Uint8Array {
+  if (hex.length % 2 !== 0) {
+    throw new Error("hex string must have even length");
+  }
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    const byte = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+    if (!Number.isFinite(byte)) {
+      throw new Error(`invalid hex at ${i * 2}`);
+    }
+    out[i] = byte;
+  }
+  return out;
+}
+
+/** Socket/read pieces: wireChunksHex when present, otherwise UTF-8 of chunks. */
+export function fixtureWireBytes(scenario: SyncStreamScenario): Uint8Array[] {
+  if (scenario.wireChunksHex != null && scenario.wireChunksHex.length > 0) {
+    return scenario.wireChunksHex.map(hexToBytes);
+  }
+  return scenario.chunks.map((chunk) => new TextEncoder().encode(chunk));
 }

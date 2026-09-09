@@ -31,6 +31,7 @@ int main() {
   using ps_sync_fixtures::joined_body;
   using ps_sync_fixtures::load_default;
   using ps_sync_fixtures::valid_terminal_sequence;
+  using ps_sync_fixtures::wire_chunks;
 
   Catalog catalog;
   try {
@@ -92,6 +93,25 @@ int main() {
     expect(idle->path == ps_sync_fixtures::kPathIdleComplete, "idle-complete path");
     expect(idle->events.empty(), "idle-complete has no GlobalEventEmitter events");
     expect(!joined_body(*idle).empty(), "idle-complete body is UTF-8 NDJSON");
+  }
+
+  const auto* split = find_scenario(catalog, "split-multibyte");
+  expect(split != nullptr, "split-multibyte scenario present");
+  if (split != nullptr) {
+    expect(split->path == ps_sync_fixtures::kPathStreamingId, "split-multibyte is streamingId");
+    expect(split->wire_chunks_hex.size() == 2, "split-multibyte has wireChunksHex");
+    expect(split->chunks.size() == 2, "split-multibyte has well-formed onData chunks");
+    expect(valid_terminal_sequence(split->events), "split-multibyte events are onData* → onEnd");
+    expect(incremental_data_before_end(split->events),
+           "split-multibyte delivers onData before onEnd");
+    const auto wire = wire_chunks(*split);
+    expect(wire.size() == 2, "split-multibyte decodes two wire pieces");
+    std::string joined_wire;
+    for (const auto& piece : wire) {
+      joined_wire += piece;
+    }
+    expect(joined_wire == joined_body(*split),
+           "split-multibyte wire bytes are the UTF-8 of chunks");
   }
 
   const std::vector<std::string> android_old_error_only = {PS_SYNC_HTTP_EVENT_ON_ERROR};
