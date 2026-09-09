@@ -138,7 +138,7 @@ Normative Client behavior: [docs/spec.md](https://github.com/countertek/powersyn
 
 ---
 
-### 📝 License
+#### 📝 License
 
 Copyright © 2026 [countertek](https://github.com/countertek). <br />
 This project is [Apache-2.0](https://github.com/countertek/powersync-lynx/blob/main/LICENSE) licensed.
