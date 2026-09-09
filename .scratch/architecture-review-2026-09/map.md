@@ -9,7 +9,8 @@ Produced by `/improve-codebase-architecture` on main after realtime sync merge.
 ## Deliverables
 
 - HTML report: agent temp `/tmp/architecture-review-*.html` (not committed)
-- GitHub issue body: `github-issue.md` (published via one-shot Actions workflow on branch `drkz/arch-review-issue-a43d`)
+- GitHub issue: https://github.com/countertek/powersync-lynx/issues/18
+- Issue body source: `github-issue.md`
 
 ## Decisions-so-far
 

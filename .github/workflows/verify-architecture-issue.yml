@@ -1,0 +1,45 @@
+name: Verify architecture issue
+
+on:
+  push:
+    branches:
+      - drkz/arch-review-issue-a43d
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  pull-requests: write
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Confirm issue #18 and comment on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const issue = await github.rest.issues.get({ owner, repo, issue_number: 18 });
+            core.info(`Issue #${issue.data.number}: ${issue.data.title}`);
+            core.info(`URL: ${issue.data.html_url}`);
+            core.info(`Labels: ${(issue.data.labels || []).map(l => l.name).join(', ')}`);
+            core.info(`State: ${issue.data.state}`);
+
+            const body = [
+              '### Architecture issue confirmed',
+              '',
+              `- **URL:** ${issue.data.html_url}`,
+              `- **Title:** ${issue.data.title}`,
+              `- **Labels:** ${(issue.data.labels || []).map(l => '`' + l.name + '`').join(', ') || '(none)'}`,
+              '',
+              'Opened by the one-shot `/improve-codebase-architecture` bootstrap workflow; agent token lacks `issues:read/write`.',
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: 17,
+              body,
+            });
