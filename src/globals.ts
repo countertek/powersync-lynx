@@ -1,5 +1,4 @@
 import type { NativeModulesHost } from "./adapter/native.ts";
-import type { LynxTextCodecHelper } from "./sync/LynxRemote.ts";
 
 export interface LynxGlobalProps {
   device?: string;
@@ -29,10 +28,18 @@ export interface LynxRuntime {
   __globalProps?: LynxGlobalProps;
 }
 
+export interface LynxSystemInfo {
+  platform?: string;
+}
+
+export interface LynxTextCodecHelper {
+  decode(buffer: ArrayBuffer): string;
+}
+
 declare global {
   var NativeModules: NativeModulesHost | undefined;
   var TextCodecHelper: LynxTextCodecHelper | undefined;
   /** Lynx BTS global — prefer bare `lynx` so the bundler keeps the runtime binding. */
   var lynx: LynxRuntime | undefined;
-  var SystemInfo: { platform?: string } | undefined;
+  var SystemInfo: LynxSystemInfo | undefined;
 }

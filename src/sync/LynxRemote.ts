@@ -1,5 +1,3 @@
-import "../abort-controller.ts";
-import "../globals.ts";
 import { AbstractRemote } from "@powersync/shared-internals";
 import type { PowerSyncBackendConnector, PowerSyncLogger } from "@powersync/common";
 import type { FetchOptions } from "@powersync/shared-internals";
@@ -7,8 +5,12 @@ import type {
   WebSocketSupport,
   WebSocketSyncStreamPlatform,
 } from "@powersync/shared-internals/websockets";
+import { getLynxHost, hostIsAndroid } from "../host.ts";
+import type { LynxTextCodecHelper } from "../globals.ts";
 import { copyToArrayBuffer } from "../values.ts";
 import { gunzipSync, isGzip } from "./gunzip.ts";
+
+export type { LynxTextCodecHelper };
 
 let websockets: WebSocketSupport | undefined;
 
@@ -94,10 +96,6 @@ function finishFirstSyncStreamRaw(bodyByteLength: number): void {
   firstSyncStreamDiag = null;
 }
 
-export interface LynxTextCodecHelper {
-  decode(buffer: ArrayBuffer): string;
-}
-
 function toArrayBuffer(input: ArrayBuffer | ArrayBufferView): ArrayBuffer {
   if (input instanceof ArrayBuffer) {
     return input;
@@ -143,18 +141,7 @@ function trailingIncompleteUtf8Bytes(bytes: Uint8Array): number {
 }
 
 function textCodecHelper(): LynxTextCodecHelper | undefined {
-  const fromGlobalThis = (globalThis as unknown as { TextCodecHelper?: LynxTextCodecHelper })
-    .TextCodecHelper;
-  if (fromGlobalThis != null) {
-    return fromGlobalThis;
-  }
-  try {
-    return (0, eval)(
-      "typeof TextCodecHelper === 'undefined' ? undefined : TextCodecHelper",
-    ) as LynxTextCodecHelper | undefined;
-  } catch {
-    return undefined;
-  }
+  return getLynxHost().textCodec();
 }
 
 function decodeUtf8Manual(bytes: ArrayBuffer): string {
@@ -203,7 +190,6 @@ function createLynxTextDecoder(): TextDecoder {
   return decoder as TextDecoder;
 }
 
-
 interface LynxFetchSuccess {
   url?: string;
   body?: ArrayBuffer | Uint8Array | string | unknown;
@@ -241,7 +227,10 @@ interface NativeHttpFetchEnvelope {
 }
 
 interface NativeHttpFetchModule {
-  httpFetch?(request: Record<string, unknown>, callback: (envelope: NativeHttpFetchEnvelope) => void): void;
+  httpFetch?(
+    request: Record<string, unknown>,
+    callback: (envelope: NativeHttpFetchEnvelope) => void,
+  ): void;
   httpFetchAbort?(streamId: string, callback: (envelope: NativeHttpFetchEnvelope) => void): void;
 }
 
@@ -251,29 +240,7 @@ interface NativeHttpFetchModule {
  * (LynxFetchModule lookup likewise only checks module presence).
  */
 function lookupNativePowerSyncModule(): unknown {
-  const fromGlobalThis = (
-    globalThis as unknown as { NativeModules?: { NativePowerSyncModule?: unknown } }
-  ).NativeModules?.NativePowerSyncModule;
-  if (fromGlobalThis != null) {
-    return fromGlobalThis;
-  }
-  try {
-    const fromBinding = (
-      NativeModules as { NativePowerSyncModule?: unknown } | undefined
-    )?.NativePowerSyncModule;
-    if (fromBinding != null) {
-      return fromBinding;
-    }
-  } catch {
-    // NativeModules may be an unbound identifier outside Lynx.
-  }
-  try {
-    return (0, eval)(
-      "typeof NativeModules === 'undefined' ? undefined : NativeModules.NativePowerSyncModule",
-    );
-  } catch {
-    return undefined;
-  }
+  return getLynxHost().nativeModules()?.NativePowerSyncModule;
 }
 
 function nativeHttpFetchModule(): NativeHttpFetchModule | undefined {
@@ -428,7 +395,8 @@ function decodeBase64(text: string): Uint8Array {
   if (typeof atob === "function") {
     return latin1Bytes(atob(text));
   }
-  const Buf = (globalThis as { Buffer?: { from: (value: string, encoding: string) => Uint8Array } }).Buffer;
+  const Buf = (globalThis as { Buffer?: { from: (value: string, encoding: string) => Uint8Array } })
+    .Buffer;
   if (Buf != null) {
     return new Uint8Array(Buf.from(text, "base64"));
   }
@@ -583,7 +551,12 @@ class LynxFetchResponse {
     const idleComplete = result.lynxExtension?.powersyncIdleComplete === true;
     const bodyBytes = bodyFromFetchSuccess(result);
     let reader: ReadableStreamDefaultReader<Uint8Array>;
-    if (streamingId != null && streamingId.length > 0 && bodyBytes.byteLength === 0 && !idleComplete) {
+    if (
+      streamingId != null &&
+      streamingId.length > 0 &&
+      bodyBytes.byteLength === 0 &&
+      !idleComplete
+    ) {
       logFirstSyncStreamPath("chunked", streamingId, "streamingId");
       reader = streamingReader(streamingId);
     } else if (bodyBytes.byteLength > 0) {
@@ -774,36 +747,17 @@ function preSlotNativeStreams(emitter: StreamEmitter): void {
 }
 
 function lynxHost(): { getJSModule?: (name: string) => StreamEmitter } | undefined {
-  try {
-    // Bare `lynx` so the Lynx bundler keeps the runtime global (eval/globalThis miss it).
-    return lynx as { getJSModule?: (name: string) => StreamEmitter };
-  } catch {
-    return (
-      globalThis as unknown as {
-        lynx?: { getJSModule?: (name: string) => StreamEmitter };
-      }
-    ).lynx;
-  }
+  // SAFETY: LynxRuntime.getJSModule is the PrimJS GlobalEventEmitter table; StreamEmitter is the hook surface.
+  return getLynxHost().runtime() as { getJSModule?: (name: string) => StreamEmitter } | undefined;
 }
 
 function lookupEmitters(): StreamEmitter[] {
-  const host = lynxHost() as
-    | {
-        getJSModule?: (name: string) => StreamEmitter;
-        getApp?: () => { GlobalEventEmitter?: StreamEmitter };
-        GlobalEventEmitter?: StreamEmitter;
-      }
-    | undefined;
   const found: StreamEmitter[] = [];
-  const add = (emitter: StreamEmitter | undefined): void => {
-    if (emitter != null && !found.includes(emitter)) {
-      found.push(emitter);
+  for (const emitter of getLynxHost().globalEventEmitters()) {
+    if (emitter.addListener != null) {
+      found.push(emitter as StreamEmitter);
     }
-  };
-  // Native sendGlobalEvent posts to the JS module; Lynx fetch may use getApp().
-  add(host?.getJSModule?.("GlobalEventEmitter"));
-  add(host?.getApp?.()?.GlobalEventEmitter);
-  add(host?.GlobalEventEmitter);
+  }
   return found;
 }
 
@@ -837,7 +791,8 @@ function hookEmitter(emitter: StreamEmitter): void {
   const origAdd = emitter.addListener.bind(emitter);
   origAdds.set(emitter, origAdd);
   const origEmit = typeof emitter.emit === "function" ? emitter.emit.bind(emitter) : undefined;
-  const origTrigger = typeof emitter.trigger === "function" ? emitter.trigger.bind(emitter) : undefined;
+  const origTrigger =
+    typeof emitter.trigger === "function" ? emitter.trigger.bind(emitter) : undefined;
   emitter.addListener = (name, fn) => {
     let byName = foreignListeners.get(emitter);
     if (byName == null) {
@@ -995,7 +950,12 @@ function streamingReaderFallback(): ReadableStreamDefaultReader<Uint8Array> {
 }
 
 function unwrapFetchSuccess(result: unknown): LynxFetchSuccess {
-  if (Array.isArray(result) && result.length > 0 && result[0] != null && typeof result[0] === "object") {
+  if (
+    Array.isArray(result) &&
+    result.length > 0 &&
+    result[0] != null &&
+    typeof result[0] === "object"
+  ) {
     return result[0] as LynxFetchSuccess;
   }
   return (result ?? {}) as LynxFetchSuccess;
@@ -1006,32 +966,11 @@ function moduleResponse(result: LynxFetchSuccess, streamingFallback = false): Re
 }
 
 function isLynxAndroid(): boolean {
-  try {
-    const fromGlobal = (globalThis as unknown as { SystemInfo?: { platform?: string } }).SystemInfo;
-    const info =
-      fromGlobal ??
-      ((0, eval)("typeof SystemInfo === 'undefined' ? undefined : SystemInfo") as { platform?: string } | undefined);
-    const platform = info?.platform;
-    return platform != null && platform.toLowerCase() === "android";
-  } catch {
-    return false;
-  }
+  return hostIsAndroid();
 }
 
 function lynxFetchModule(): LynxFetchModule | undefined {
-  const fromGlobalThis = (
-    globalThis as unknown as { NativeModules?: { LynxFetchModule?: LynxFetchModule } }
-  ).NativeModules?.LynxFetchModule;
-  if (fromGlobalThis != null) {
-    return fromGlobalThis;
-  }
-  try {
-    return (0, eval)(
-      "typeof NativeModules === 'undefined' ? undefined : NativeModules.LynxFetchModule",
-    ) as LynxFetchModule | undefined;
-  } catch {
-    return undefined;
-  }
+  return getLynxHost().nativeModules()?.LynxFetchModule;
 }
 
 function streamingExtension(expectStreamingResponse: boolean): Record<string, boolean> {
@@ -1136,8 +1075,8 @@ function eventStreamingResponse(response: Response, streamingId?: string): Respo
 }
 
 async function identifierStreamingResponse(response: Response): Promise<Response> {
-  const streamingId = (response as Response & { lynxExtension?: { streamingId?: string } }).lynxExtension
-    ?.streamingId;
+  const streamingId = (response as Response & { lynxExtension?: { streamingId?: string } })
+    .lynxExtension?.streamingId;
   let captured: Response["body"];
   try {
     captured = response.body;
@@ -1369,9 +1308,11 @@ export class LynxRemote extends AbstractRemote {
     if (Object.keys(extension).length > 0) {
       init.lynxExtension = extension;
     }
-    // PrimJS puts fetch on the identifier, not always on globalThis (iOS).
-    const fromGlobal = (globalThis as unknown as { fetch?: typeof fetch }).fetch;
-    const response = await (typeof fromGlobal === "function" ? fromGlobal : fetch)(url, init);
+    const fetchImpl = getLynxHost().fetchImpl();
+    if (fetchImpl == null) {
+      throw new Error("fetch is not available");
+    }
+    const response = await fetchImpl(url, init);
     if (!expectStreamingResponse) {
       return stabilizeJsonResponse(response);
     }
