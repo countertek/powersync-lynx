@@ -34,6 +34,22 @@ export function runtimeFromEmitter(emitter: LynxGlobalEventEmitter): LynxRuntime
   };
 }
 
+/** Distinct getJSModule vs runtime.GlobalEventEmitter objects (multi-emitter host). */
+export function runtimeFromEmitters(
+  fromGetJSModule: LynxGlobalEventEmitter,
+  fromRuntimeField: LynxGlobalEventEmitter,
+): LynxRuntime {
+  return {
+    getJSModule(name: string) {
+      if (name === "GlobalEventEmitter") {
+        return fromGetJSModule;
+      }
+      return undefined;
+    },
+    GlobalEventEmitter: fromRuntimeField,
+  };
+}
+
 export class FakeLynxHost implements LynxHost {
   private readonly modules: NativeModulesHost | undefined;
   private readonly runtimeValue: LynxRuntime | undefined;

@@ -272,7 +272,7 @@ export function enterEarlyCapture(): void {
   }
 }
 
-function attachStreamHandler(
+function bindStreamHandler(
   emitter: StreamEmitter,
   eventName: string,
   onEvent: (payload: unknown) => void,
@@ -285,13 +285,19 @@ function attachStreamHandler(
   liveNames(emitter).add(eventName);
   handlers.set(eventName, onEvent);
   ensureSlot(emitter, eventName);
-  drainEarly(eventName, onEvent);
-  // Overflow/onEnd drain already released this handler — keep retirement so
-  // late native terminals cannot recreate earlyEvents. A still-live reader
-  // taking over a cancelled name may un-retire for fresh capture.
-  if (streamHandlers.get(emitter)?.get(eventName) === onEvent) {
-    retiredStreamNames.delete(eventName);
+}
+
+function handlerStillAttached(
+  emitters: readonly StreamEmitter[],
+  eventName: string,
+  onEvent: (payload: unknown) => void,
+): boolean {
+  for (const emitter of emitters) {
+    if (streamHandlers.get(emitter)?.get(eventName) === onEvent) {
+      return true;
+    }
   }
+  return false;
 }
 
 function nativeStreamNames(): string[] {
@@ -321,10 +327,8 @@ function createStreamingReader(
     if (retire) {
       retireNames(eventNames);
     }
-    if (released) {
-      return;
-    }
-    released = true;
+    // Always drop handlers. A buffered onEnd can set released before every
+    // emitter is bound; cancel must still strip a later stray attachment.
     for (const emitter of emitters) {
       const handlers = streamHandlers.get(emitter);
       for (const name of eventNames) {
@@ -332,6 +336,7 @@ function createStreamingReader(
         releaseStream(emitter, name, false);
       }
     }
+    released = true;
   };
   const abortAttached = (): void => {
     if (!abortOnCancel || nativeAborted) {
@@ -369,8 +374,22 @@ function createStreamingReader(
   };
   for (const emitter of emitters) {
     hookEmitter(emitter);
+    if (released) {
+      break;
+    }
     for (const eventName of eventNames) {
-      attachStreamHandler(emitter, eventName, onEvent);
+      bindStreamHandler(emitter, eventName, onEvent);
+    }
+  }
+  if (!released) {
+    for (const eventName of eventNames) {
+      drainEarly(eventName, onEvent);
+      if (released) {
+        break;
+      }
+      if (handlerStillAttached(emitters, eventName, onEvent)) {
+        retiredStreamNames.delete(eventName);
+      }
     }
   }
   return {
