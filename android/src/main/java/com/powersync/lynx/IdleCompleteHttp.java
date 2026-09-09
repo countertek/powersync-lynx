@@ -17,17 +17,10 @@ import java.util.Map;
  * Idle-complete HTTP for PowerSync {@code /sync/stream}.
  *
  * <p>Fallback when no GlobalEventEmitter sender is reachable. Reads until EOF or a short idle
- * read timeout after bytes have arrived. Timeouts match {@code shared/sync_http_policy.h}
- * ({@code PS_SYNC_HTTP_IDLE_COMPLETE_MS} / {@code PS_SYNC_HTTP_CONNECT_TIMEOUT_MS}).
+ * read timeout after bytes have arrived. Timeouts come from {@link SyncHttpPolicy}
+ * ({@code shared/sync_http_policy.h}).
  */
 final class IdleCompleteHttp {
-  /** Keep in lockstep with {@code PS_SYNC_HTTP_IDLE_COMPLETE_MS}. */
-  static final long IDLE_READ_TIMEOUT_MS = 2_500L;
-  /** Keep in lockstep with {@code PS_SYNC_HTTP_CONNECT_TIMEOUT_MS}. */
-  static final long CONNECT_TIMEOUT_MS = 30_000L;
-  /** Keep in lockstep with {@code PS_SYNC_HTTP_BUFFERED_READ_TIMEOUT_MS}. */
-  static final long BUFFERED_READ_TIMEOUT_MS = 30_000L;
-
   private IdleCompleteHttp() {}
 
   static final class Result {
@@ -50,8 +43,11 @@ final class IdleCompleteHttp {
     boolean idle = isSyncStreamUrl(url);
     HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
     conn.setInstanceFollowRedirects(true);
-    conn.setConnectTimeout((int) CONNECT_TIMEOUT_MS);
-    conn.setReadTimeout(idle ? (int) IDLE_READ_TIMEOUT_MS : (int) BUFFERED_READ_TIMEOUT_MS);
+    conn.setConnectTimeout((int) SyncHttpPolicy.CONNECT_TIMEOUT_MS);
+    conn.setReadTimeout(
+        idle
+            ? (int) SyncHttpPolicy.IDLE_COMPLETE_MS
+            : (int) SyncHttpPolicy.BUFFERED_READ_TIMEOUT_MS);
     conn.setRequestMethod(httpMethod);
     conn.setUseCaches(false);
     if (headers != null) {

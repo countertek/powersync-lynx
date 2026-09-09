@@ -109,6 +109,16 @@ test("packed tarball ships iOS build inputs and omits host/build residue", async
       "idle-complete / streaming timeouts live in shared/sync_http_policy.h",
     );
     assert.equal(
+      has("android/src/main/java/com/powersync/lynx/SyncHttpPolicy.java"),
+      true,
+      "Android compiles generated SyncHttpPolicy.java from the shared header",
+    );
+    assert.equal(
+      has("scripts/gen-sync-http-policy-java.mjs"),
+      true,
+      "Android policy generator must ship so the committed Java can be regenerated",
+    );
+    assert.equal(
       has("ios/src/IdleCompleteHttp.mm"),
       true,
       "iOS NativePowerSyncModule.httpFetch needs IdleCompleteHttp.mm",
