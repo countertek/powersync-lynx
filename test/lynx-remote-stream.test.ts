@@ -610,6 +610,77 @@ test("early-event buffer overflow fails the reader instead of hanging", async ()
   );
 });
 
+test("overflow then cancel does not let delayed terminals pollute a later reader", async () => {
+  const { emitter } = createFakeEmitter();
+  const streamingId = "NativePowerSyncHttpStream-overflow-late";
+  const abortIds: string[] = [];
+  await withFakeLynxHost(
+    {
+      platform: "Android",
+      emitter,
+      nativeModules: {
+        NativePowerSyncModule: nativeWithHttp({
+          httpFetch(_request, callback) {
+            for (let i = 0; i < MAX_EARLY_EVENTS_PER_STREAM + 1; i++) {
+              emitter.emit?.(streamingId, { event: "onData", data: `line-${i}\n` });
+            }
+            callback({
+              ok: true,
+              status: 200,
+              statusText: "OK",
+              contentType: "application/x-ndjson",
+              body: "",
+              streamingId,
+              idleComplete: false,
+            });
+          },
+          httpFetchAbort(streamId, callback) {
+            abortIds.push(streamId);
+            callback({ ok: true });
+          },
+        }),
+      },
+    },
+    async () => {
+      const remote = new LynxRemote(stubConnector(), silentLogger);
+      const firstResponse = await remote.fetch({
+        resource: "http://10.0.2.2:8080/sync/stream",
+        request: { method: "POST", body: "{}" },
+        expectStreamingResponse: true,
+      });
+      const firstReader = firstResponse.body!.getReader();
+      await assert.rejects(() => firstReader.read(), /overflow/);
+      await firstReader.cancel();
+      assert.deepEqual(abortIds, [streamingId]);
+      emitter.emit?.(streamingId, { event: "onError", error: "aborted" });
+      emitter.emit?.(streamingId, { event: "onEnd" });
+
+      const secondResponse = await remote.fetch({
+        resource: "http://10.0.2.2:8080/sync/stream",
+        request: { method: "POST", body: "{}" },
+        expectStreamingResponse: true,
+      });
+      const secondReader = secondResponse.body!.getReader();
+      const pending = secondReader.read();
+      const raced = await Promise.race([
+        pending.then(
+          (result) => ({ kind: "read" as const, result }),
+          () => ({ kind: "error" as const }),
+        ),
+        new Promise<{ kind: "timeout" }>((resolve) => {
+          setTimeout(() => resolve({ kind: "timeout" }), 50);
+        }),
+      ]);
+      assert.equal(raced.kind, "timeout", "stale overflow/abort terminals must not replay");
+      emitter.emit?.(streamingId, { event: "onData", data: "chunk-2\n" });
+      const next = await pending;
+      assert.equal(next.done, false);
+      assert.equal(new TextDecoder().decode(next.value), "chunk-2\n");
+      await secondReader.cancel();
+    },
+  );
+});
+
 test("cancelled stream late onError/onEnd does not pollute a later reader", async () => {
   const { emitter } = createFakeEmitter();
   const streamingId = "NativePowerSyncHttpStream-late-cancel";

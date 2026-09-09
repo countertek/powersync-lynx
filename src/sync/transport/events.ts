@@ -112,6 +112,13 @@ function releaseStream(emitter: object, name: string, retire: boolean): void {
   }
 }
 
+function retireNames(names: readonly string[]): void {
+  for (const name of names) {
+    earlyEvents.delete(name);
+    retireStream(name);
+  }
+}
+
 function abortNativeHttp(streamId: string): void {
   const abortFn = getLynxHost().nativeModules()?.NativePowerSyncModule?.httpFetchAbort;
   if (abortFn == null) {
@@ -279,7 +286,12 @@ function attachStreamHandler(
   handlers.set(eventName, onEvent);
   ensureSlot(emitter, eventName);
   drainEarly(eventName, onEvent);
-  retiredStreamNames.delete(eventName);
+  // Overflow/onEnd drain already released this handler — keep retirement so
+  // late native terminals cannot recreate earlyEvents. A still-live reader
+  // taking over a cancelled name may un-retire for fresh capture.
+  if (streamHandlers.get(emitter)?.get(eventName) === onEvent) {
+    retiredStreamNames.delete(eventName);
+  }
 }
 
 function nativeStreamNames(): string[] {
@@ -306,6 +318,9 @@ function createStreamingReader(
     throw new Error("GlobalEventEmitter is not registered");
   }
   const releaseAttached = (retire: boolean): void => {
+    if (retire) {
+      retireNames(eventNames);
+    }
     if (released) {
       return;
     }
@@ -314,7 +329,7 @@ function createStreamingReader(
       const handlers = streamHandlers.get(emitter);
       for (const name of eventNames) {
         handlers?.delete(name);
-        releaseStream(emitter, name, retire);
+        releaseStream(emitter, name, false);
       }
     }
   };
