@@ -18,6 +18,7 @@
     "shared/ps_sql.cc",
     "shared/ps_sql.h",
     "shared/sync_http_policy.h",
+    "shared/utf8_hold.h",
     "shared/nativeModule",
     "shared/win_host_stubs.c",
     "shared/CMakeLists.txt",

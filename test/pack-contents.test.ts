@@ -99,6 +99,11 @@ test("packed tarball ships iOS build inputs and omits host/build residue", async
       "Android SQL JNI binder must ship",
     );
     assert.equal(
+      has("android/src/main/cpp/utf8_hold_jni.cc"),
+      true,
+      "Android UTF-8 hold JNI must ship",
+    );
+    assert.equal(
       has("android/src/main/cpp/CMakeLists.txt"),
       true,
       "Android NDK CMake for ps_sql must ship",
@@ -107,6 +112,11 @@ test("packed tarball ships iOS build inputs and omits host/build residue", async
       has("shared/sync_http_policy.h"),
       true,
       "idle-complete / streaming timeouts live in shared/sync_http_policy.h",
+    );
+    assert.equal(
+      has("shared/utf8_hold.h"),
+      true,
+      "native incomplete UTF-8 hold lives in shared/utf8_hold.h",
     );
     assert.equal(
       has("android/src/main/java/com/powersync/lynx/SyncHttpPolicy.java"),

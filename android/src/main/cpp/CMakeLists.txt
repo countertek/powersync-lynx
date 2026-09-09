@@ -15,6 +15,7 @@ set(SHARED_DIR "${POWERSYNC_LYNX_ROOT}/shared")
 
 add_library(powersync_lynx_sql SHARED
   ps_sql_jni.cc
+  utf8_hold_jni.cc
   "${SHARED_DIR}/ps_sql.cc"
   "${SQLITE_DIR}/sqlite3.c"
 )

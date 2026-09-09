@@ -27,6 +27,7 @@ const catalog = loadSyncStreamFixtures();
 const checkpointOps = requireScenario(catalog, "checkpoint-ops");
 const errorThenEnd = requireScenario(catalog, "error-then-end");
 const idleComplete = requireScenario(catalog, "idle-complete");
+const splitMultibyte = requireScenario(catalog, "split-multibyte");
 
 const STREAM_ID = "NativePowerSyncHttpStream-fixture";
 
@@ -94,7 +95,7 @@ async function readUtf8Chunks(reader: ReadableStreamDefaultReader<Uint8Array>): 
   return parts;
 }
 
-test("shared NDJSON catalog covers checkpoint-ops, error-then-end, and idle-complete", () => {
+test("shared NDJSON catalog covers checkpoint-ops, error-then-end, idle-complete, and split-multibyte", () => {
   assert.equal(catalog.contentType, "application/x-ndjson");
   assert.equal(checkpointOps.path, "streamingId");
   assert.equal(checkpointOps.chunks.length, 2);
@@ -105,6 +106,9 @@ test("shared NDJSON catalog covers checkpoint-ops, error-then-end, and idle-comp
   assert.deepEqual(errorThenEnd.events, ["onData", "onError", "onEnd"]);
   assert.equal(idleComplete.path, "idleComplete");
   assert.deepEqual(idleComplete.events, []);
+  assert.equal(splitMultibyte.path, "streamingId");
+  assert.equal(splitMultibyte.wireChunksHex?.length, 2);
+  assert.deepEqual(splitMultibyte.events, ["onData", "onData", "onEnd"]);
   for (const key of ["body", "bodyBase64", "idleComplete"] as const) {
     assert.equal(catalog.idleCompleteEnvelopeKeys.includes(key), true, key);
   }
