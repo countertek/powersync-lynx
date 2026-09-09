@@ -112,22 +112,25 @@ function tableHasModules(host: NativeModulesHost | undefined): host is NativeMod
   return host != null && (host.NativePowerSyncModule != null || host.LynxFetchModule != null);
 }
 
-/**
- * Lynx's published `NativeModules` type (rspeedy / `@lynx-js/types`) does not
- * overlap {@link NativeModulesHost} — assigning it directly is TS2559. Probe
- * the PrimJS bag as `unknown` and read our fields at runtime.
- */
-function asNativeModulesTable(value: unknown): NativeModulesHost | undefined {
-  if (!isNonNullObject(value)) {
+function nativeModulesFromGlobalThis(): NativeModulesHost | undefined {
+  const table = globalThis.NativeModules;
+  if (!isNonNullObject(table)) {
     return undefined;
   }
-  // SAFETY: PrimJS NativeModules is a host bag; Lynx's type has no shared keys.
-  return value as NativeModulesHost;
+  // SAFETY: PrimJS NativeModules is a host bag. Lynx's published type shares no
+  // keys with NativeModulesHost (TS2559 under rspeedy). Fields are read at runtime.
+  return table as NativeModulesHost;
 }
 
-function readBareNativeModules(): unknown {
+function nativeModulesFromBareIdentifier(): NativeModulesHost | undefined {
   try {
-    return NativeModules as unknown;
+    const table = NativeModules;
+    if (!isNonNullObject(table)) {
+      return undefined;
+    }
+    // SAFETY: same PrimJS bag as nativeModulesFromGlobalThis; bare identifier is
+    // the Lynx binding when it is not on globalThis.
+    return table as NativeModulesHost;
   } catch {
     return undefined;
   }
@@ -222,12 +225,12 @@ export class PrimJSLynxHost implements LynxHost {
   }
 
   fetchImpl(): HostFetch | undefined {
-    const fromGlobal = globalThis.fetch as unknown;
+    const fromGlobal = globalThis.fetch;
     if (isHostFetch(fromGlobal)) {
       return fromGlobal;
     }
     try {
-      const fromBinding = fetch as unknown;
+      const fromBinding = fetch;
       if (isHostFetch(fromBinding)) {
         return fromBinding;
       }
@@ -238,11 +241,11 @@ export class PrimJSLynxHost implements LynxHost {
   }
 
   private lookupNativeModulesTable(): NativeModulesHost | undefined {
-    const fromGlobalThis = asNativeModulesTable(globalThis.NativeModules as unknown);
+    const fromGlobalThis = nativeModulesFromGlobalThis();
     if (tableHasModules(fromGlobalThis)) {
       return fromGlobalThis;
     }
-    const fromBinding = asNativeModulesTable(readBareNativeModules());
+    const fromBinding = nativeModulesFromBareIdentifier();
     if (tableHasModules(fromBinding)) {
       return fromBinding;
     }
@@ -260,14 +263,14 @@ export class PrimJSLynxHost implements LynxHost {
 
   private lookupNativePowerSyncModule(): NativePowerSyncModule | undefined {
     const fromGlobalThis = nativeModuleField(
-      asNativeModulesTable(globalThis.NativeModules as unknown),
+      nativeModulesFromGlobalThis(),
       "NativePowerSyncModule",
     );
     if (fromGlobalThis != null) {
       return fromGlobalThis;
     }
     const fromBinding = nativeModuleField(
-      asNativeModulesTable(readBareNativeModules()),
+      nativeModulesFromBareIdentifier(),
       "NativePowerSyncModule",
     );
     if (fromBinding != null) {
@@ -280,17 +283,11 @@ export class PrimJSLynxHost implements LynxHost {
   }
 
   private lookupLynxFetchModule(): LynxFetchModule | undefined {
-    const fromGlobalThis = nativeModuleField(
-      asNativeModulesTable(globalThis.NativeModules as unknown),
-      "LynxFetchModule",
-    );
+    const fromGlobalThis = nativeModuleField(nativeModulesFromGlobalThis(), "LynxFetchModule");
     if (fromGlobalThis != null) {
       return fromGlobalThis;
     }
-    const fromBinding = nativeModuleField(
-      asNativeModulesTable(readBareNativeModules()),
-      "LynxFetchModule",
-    );
+    const fromBinding = nativeModuleField(nativeModulesFromBareIdentifier(), "LynxFetchModule");
     if (fromBinding != null) {
       return fromBinding;
     }
