@@ -9,12 +9,14 @@ import com.lynx.react.bridge.ReadableMap;
 import com.lynx.react.bridge.ReadableType;
 import com.lynx.react.bridge.WritableMap;
 import com.lynx.tasm.behavior.LynxContext;
+import java.net.HttpURLConnection;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Native Module HTTP for {@code /sync/stream}. Autolink still registers methods on
@@ -34,9 +36,14 @@ final class NativeSyncHttp {
     LynxContext lynxContext();
   }
 
+  private static final class StreamHandle {
+    final AtomicBoolean cancelled = new AtomicBoolean(false);
+    final AtomicReference<HttpURLConnection> connection = new AtomicReference<>();
+  }
+
   private final ContextSource contextSource;
   private final ExecutorService executor;
-  private final Map<String, AtomicBoolean> activeStreams = new ConcurrentHashMap<>();
+  private final Map<String, StreamHandle> activeStreams = new ConcurrentHashMap<>();
   private final AtomicLong nextStreamId = new AtomicLong(0);
 
   NativeSyncHttp(ContextSource contextSource, ExecutorService executor) {
@@ -58,9 +65,17 @@ final class NativeSyncHttp {
   }
 
   void abort(String streamId, Callback callback) {
-    AtomicBoolean flag = streamId == null ? null : activeStreams.get(streamId);
-    if (flag != null) {
-      flag.set(true);
+    StreamHandle handle = streamId == null ? null : activeStreams.get(streamId);
+    if (handle != null) {
+      handle.cancelled.set(true);
+      HttpURLConnection conn = handle.connection.get();
+      if (conn != null) {
+        try {
+          conn.disconnect();
+        } catch (Throwable ignored) {
+          // disconnect is best-effort; the reader loop still observes cancelled.
+        }
+      }
     }
     WritableMap ok = Arguments.createMap();
     ok.putBoolean("ok", true);
@@ -69,8 +84,8 @@ final class NativeSyncHttp {
 
   private void fetchStreaming(ParsedHttpRequest parsed, Callback callback) {
     final String streamId = STREAM_EVENT_PREFIX + nextStreamId.getAndIncrement();
-    final AtomicBoolean cancelled = new AtomicBoolean(false);
-    activeStreams.put(streamId, cancelled);
+    final StreamHandle handle = new StreamHandle();
+    activeStreams.put(streamId, handle);
     final AtomicBoolean headersSent = new AtomicBoolean(false);
     try {
       StreamingHttp.stream(
@@ -78,7 +93,8 @@ final class NativeSyncHttp {
           parsed.url,
           parsed.headers,
           parsed.bodyBytes,
-          cancelled,
+          handle.cancelled,
+          handle.connection,
           new StreamingHttp.Listener() {
             @Override
             public void onHeaders(int status, String statusText, String contentType) {

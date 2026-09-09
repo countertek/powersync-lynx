@@ -4,10 +4,6 @@
 
 namespace {
 
-NSTimeInterval ConnectTimeoutSec() {
-  return PS_SYNC_HTTP_CONNECT_TIMEOUT_MS / 1000.0;
-}
-
 NSTimeInterval StreamReadTimeoutSec() {
   return PS_SYNC_HTTP_STREAM_READ_TIMEOUT_MS / 1000.0;
 }
@@ -129,13 +125,15 @@ NSUInteger TrailingIncompleteUtf8Bytes(NSData *data) {
       [urlRequest setValue:headerValue forHTTPHeaderField:(NSString *)key];
     }
   }
-    if (bodyData != nil && bodyData.length > 0) {
-      urlRequest.HTTPBody = bodyData;
-    }
+  if (bodyData != nil && bodyData.length > 0) {
+    urlRequest.HTTPBody = bodyData;
+  }
 
   NSURLSessionConfiguration *config = [NSURLSessionConfiguration ephemeralSessionConfiguration];
   config.timeoutIntervalForRequest = StreamReadTimeoutSec();
-  config.timeoutIntervalForResource = StreamReadTimeoutSec() + ConnectTimeoutSec();
+#if PS_SYNC_HTTP_STREAM_RESOURCE_TIMEOUT_MS > 0
+  config.timeoutIntervalForResource = PS_SYNC_HTTP_STREAM_RESOURCE_TIMEOUT_MS / 1000.0;
+#endif
   config.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
   self.session = [NSURLSession sessionWithConfiguration:config delegate:self delegateQueue:nil];
   self.task = [self.session dataTaskWithRequest:urlRequest];

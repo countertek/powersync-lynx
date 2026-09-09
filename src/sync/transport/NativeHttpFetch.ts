@@ -54,6 +54,10 @@ function fetchViaNativeHttp(request: SyncStreamRequest): Promise<Response> {
   if (request.body != null) {
     payload.body = request.body;
   }
+  const signal = request.signal;
+  if (signal != null && signal.aborted) {
+    return Promise.reject(new Error("Aborted"));
+  }
   // Capture GlobalEventEmitter early — native may emit onData before the Callback returns.
   enterEarlyCapture();
   let streamIdForAbort: string | undefined;
@@ -70,13 +74,8 @@ function fetchViaNativeHttp(request: SyncStreamRequest): Promise<Response> {
       // Presence-only; PrimJS host methods may throw on unused abort.
     }
   };
-  const signal = request.signal;
   if (signal != null) {
-    if (signal.aborted) {
-      abortNative();
-    } else {
-      signal.addEventListener("abort", abortNative, { once: true });
-    }
+    signal.addEventListener("abort", abortNative, { once: true });
   }
   return new Promise((resolve, reject) => {
     // Direct call like SQL RPC (open/execute). Do not use .call/.apply — PrimJS host
