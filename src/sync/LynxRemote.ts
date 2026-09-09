@@ -11,6 +11,83 @@ import { gunzipSync, isGzip } from "./gunzip.ts";
 
 let websockets: WebSocketSupport | undefined;
 
+/**
+ * ONE-SHOT diagnostic for the first `/sync/stream` only (FM-PS-LYNX-003).
+ * Removable: delete this block and all `firstSyncStream*` call sites.
+ */
+const FM_PS_LYNX_003 = "[FM-PS-LYNX-003]";
+let firstSyncStreamLogged = false;
+let firstSyncStreamDiag: {
+  t0: number;
+  onDataCount: number;
+  onDataFirstMs: number | null;
+} | null = null;
+
+function beginFirstSyncStreamDiag(url: string, streamingFlags: Record<string, boolean>): void {
+  if (firstSyncStreamLogged || !url.includes("/sync/stream")) {
+    return;
+  }
+  firstSyncStreamLogged = true;
+  firstSyncStreamDiag = { t0: Date.now(), onDataCount: 0, onDataFirstMs: null };
+  console.log(FM_PS_LYNX_003, "first /sync/stream — streaming flags on native request", {
+    url,
+    streamingFlags,
+    useStreaming: streamingFlags.useStreaming === true,
+    enableFetchAPIStandardStreaming: streamingFlags.enableFetchAPIStandardStreaming === true,
+  });
+}
+
+function logFirstSyncStreamPath(path: "chunked" | "raw", streamingId: string | undefined): void {
+  if (firstSyncStreamDiag == null) {
+    return;
+  }
+  console.log(FM_PS_LYNX_003, "native/js stream path", {
+    path,
+    streamingId: streamingId ?? null,
+  });
+}
+
+function noteFirstSyncStreamEvent(event: "onData" | "onEnd" | "onError"): void {
+  const diag = firstSyncStreamDiag;
+  if (diag == null) {
+    return;
+  }
+  const elapsedMs = Date.now() - diag.t0;
+  if (event === "onData") {
+    diag.onDataCount += 1;
+    if (diag.onDataFirstMs == null) {
+      diag.onDataFirstMs = elapsedMs;
+      console.log(FM_PS_LYNX_003, "first onData", {
+        onDataCount: diag.onDataCount,
+        elapsedMs,
+      });
+    }
+    return;
+  }
+  console.log(FM_PS_LYNX_003, "stream terminal — onData before onEnd?", {
+    terminalEvent: event,
+    onDataCount: diag.onDataCount,
+    onDataFiredBeforeOnEnd: diag.onDataCount > 0,
+    onDataFirstMs: diag.onDataFirstMs,
+    terminalElapsedMs: elapsedMs,
+  });
+  firstSyncStreamDiag = null;
+}
+
+function finishFirstSyncStreamRaw(bodyByteLength: number): void {
+  if (firstSyncStreamDiag == null) {
+    return;
+  }
+  console.log(FM_PS_LYNX_003, "stream terminal — onData before onEnd?", {
+    terminalEvent: "raw-body",
+    onDataCount: 0,
+    onDataFiredBeforeOnEnd: false,
+    bodyByteLength,
+    note: "raw path: fetch resolved with body bytes; native onData/onEnd not used",
+  });
+  firstSyncStreamDiag = null;
+}
+
 export interface LynxTextCodecHelper {
   decode(buffer: ArrayBuffer): string;
 }
@@ -295,14 +372,22 @@ class LynxFetchResponse {
     const status = Number(result.status ?? 0);
     const streamingId = result.lynxExtension?.streamingId;
     const bodyBytes = result.body == null ? new Uint8Array(0) : toUint8(result.body);
-    const reader =
-      streamingId != null && streamingId.length > 0
-        ? streamingReader(streamingId)
-        : bodyBytes.byteLength > 0
-          ? readerFromChunks([bodyBytes])
-          : streamingFallback
-            ? streamingReaderFallback()
-            : readerFromChunks([]);
+    let reader: ReadableStreamDefaultReader<Uint8Array>;
+    if (streamingId != null && streamingId.length > 0) {
+      logFirstSyncStreamPath("chunked", streamingId);
+      reader = streamingReader(streamingId);
+    } else if (bodyBytes.byteLength > 0) {
+      logFirstSyncStreamPath("raw", undefined);
+      finishFirstSyncStreamRaw(bodyBytes.byteLength);
+      reader = readerFromChunks([bodyBytes]);
+    } else if (streamingFallback) {
+      logFirstSyncStreamPath("chunked", undefined);
+      reader = streamingReaderFallback();
+    } else {
+      logFirstSyncStreamPath("raw", undefined);
+      finishFirstSyncStreamRaw(0);
+      reader = readerFromChunks([]);
+    }
     this.rawBody = result.body;
     this.ok = status >= 200 && status < 300;
     this.status = status;
@@ -637,10 +722,13 @@ function createStreamingReader(eventNames: string[]): ReadableStreamDefaultReade
         ? (eventPayload as { error?: unknown }).error
         : undefined;
     if (event === "onData") {
+      noteFirstSyncStreamEvent("onData");
       queue.push(toUint8(data));
     } else if (event === "onEnd") {
+      noteFirstSyncStreamEvent("onEnd");
       finished = true;
     } else if (event === "onError") {
+      noteFirstSyncStreamEvent("onError");
       failure = new Error(error == null ? "Lynx HTTP stream error" : String(error));
       finished = true;
     }
@@ -842,6 +930,18 @@ async function identifierStreamingResponse(response: Response): Promise<Response
   if (lookupEmitter() != null) {
     return eventStreamingResponse(response, streamingId);
   }
+  // Identifier Response.body path (no GlobalEventEmitter) — not native onData chunks.
+  logFirstSyncStreamPath("chunked", streamingId);
+  if (firstSyncStreamDiag != null) {
+    console.log(FM_PS_LYNX_003, "stream terminal — onData before onEnd?", {
+      terminalEvent: "identifier-body",
+      onDataCount: 0,
+      onDataFiredBeforeOnEnd: false,
+      streamingId: streamingId ?? null,
+      note: "using Response.body.getReader(); native onData/onEnd not attached",
+    });
+    firstSyncStreamDiag = null;
+  }
   return stabilizeStreamingResponse(response, captured);
 }
 
@@ -895,7 +995,9 @@ export class LynxRemote extends AbstractRemote {
 
   async fetch({ resource, request, expectStreamingResponse }: FetchOptions): Promise<Response> {
     const url = String(resource);
+    const extension = streamingExtension(expectStreamingResponse);
     if (expectStreamingResponse) {
+      beginFirstSyncStreamDiag(url, extension);
       enterEarlyCapture();
     }
     if (isLynxAndroid() && lynxFetchModule() != null) {
@@ -908,7 +1010,6 @@ export class LynxRemote extends AbstractRemote {
     if (typeof request.body === "string") {
       init.body = request.body;
     }
-    const extension = streamingExtension(expectStreamingResponse);
     if (Object.keys(extension).length > 0) {
       init.lynxExtension = extension;
     }
