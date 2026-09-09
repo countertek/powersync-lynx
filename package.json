@@ -10,8 +10,6 @@
     "android/gradle.properties",
     "android/consumer-rules.pro",
     "ios/src",
-    "ios/src/ps_sql.cc",
-    "ios/src/ps_sql.h",
     "ios/src/sqlite3.c",
     "ios/src/sqlite3.h",
     "ios/powersync-lynx.podspec",

@@ -126,6 +126,8 @@ Idle-complete (buffered UTF-8 `body` / `bodyBase64` when `LynxContext` cannot se
 
 Autolink apps compile this package’s `android/` tree: **NDK** + **CMake** for JNI `ps_sql`, with `-DANDROID_STL=c++_shared`. The consumer SDK needs an NDK and CMake so `externalNativeBuild` can build `libpowersync_lynx_sql.so`. `android/build.gradle` also runs a Gradle `Exec` of `node scripts/fetch-native-deps.mjs --sqlite` on `preBuild` (sqlite amalgamation). Gradle hosts without Node are tracked as [#39](https://github.com/countertek/powersync-lynx/issues/39) M2 and do not block `pnpm test` / `make test`. Sync-HTTP timeouts and stream event names live in `shared/sync_http_policy.h`; Android compiles committed `SyncHttpPolicy.java` generated from that header (`node scripts/gen-sync-http-policy-java.mjs`). Consumer Gradle does not run the generator. Drift fails `make test` / `pnpm test`.
 
+iOS Autolink compiles canonical `shared/ps_sql.{cc,h}` by path from `ios/powersync-lynx.podspec` (`../shared/ps_sql.{cc,h}`). Those sources ship in the npm package; `fetch-native-deps` does not copy them under `ios/src`.
+
 ## 🧪 Local demo stack
 
 Consumer TODO app + sync backends live under [`examples/`](https://github.com/countertek/powersync-lynx/tree/main/examples). Full walkthrough: [examples/README.md](https://github.com/countertek/powersync-lynx/blob/main/examples/README.md).

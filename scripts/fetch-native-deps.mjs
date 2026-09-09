@@ -58,11 +58,20 @@ function materializeRegularFile(src, dest) {
   fs.copyFileSync(src, dest);
 }
 
-function materializeIosSrcCompileInputs() {
+function removeStaleIosPsSqlCopies() {
+  const iosSrc = path.join(ROOT, 'ios', 'src');
+  for (const name of ['ps_sql.cc', 'ps_sql.h']) {
+    try {
+      fs.unlinkSync(path.join(iosSrc, name));
+    } catch {
+      // leftover copy is already gone
+    }
+  }
+}
+
+function materializeIosSqliteAmalgamation() {
   const iosSrc = path.join(ROOT, 'ios', 'src');
   const sqliteDir = path.join(ROOT, 'third_party', 'sqlite');
-  materializeRegularFile(path.join(ROOT, 'shared', 'ps_sql.cc'), path.join(iosSrc, 'ps_sql.cc'));
-  materializeRegularFile(path.join(ROOT, 'shared', 'ps_sql.h'), path.join(iosSrc, 'ps_sql.h'));
   materializeRegularFile(path.join(sqliteDir, 'sqlite3.c'), path.join(iosSrc, 'sqlite3.c'));
   materializeRegularFile(path.join(sqliteDir, 'sqlite3.h'), path.join(iosSrc, 'sqlite3.h'));
 }
@@ -73,7 +82,8 @@ async function ensureSqlite() {
   const source = path.join(dir, 'sqlite3.c');
   if (fs.existsSync(header) && fs.existsSync(source)) {
     console.log('sqlite amalgamation present');
-    materializeIosSrcCompileInputs();
+    removeStaleIosPsSqlCopies();
+    materializeIosSqliteAmalgamation();
     return;
   }
   const zipPath = path.join(ROOT, 'third_party', `${SQLITE_AMALGAMATION}.zip`);
@@ -88,7 +98,8 @@ async function ensureSqlite() {
   fs.copyFileSync(path.join(extracted, 'sqlite3.h'), header);
   fs.copyFileSync(path.join(extracted, 'sqlite3ext.h'), path.join(dir, 'sqlite3ext.h'));
   console.log('sqlite amalgamation ready');
-  materializeIosSrcCompileInputs();
+  removeStaleIosPsSqlCopies();
+  materializeIosSqliteAmalgamation();
 }
 
 async function ensureCoreAsset(name, destDir) {
