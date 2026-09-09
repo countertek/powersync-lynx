@@ -109,8 +109,77 @@ Before                                             After
 - **V3** `make test` enforces ADR-0003's "no `UIWindow` walk" by `grep` on `NativeSyncHttp.mm`. It works; the iOS fixture test (`ios_sync_http_fixture_test.mm`) is the seam-level check and needs a Mac.
 - **V4** `shared/sync_http_policy.h` comments "Keep Android IdleCompleteHttp.java / StreamingHttp.java constants in lockstep" — Java copies the policy constants by hand (see N-section).
 
-<!-- NATIVE_SECTION -->
+## Native Module candidates
+
+Post-D, `shared/ps_sql::Engine` is the one deep SQL module; the three binders (Android Java+JNI, iOS ObjC, desktop N-API) are host wire-type adapters and their INTEGER-beyond-safe-range split (Lynx `Long` / tagged `{__psBig}` / N-API BigInt) is intentional under ADR-0001. The native friction is the **sync-HTTP stack**, which exists twice (Java, ObjC) beside a shared policy header only one side consumes.
+
+### N1 — Android copies the sync-HTTP policy by hand instead of consuming it
+
+**Strength: Strong**
+
+**Files:** `shared/sync_http_policy.h` (`PS_SYNC_HTTP_IDLE_COMPLETE_MS 2500`, connect/read timeouts, `PS_SYNC_HTTP_STREAM_EVENT_PREFIX`, `ps_sync_http_looks_like_long_lived`), `android/.../IdleCompleteHttp.java:25–29` (`2_500L`, `30_000L`, `30_000L`), `StreamingHttp.java:29–31` (`30_000L`, `120_000L`), `NativeSyncHttp.java:30` (`"NativePowerSyncHttpStream"`).
+
+**Problem.** ADR-0003 names one idle-complete policy (C landed it as a header). iOS includes the header; Android re-types every constant and the URL / long-lived heuristics as Java literals with "keep in lockstep" comments. That is a shallow duplicate of a small interface, and nothing fails when they drift.
+
+**Deletion test.** Delete the Java literals: the policy reappears nowhere else on Android — it is already in the header. Concentrates.
+
+**Solution.** Either generate the Java constants from the header at build time (a tiny script in `scripts/`, run by `make deps`/Gradle), or expose the heuristics through the existing JNI (`PsSqlEngine` already loads a native lib), or — cheapest — add a Linux `make test` check that parses both files and asserts equality, so drift fails CI. Start with the check.
+
+**Benefits.** Locality: one place for the 2.5 s window and the event prefix. Leverage: the shared fixture test (`sync_stream_fixtures_test.cc`) already asserts the terminal sequence against the header; Android joins that guarantee.
+
+### N2 — UTF-8 incomplete-sequence hold implemented three times
+
+**Strength: Strong**
+
+**Files:** `android/.../StreamingHttp.java:147` (`trailingIncompleteUtf8Bytes`), `ios/src/StreamingHttp.mm:15` (`TrailingIncompleteUtf8Bytes`), `src/sync/transport/bytes.ts:18` (`trailingIncompleteUtf8Bytes`, used by `createLynxTextDecoder`).
+
+**Problem.** The same multibyte-boundary algorithm exists in Java, ObjC++ and TypeScript; the Android copy cites the JS one in a comment — the seam points the wrong way. A boundary bug (e.g. a 4-byte lead at chunk end) has to be fixed three times and is covered by fixture bytes only on the JS side.
+
+**Deletion test.** Delete the two native copies and hold bytes in one shared C helper (`shared/`), which iOS already compiles and Android reaches via JNI: nothing reappears. The JS copy stays (the Client's `TextDecoder` override needs it for host-fetch bodies), but the shared fixture catalog should gain a split-multibyte case so all three are pinned to the same bytes.
+
+**Benefits.** Locality for "every `onData` string is well-formed UTF-8"; drift on multibyte boundaries becomes a fixture failure.
+
+### N3 — Two near-duplicate NativeSyncHttp orchestrations with different edge behaviour
+
+**Strength: Worth exploring**
+
+**Files:** `android/.../NativeSyncHttp.java` (250), `StreamingHttp.java` (194), `IdleCompleteHttp.java` (164); `ios/src/NativeSyncHttp.mm` (190), `StreamingHttp.mm` (241), `IdleCompleteHttp.mm` (317).
+
+**Problem.** Understanding "streamingId → `onData*` → `onError?` → `onEnd`" means reading two orchestrations that agree on the fixtures but differ at the edges: the pre-headers failure envelope is `{ok:false,message}` on Android and `{ok:false,status:-1,body,idleComplete:false,…}` on iOS (`NativeSyncHttp.mm:152–157`); abort ownership is an `AtomicBoolean` map on Android vs session removal + `onError("aborted")` on iOS; Android instrumentation has no `error-then-end` / abort case while iOS does. Platform I/O (HttpURLConnection vs NSURLSession) must stay per-host; the *decision* logic (headers-sent?, idle vs streaming choice, terminal-sequence emission, abort-after-headers) need not.
+
+**Deletion test.** Delete one orchestration: the state machine reappears verbatim on the other host — earning its keep as a shared module, not as two copies.
+
+**Solution.** Do not write a shared C++ HTTP client. Extract the state machine as one shared description both hosts satisfy: either a small C++ `SyncStreamSession` (headers → chunks → terminal) driven by host I/O callbacks, or at minimum one shared behavioural test list (the fixture catalog plus pre-headers-failure and abort cases) that Android instrumentation and iOS fixture tests both run. Must stay a sub-interface on the same lookup (ADR-0003); desktop remains SQL-only.
+
+**Benefits.** Leverage: one terminal-sequence contract; locality: the envelope-shape difference becomes a single decision instead of an accident.
+
+### N4 — iOS compiles a materialized copy of `ps_sql`; `test-ios` links against a hard-coded runner path
+
+**Strength: Worth exploring** (build seam, not module depth)
+
+**Files:** `scripts/fetch-native-deps.mjs` (`materializeIosSrcCompileInputs`, lines 61–91) copies `shared/ps_sql.{h,cc}` and sqlite into `ios/src/` (gitignored); `ios/powersync-lynx.podspec`; `Makefile` `test-ios` (`install_name_tool -change /Users/runner/work/powersync-sqlite-core/…`).
+
+**Problem.** The one deep SQL module exists twice on disk on a Mac, and the pod compiles the copy — a "which `ps_sql.cc` did I edit?" trap. The iOS test link assumes the core dylib's GitHub-Actions install name.
+
+**Solution.** Have the podspec compile `../shared` by path (its header search path already points there) and derive the dylib id with `otool -D` at build time. Delete the copies or make them generated-only in one place.
+
+### Native — noted, not proposed
+
+- `PsSqlEngine.java`, iOS `httpFetch`/`httpFetchAbort` forwarders, `LynxLibraryProviderImpl`, `lynxtron/library_entry.cc`: thin by design (registration ceremony / ADR-0003 packaging). Deleting them moves complexity to host apps. Leave.
+- Unifying Long / `{__psBig}` / BigInt packing across binders would **contradict ADR-0001**. Not proposed; a golden-envelope test for the failure shape is the only cheap win.
+- `make test` compiles `ps_sql_jni.cc` with `-c` only — a compile check, not an Android RPC test; `check-native-artifacts.mjs` is magic-bytes + substring presence. Both are honest about what they are; do not mistake them for coverage.
 
 ## Top recommendation
 
 **T1 first.** It is where the hot spots are (`LynxRemote`, the stream tests), it turns three shallow adapters into three deep ones without moving the seam A already placed, it removes the duplicated `enterEarlyCapture` ordering invariant, and it lets the transport directory back under lint (V1). T2 should be grilled immediately after (or alongside) because deleting the nameless-slot fallback is what lets `events.ts` collapse to one concept; T1 without T2 still leaves the 64-slot machinery behind the host-fetch adapter's fallback branch.
+
+On the native side, **N1 + N2 together** are the cheapest Strong items: a policy-equality check in `make test` and one shared UTF-8 hold helper plus a split-multibyte fixture. N3 is the larger decision and should be grilled before any code.
+
+## Suggested order
+
+1. T1 (Client transport adapters own their `Response`) — Strong
+2. T2 grilling → ADR-0004 → delete LynxFetchModule streaming fallback — Worth exploring / Strong on delete
+3. N1 + N2 (policy check, shared UTF-8 hold, fixture case) — Strong
+4. T3 (`callNative` → `NativeSql`) — small, Worth exploring
+5. N3 grilling (shared stream-session state machine or shared behavioural test list) — Worth exploring
+6. N4, T4 — when they bite

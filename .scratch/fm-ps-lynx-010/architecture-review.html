@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>powersync-lynx — architecture review (post-#32 main)</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";
+  mermaid.initialize({ startOnLoad: true, theme: "neutral" });
+</script>
+<style>
+  .box { border: 2px solid #334155; border-radius: .5rem; padding: .5rem .75rem; font-family: ui-monospace, monospace; font-size: .8rem; }
+  .iface { background: #fde68a; }
+  .impl { background: #bfdbfe; }
+  .shallow .iface { min-height: 3.5rem; }
+  .shallow .impl { min-height: 1.2rem; }
+  .deep .iface { min-height: 1.2rem; }
+  .deep .impl { min-height: 5rem; }
+</style>
+</head>
+<body class="bg-slate-50 text-slate-900">
+<main class="max-w-6xl mx-auto p-8 space-y-10">
+
+<header class="space-y-2">
+  <h1 class="text-3xl font-bold">powersync-lynx — deepening opportunities</h1>
+  <p class="text-slate-600">Survey of <code>main</code> @ <code>442ec6fda09f</code> (merge of #32). Vocabulary: module, interface, depth, seam, adapter, leverage, locality. Domain names from <code>CONTEXT.md</code>. ADR-0001/0002/0003 are not re-litigated.</p>
+  <p class="text-slate-600">Gate on this tree: <code>pnpm test</code> 92/92 · <code>pnpm typecheck</code> clean · <code>pnpm lint</code> 0/0 · Linux <code>make test</code> pass.</p>
+</header>
+
+<section class="bg-white rounded-xl shadow p-6">
+  <h2 class="text-xl font-semibold mb-3">Prior pass (#18, items A–H) — all landed</h2>
+  <div class="grid grid-cols-4 gap-2 text-sm">
+    <div class="p-2 rounded bg-emerald-100">H verification gate</div>
+    <div class="p-2 rounded bg-emerald-100">E one LynxHost</div>
+    <div class="p-2 rounded bg-emerald-100">A SyncStreamTransport</div>
+    <div class="p-2 rounded bg-emerald-100">B NativeSyncHttp split</div>
+    <div class="p-2 rounded bg-emerald-100">C one idle-complete envelope</div>
+    <div class="p-2 rounded bg-emerald-100">F shared NDJSON fixtures</div>
+    <div class="p-2 rounded bg-emerald-100">D Android SQL on ps_sql</div>
+    <div class="p-2 rounded bg-emerald-100">G iOS host-provided sender</div>
+  </div>
+  <p class="text-sm text-slate-600 mt-3">The findings below are a fresh backlog, not leftovers.</p>
+</section>
+
+<section class="bg-white rounded-xl shadow p-6">
+  <h2 class="text-xl font-semibold mb-3">How a /sync/stream chunk reaches PowerSync today (4-file hop)</h2>
+  <pre class="mermaid">
+sequenceDiagram
+  participant R as LynxRemote.fetch
+  participant N as NativeHttpFetch (adapter)
+  participant RS as response.ts
+  participant EV as events.ts
+  participant B as bytes.ts
+  R->>EV: enterEarlyCapture()  (also called again inside N)
+  R->>N: transport.fetch(request)
+  N->>EV: enterEarlyCapture()
+  N->>RS: moduleResponse(fromNativeHttpEnvelope(envelope), false)
+  RS->>RS: 5-flag choice: streamingId / idleComplete / body / bodyBase64 / streamingFallback
+  RS->>EV: streamingReader(streamingId)
+  EV->>B: toUint8(onData payload)
+  EV-->>R: Response.body.getReader()
+  </pre>
+</section>
+
+<!-- T1 -->
+<section class="bg-white rounded-xl shadow p-6 space-y-4">
+  <div class="flex items-center gap-3">
+    <h2 class="text-xl font-semibold">T1 — Response assembly sits beside the transport seam, not behind each adapter</h2>
+    <span class="px-2 py-1 rounded-full text-xs font-bold bg-red-600 text-white">Strong</span>
+  </div>
+  <p><b>Files:</b> <code>src/sync/transport/{NativeHttpFetch,LynxFetchModule,HostFetch}.ts</code>, <code>response.ts</code>, <code>events.ts</code>, <code>bytes.ts</code>, <code>src/sync/LynxRemote.ts</code>.</p>
+  <p><b>Problem:</b> the three <code>SyncStreamTransport</code> adapters are shallow; the reader choice lives in <code>response.ts</code> behind a five-flag mini-protocol (<code>WireFetchSuccess</code>), and the ordering invariant "<code>enterEarlyCapture()</code> before native emits" is called in two places because no module owns it. <code>HostFetch</code> still sniffs <code>lynxExtension.streamingId</code>.</p>
+  <p><b>Solution:</b> each adapter returns a finished <code>Response</code>; one internal <code>syncStreamResponse</code> accepts exactly two shapes (<code>{bytes}</code> | <code>{streamingId}</code>); <code>NativeHttpFetch</code> alone owns early capture; <code>LynxRemote</code> stops calling it.</p>
+  <p><b>Benefits:</b> locality — a streamingId bug is fixed in one adapter; leverage — tests already cross <code>SyncStreamTransport.fetch</code> (27 + 6 tests) and survive unchanged; the transport dir becomes lintable again.</p>
+  <div class="grid grid-cols-2 gap-6">
+    <div>
+      <h3 class="font-semibold text-sm mb-2">Before — three shallow adapters, one wide helper</h3>
+      <div class="grid grid-cols-3 gap-2 shallow">
+        <div><div class="box iface">payload+cb → 5 flags</div><div class="box impl">~40 lines</div></div>
+        <div><div class="box iface">payload+cb → 5 flags</div><div class="box impl">~40 lines</div></div>
+        <div><div class="box iface">fetch → sniff lynxExtension</div><div class="box impl">~30 lines</div></div>
+      </div>
+      <div class="box iface mt-2">response.ts: 8 exports · events.ts: 4 exports · bytes.ts: 12 exports</div>
+      <div class="box impl">~960 lines shared, lint-ignored</div>
+    </div>
+    <div>
+      <h3 class="font-semibold text-sm mb-2">After — three deep adapters, one small internal module</h3>
+      <div class="grid grid-cols-3 gap-2 deep">
+        <div><div class="box iface">fetch(request)</div><div class="box impl">native httpFetch<br/>early capture<br/>streamingId reader<br/>idle-complete bytes</div></div>
+        <div><div class="box iface">fetch(request)</div><div class="box impl">Android JSON<br/>gzip-as-string<br/>(no streaming)</div></div>
+        <div><div class="box iface">fetch(request)</div><div class="box impl">identifier fetch<br/>one-shot body keep<br/>(no lynxExtension)</div></div>
+      </div>
+      <div class="box iface mt-2">syncStreamResponse({bytes} | {streamingId})</div>
+      <div class="box impl">Response shaping, UTF-8/gzip/base64 — internal</div>
+    </div>
+  </div>
+</section>
+
+<!-- T2 -->
+<section class="bg-white rounded-xl shadow p-6 space-y-4">
+  <div class="flex items-center gap-3">
+    <h2 class="text-xl font-semibold">T2 — LynxFetchModule <i>streaming</i> fallback: a seam with no reachable second adapter</h2>
+    <span class="px-2 py-1 rounded-full text-xs font-bold bg-amber-500 text-white">Worth exploring</span>
+  </div>
+  <p><b>Files:</b> <code>LynxFetchModule.ts</code>, <code>events.ts</code> (64 pre-slotted <code>LynxFetchModuleStreamingEventN</code>, <code>_events.get</code> monkeypatch, <code>foreignListeners</code>, <code>streamingReaderFallback</code>), <code>response.ts</code> (<code>streamingFallback</code>), ~9 tests.</p>
+  <p><b>Problem:</b> after B+C every Autolink <code>NativePowerSyncModule</code> on Android has <code>httpFetch</code>, so <code>lynx-fetch-module</code> can win a streaming request only when the SQL Native Module is absent — and then no database can open. The nameless-slot machinery serves an unreachable path. <code>liveStreamNames</code> is consulted but never populated. LynxFetchModule <i>is</i> still the live Android JSON adapter.</p>
+  <p><b>Solution:</b> grill "LynxFetchModule is the Android JSON adapter; it never streams", record ADR-0004, delete the streaming half (pre-slots, <code>_events</code> hook, <code>streamingFallback</code>, <code>enableFetchAPIStandardStreaming</code>), retire the matching tests.</p>
+  <p><b>Benefits:</b> <code>events.ts</code> collapses from three concepts to one (streamingId → reader). Less interface to learn before touching <code>/sync/stream</code>.</p>
+  <pre class="mermaid">
+flowchart LR
+  P[pickSyncStreamTransport] -->|streaming & httpFetch| NH[native-http]
+  P -->|Android & LynxFetchModule| LF[lynx-fetch-module]
+  P -->|else| HF[host-fetch]
+  LF -.->|streaming: unreachable when SQL module present| X[(64 nameless slots<br/>_events hook<br/>streamingReaderFallback)]
+  LF -->|JSON GETs: live| J[write-checkpoint etc.]
+  style X stroke-dasharray: 5 5,stroke:#dc2626
+  </pre>
+</section>
+
+<!-- T3 -->
+<section class="bg-white rounded-xl shadow p-6 space-y-3">
+  <div class="flex items-center gap-3">
+    <h2 class="text-xl font-semibold">T3 — <code>callNative</code> string dispatch in the Adapter</h2>
+    <span class="px-2 py-1 rounded-full text-xs font-bold bg-amber-500 text-white">Worth exploring</span>
+  </div>
+  <p><b>Files:</b> <code>src/adapter/native.ts</code> lines 138–177, <code>LynxConnection.ts</code>, <code>LynxDBAdapter.openConnection</code>.</p>
+  <p><b>Problem:</b> four overloads over one <code>switch</code> with four <code>SAFETY</code> casts re-deriving what the overload knew — a pass-through.</p>
+  <p><b>Solution:</b> one <code>NativeSql</code> value (<code>open/close/execute/executeBatch</code> promise functions over <code>withNativeCallback</code>). Casts vanish; <code>test/adapter.test.ts</code> keeps faking the Native Module.</p>
+  <div class="grid grid-cols-2 gap-6 text-sm">
+    <div class="shallow"><div class="box iface">callNative("open"|"close"|"execute"|"executeBatch", first?, sql?, params?)</div><div class="box impl">switch + 4 casts</div></div>
+    <div class="deep"><div class="box iface">nativeSql().execute(dbId, sql, params)</div><div class="box impl">callback → promise, envelope parse, error mapping</div></div>
+  </div>
+</section>
+
+<!-- T4 -->
+<section class="bg-white rounded-xl shadow p-6 space-y-3">
+  <div class="flex items-center gap-3">
+    <h2 class="text-xl font-semibold">T4 — Sync-protocol policy hidden inside a header helper</h2>
+    <span class="px-2 py-1 rounded-full text-xs font-bold bg-slate-500 text-white">Speculative</span>
+  </div>
+  <p><code>bytes.ts</code> <code>headerMap()</code> silently rewrites <code>Accept</code> to NDJSON and injects <code>Accept-Encoding: identity</code>. Move that decision into <code>syncStreamRequestFromFetch</code> as a named step so the invariant is visible at the seam.</p>
+</section>
+
+<section class="bg-white rounded-xl shadow p-6 space-y-3">
+  <h2 class="text-xl font-semibold">Native Module — where the depth already is, and where it is duplicated</h2>
+  <pre class="mermaid">
+flowchart TB
+  subgraph SQL["SQL RPC (ADR-0001) — one deep module"]
+    A[Android Java+JNI binder] --> E[shared ps_sql::Engine]
+    I[iOS ObjC binder] --> E
+    D[desktop N-API binder] --> E
+  end
+  subgraph HTTP["NativeSyncHttp (ADR-0003) — duplicated"]
+    AJ[NativeSyncHttp.java<br/>StreamingHttp.java<br/>IdleCompleteHttp.java] -. hand-copied literals .-> P[shared/sync_http_policy.h]
+    IM[NativeSyncHttp.mm<br/>StreamingHttp.mm<br/>IdleCompleteHttp.mm] --> P
+    AJ --> F[shared/fixtures/sync-stream.json]
+    IM --> F
+  end
+  style AJ stroke:#dc2626
+  </pre>
+</section>
+
+<section class="bg-white rounded-xl shadow p-6 space-y-3">
+  <div class="flex items-center gap-3">
+    <h2 class="text-xl font-semibold">N1 — Android copies the sync-HTTP policy instead of consuming it</h2>
+    <span class="px-2 py-1 rounded-full text-xs font-bold bg-red-600 text-white">Strong</span>
+  </div>
+  <p><b>Files:</b> <code>shared/sync_http_policy.h</code> vs <code>IdleCompleteHttp.java:25–29</code>, <code>StreamingHttp.java:29–31</code>, <code>NativeSyncHttp.java:30</code>.</p>
+  <p><b>Problem:</b> <code>2500</code> / <code>30000</code> / <code>120000</code> / <code>"NativePowerSyncHttpStream"</code> re-typed in Java "in lockstep"; nothing fails on drift. iOS includes the header.</p>
+  <p><b>Solution:</b> first an equality check in <code>make test</code>; then generate the Java constants from the header or route heuristics through the existing JNI.</p>
+  <div class="grid grid-cols-2 gap-6 text-sm">
+    <div class="shallow"><div class="box iface">header macros + Java literals + lockstep comments</div><div class="box impl">same 5 numbers, twice</div></div>
+    <div class="deep"><div class="box iface">sync_http_policy.h</div><div class="box impl">idle window · timeouts · event names · URL/long-lived heuristics · consumed by both hosts</div></div>
+  </div>
+</section>
+
+<section class="bg-white rounded-xl shadow p-6 space-y-3">
+  <div class="flex items-center gap-3">
+    <h2 class="text-xl font-semibold">N2 — Incomplete-UTF-8 hold implemented three times</h2>
+    <span class="px-2 py-1 rounded-full text-xs font-bold bg-red-600 text-white">Strong</span>
+  </div>
+  <p><b>Files:</b> <code>StreamingHttp.java:147</code>, <code>StreamingHttp.mm:15</code>, <code>bytes.ts:18</code>. Android's comment cites the JS copy — the seam points the wrong way.</p>
+  <p><b>Solution:</b> one shared C helper for iOS/Android (JS copy stays for host-fetch bodies) plus a split-multibyte case in the shared fixture catalog so all three are pinned to the same bytes.</p>
+</section>
+
+<section class="bg-white rounded-xl shadow p-6 space-y-3">
+  <div class="flex items-center gap-3">
+    <h2 class="text-xl font-semibold">N3 — One stream-session contract for Android and iOS NativeSyncHttp</h2>
+    <span class="px-2 py-1 rounded-full text-xs font-bold bg-amber-500 text-white">Worth exploring</span>
+  </div>
+  <p><b>Problem:</b> two orchestrations agree on fixtures but differ at the edges — pre-headers failure is <code>{ok:false,message}</code> on Android vs <code>{ok:false,status:-1,body,idleComplete:false,…}</code> on iOS (<code>NativeSyncHttp.mm:152–157</code>); abort ownership differs; Android instrumentation lacks <code>error-then-end</code>/abort.</p>
+  <p><b>Solution:</b> keep host I/O per platform; extract the decision state machine (headers-sent, idle-vs-streaming, terminal emission, abort-after-headers) as shared C++ or as one shared behavioural test list. Stays a sub-interface (ADR-0003).</p>
+</section>
+
+<section class="bg-white rounded-xl shadow p-6 space-y-3">
+  <div class="flex items-center gap-3">
+    <h2 class="text-xl font-semibold">N4 — iOS compiles a materialized copy of ps_sql; test-ios links a hard-coded runner path</h2>
+    <span class="px-2 py-1 rounded-full text-xs font-bold bg-amber-500 text-white">Worth exploring</span>
+  </div>
+  <p><code>scripts/fetch-native-deps.mjs</code> <code>materializeIosSrcCompileInputs</code>, podspec, <code>Makefile</code> <code>install_name_tool -change /Users/runner/…</code>. Compile <code>../shared</code> by path; discover the dylib id with <code>otool -D</code>.</p>
+</section>
+
+<section class="bg-slate-100 rounded-xl p-6 text-sm">
+  <h2 class="font-semibold mb-1">Not proposed (would contradict ADRs or is deliberate ceremony)</h2>
+  <ul class="list-disc pl-6 space-y-1">
+    <li>Unifying Long / <code>{__psBig}</code> / BigInt packing across binders — contradicts ADR-0001.</li>
+    <li>Collapsing thin forwarders (<code>PsSqlEngine.java</code>, iOS <code>httpFetch</code> forwarders, <code>LynxLibraryProviderImpl</code>, <code>lynxtron/library_entry.cc</code>) — ADR-0003 packaging / Autolink ceremony.</li>
+    <li>Restructuring the Host helper <code>page-rpc.ts</code> — already deep, tested at its interface.</li>
+  </ul>
+</section>
+
+<section class="bg-white rounded-xl shadow p-6 space-y-2">
+  <h2 class="text-xl font-semibold">Verification observations</h2>
+  <ul class="list-disc pl-6 text-sm space-y-1">
+    <li><b>V1</b> <code>oxlint.config.ts</code> ignores exactly <code>bytes.ts</code>/<code>events.ts</code>/<code>response.ts</code> — the deepest transport code is the only un-linted Client code.</li>
+    <li><b>V2</b> <code>install-graph</code> / <code>pack-contents</code> tests shell out to <code>pnpm</code>; environment-coupled, fine in CI.</li>
+    <li><b>V3</b> <code>make test</code> enforces ADR-0003's "no UIWindow walk" via <code>grep</code>; the seam-level iOS fixture test needs a Mac.</li>
+    <li><b>V4</b> <code>shared/sync_http_policy.h</code> asks Java to keep constants "in lockstep" by hand.</li>
+  </ul>
+</section>
+
+<section class="bg-indigo-50 border border-indigo-200 rounded-xl p-6">
+  <h2 class="text-xl font-semibold mb-2">Top recommendation</h2>
+  <p><b>T1 first</b> — it is where the hot spots are, it deepens the three adapters without moving the seam A placed, it removes the duplicated early-capture invariant, and it lets the transport directory back under lint. Grill <b>T2</b> alongside: deleting the nameless-slot fallback is what lets <code>events.ts</code> collapse to one concept. Native: <b>N1 + N2</b> are the cheapest Strong items; <b>N3</b> needs a grilling decision first.</p>
+  <p class="mt-2 text-sm">Order: T1 → T2 (grill, ADR-0004, delete) → N1 + N2 → T3 → N3 (grill) → N4, T4 when they bite.</p>
+</section>
+
+</main>
+</body>
+</html>
