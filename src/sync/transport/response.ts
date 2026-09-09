@@ -14,11 +14,7 @@ export type SyncStreamResponseInit = {
   status?: number;
   statusText?: string;
   headers?: Record<string, string>;
-} & (
-  | { bytes: Uint8Array }
-  | { streamingId: string }
-  | { streamingFallback: true }
-);
+} & ({ bytes: Uint8Array } | { streamingId: string } | { streamingFallback: true });
 
 function readerFromChunks(chunks: Uint8Array[]): ReadableStreamDefaultReader<Uint8Array> {
   let i = 0;

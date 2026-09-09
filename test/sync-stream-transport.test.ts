@@ -185,8 +185,7 @@ test("LynxRemote logs the selected streaming transport instead of FM-PS-LYNX-003
   );
 });
 
-const BSON_ACCEPT =
-  "application/vnd.powersync.bson-stream;q=0.9, application/x-ndjson;q=0.8";
+const BSON_ACCEPT = "application/vnd.powersync.bson-stream;q=0.9, application/x-ndjson;q=0.8";
 
 test("headerMap copies Accept without rewriting BSON or adding Accept-Encoding", () => {
   const mapped = headerMap({ Accept: BSON_ACCEPT });

@@ -1,6 +1,10 @@
 import { getLynxHost } from "../../host.ts";
 import { isFunction } from "../../type-guards.ts";
-import { stabilizeJsonResponse, stabilizeStreamingResponse, syncStreamResponse } from "./response.ts";
+import {
+  stabilizeJsonResponse,
+  stabilizeStreamingResponse,
+  syncStreamResponse,
+} from "./response.ts";
 import { streamingExtension } from "./LynxFetchModule.ts";
 import type { SyncStreamRequest, SyncStreamTransport } from "./SyncStreamTransport.ts";
 

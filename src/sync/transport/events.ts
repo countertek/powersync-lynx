@@ -91,7 +91,11 @@ function retireStream(name: string): void {
   }
 }
 
-function rememberEarly(emitter: StreamEmitter, name: string, payload: LynxStreamEventPayload): void {
+function rememberEarly(
+  emitter: StreamEmitter,
+  name: string,
+  payload: LynxStreamEventPayload,
+): void {
   if (
     retiredStreamNames.has(name) ||
     liveStreamNames.get(emitter)?.has(name) ||

@@ -733,7 +733,11 @@ test("buffered onEnd on one of two emitters does not accept late data on the oth
       await reader.cancel();
       emitterB.emit?.(streamingId, { event: "onData", data: "late\n" });
       const next = await reader.read();
-      assert.equal(next.done, true, "late onData on the second emitter must not reopen a finished reader");
+      assert.equal(
+        next.done,
+        true,
+        "late onData on the second emitter must not reopen a finished reader",
+      );
     },
   );
 });
@@ -811,7 +815,11 @@ test("overflow on one of two emitters does not keep a handler on the other", asy
           setTimeout(() => resolve({ kind: "timeout" }), 50);
         }),
       ]);
-      assert.equal(raced.kind, "timeout", "stale overflow terminals on the second emitter must not replay");
+      assert.equal(
+        raced.kind,
+        "timeout",
+        "stale overflow terminals on the second emitter must not replay",
+      );
       emitterB.emit?.(streamingId, { event: "onData", data: "chunk-2\n" });
       const next = await pending;
       assert.equal(next.done, false);
@@ -1202,7 +1210,7 @@ test("fetchStream yields JSON checkpoint lines when the service honors Accept", 
   );
 });
 
-test("identifier fetchStream keeps NDJSON native delivered before addListener without emit", async () => {
+test("identifier fetchStream keeps NDJSON via nameless slots when body is unusable", async () => {
   const listeners = new Map<string, (payload: LynxStreamEventPayload) => void>();
   const previousLynx = globalThis.lynx;
   const previousFetch = globalThis.fetch;
@@ -1222,11 +1230,6 @@ test("identifier fetchStream keeps NDJSON native delivered before addListener wi
     if (!lynxStreamingRequested(init)) {
       return hangResponse();
     }
-    queueMicrotask(() => {
-      const streamingId = "LynxFetchModuleStreamingEvent0";
-      listeners.get(streamingId)?.({ event: "onData", data: NDJSON_LINE });
-      listeners.get(streamingId)?.({ event: "onEnd" });
-    });
     return identifierResponse({
       contentType: "application/x-ndjson",
       streamingId: "LynxFetchModuleStreamingEvent0",
@@ -1240,6 +1243,11 @@ test("identifier fetchStream keeps NDJSON native delivered before addListener wi
       data: {},
       abortSignal: new AbortController().signal,
     });
+    queueMicrotask(() => {
+      const streamingId = "LynxFetchModuleStreamingEvent0";
+      listeners.get(streamingId)?.({ event: "onData", data: NDJSON_LINE });
+      listeners.get(streamingId)?.({ event: "onEnd" });
+    });
     const first = await Promise.race([
       stream.next(),
       new Promise<{ done: true; value: undefined }>((resolve) => {
@@ -1249,7 +1257,7 @@ test("identifier fetchStream keeps NDJSON native delivered before addListener wi
     assert.equal(
       first.done,
       false,
-      "checkpoint must not be dropped if native onData raced ahead of addListener without emit",
+      "HostFetch fallback slots must apply NDJSON when the Fetch body is unusable",
     );
     assert.deepEqual(JSON.parse(String(first.value)), { checkpoint: { last_op_id: "1" } });
   } finally {
@@ -1455,11 +1463,6 @@ test("identifier fetchStream keeps NDJSON when Lynx emit applies params array", 
     if (!lynxStreamingRequested(init)) {
       return hangResponse();
     }
-    queueMicrotask(() => {
-      globalThis.lynx
-        ?.getJSModule?.("GlobalEventEmitter")
-        ?.emit?.("LynxFetchModuleStreamingEvent3", [{ event: "onData", data: NDJSON_LINE }]);
-    });
     return identifierResponse({
       contentType: "application/x-ndjson",
       streamingId: "LynxFetchModuleStreamingEvent3",
@@ -1473,6 +1476,11 @@ test("identifier fetchStream keeps NDJSON when Lynx emit applies params array", 
       data: {},
       abortSignal: new AbortController().signal,
     });
+    queueMicrotask(() => {
+      globalThis.lynx
+        ?.getJSModule?.("GlobalEventEmitter")
+        ?.emit?.("LynxFetchModuleStreamingEvent3", [{ event: "onData", data: NDJSON_LINE }]);
+    });
     const first = await Promise.race([
       stream.next(),
       new Promise<{ done: true; value: undefined }>((resolve) => {
@@ -1482,7 +1490,7 @@ test("identifier fetchStream keeps NDJSON when Lynx emit applies params array", 
     assert.equal(
       first.done,
       false,
-      "checkpoint must not be dropped if Lynx emit(name, [map]) raced ahead",
+      "HostFetch fallback must apply NDJSON when Lynx emit(name, [map]) fires",
     );
     assert.deepEqual(JSON.parse(String(first.value)), { checkpoint: { last_op_id: "1" } });
   } finally {
