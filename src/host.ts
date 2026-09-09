@@ -1,5 +1,4 @@
 import { installAbortControllerPolyfill } from "./abort-controller.ts";
-import "./globals.ts";
 import type { NativeModulesHost, NativePowerSyncModule } from "./adapter/native.ts";
 import type { LynxFetchModule } from "./sync/transport/http-types.ts";
 import type {
@@ -9,6 +8,28 @@ import type {
   LynxTextCodecHelper,
 } from "./globals.ts";
 import { isNonNullObject, isString } from "./type-guards.ts";
+
+/**
+ * Module-local PrimJS identifiers so the Lynx bundler keeps `lynx` / `fetch`.
+ * Not `declare global` — that clashes with `@lynx-js/types` (TS2403).
+ */
+declare const NativeModules: NativeModulesHost | undefined;
+declare const TextCodecHelper: LynxTextCodecHelper | undefined;
+declare const lynx: LynxRuntime | undefined;
+declare const SystemInfo: LynxSystemInfo | undefined;
+
+interface PrimJSGlobalBindings {
+  NativeModules?: NativeModulesHost;
+  SystemInfo?: LynxSystemInfo;
+  TextCodecHelper?: LynxTextCodecHelper;
+  lynx?: LynxRuntime;
+}
+
+function primJSGlobalThis(): PrimJSGlobalBindings {
+  // SAFETY: tests and some hosts put PrimJS bindings on globalThis; Lynx types
+  // declare a different shape, so we do not read them as NativeModulesHost.
+  return globalThis as PrimJSGlobalBindings;
+}
 
 installAbortControllerPolyfill();
 
@@ -113,7 +134,7 @@ function tableHasModules(host: NativeModulesHost | undefined): host is NativeMod
 }
 
 function nativeModulesFromGlobalThis(): NativeModulesHost | undefined {
-  const table = globalThis.NativeModules;
+  const table = primJSGlobalThis().NativeModules;
   if (!isNonNullObject(table)) {
     return undefined;
   }
@@ -176,8 +197,9 @@ export class PrimJSLynxHost implements LynxHost {
     } catch {
       // Unbound identifier outside Lynx.
     }
-    if (globalThis.lynx != null) {
-      return globalThis.lynx;
+    const fromGlobalThis = primJSGlobalThis().lynx;
+    if (fromGlobalThis != null) {
+      return fromGlobalThis;
     }
     return evalBinding<LynxRuntime>("typeof lynx === 'undefined' ? undefined : lynx");
   }
@@ -187,7 +209,7 @@ export class PrimJSLynxHost implements LynxHost {
   }
 
   platform(): string | undefined {
-    const fromGlobal = globalThis.SystemInfo;
+    const fromGlobal = primJSGlobalThis().SystemInfo;
     if (isString(fromGlobal?.platform)) {
       return fromGlobal.platform;
     }
@@ -208,7 +230,7 @@ export class PrimJSLynxHost implements LynxHost {
   }
 
   textCodec(): LynxTextCodecHelper | undefined {
-    const fromGlobalThis = globalThis.TextCodecHelper;
+    const fromGlobalThis = primJSGlobalThis().TextCodecHelper;
     if (fromGlobalThis != null) {
       return fromGlobalThis;
     }
