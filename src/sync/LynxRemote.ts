@@ -1280,9 +1280,9 @@ export class LynxRemote extends AbstractRemote {
       beginFirstSyncStreamDiag(url, extension);
       enterEarlyCapture();
     }
-    // Android: LynxFetchModule drops large byte[] / customInfo for /sync/stream. Use
-    // NativePowerSyncModule.httpFetch (UTF-8 string body) for streaming downloads.
-    if (isLynxAndroid() && expectStreamingResponse) {
+    // LynxFetchModule drops large byte[] / customInfo for /sync/stream on both
+    // Android and iOS. Use NativePowerSyncModule.httpFetch (UTF-8 string body).
+    if (expectStreamingResponse) {
       const nativeHttp = nativeHttpFetchModule();
       if (nativeHttp != null) {
         return fetchViaNativeHttp(url, request);

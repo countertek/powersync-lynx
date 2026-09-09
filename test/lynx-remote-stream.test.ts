@@ -285,6 +285,60 @@ test("Android fetchStream applies httpFetch string NDJSON through PowerSync line
   }
 });
 
+test("iOS LynxRemote.fetch uses NativePowerSyncModule.httpFetch like Android", async () => {
+  const previousLynx = (globalThis as { lynx?: unknown }).lynx;
+  const previousModules = globalThis.NativeModules;
+  const previousInfo = (globalThis as { SystemInfo?: { platform?: string } }).SystemInfo;
+  const previousFetch = globalThis.fetch;
+  (globalThis as { SystemInfo?: { platform?: string } }).SystemInfo = { platform: "iOS" };
+  (globalThis as { lynx?: unknown }).lynx = {
+    getJSModule() {
+      return undefined;
+    },
+  };
+  globalThis.fetch = (async () => {
+    throw new Error("identifier fetch must not run when httpFetch is present");
+  }) as typeof fetch;
+  const ndjson = '{"checkpoint":{"last_op_id":"1"}}\n';
+  let sawHttpFetch = false;
+  globalThis.NativeModules = {
+    NativePowerSyncModule: {
+      httpFetch(request: { url?: string }, callback: (envelope: unknown) => void) {
+        sawHttpFetch = true;
+        assert.ok(String(request.url).includes("/sync/stream"));
+        queueMicrotask(() => {
+          callback({
+            ok: true,
+            status: 200,
+            statusText: "OK",
+            contentType: "application/x-ndjson",
+            body: ndjson,
+            bodyBase64: Buffer.from(ndjson, "utf8").toString("base64"),
+            idleComplete: true,
+          });
+        });
+      },
+    },
+  } as typeof globalThis.NativeModules;
+  try {
+    const remote = new LynxRemote({ fetchCredentials: async () => null }, { log() {} });
+    const response = await remote.fetch({
+      resource: "http://127.0.0.1:8080/sync/stream",
+      request: { method: "POST", body: "{}" },
+      expectStreamingResponse: true,
+    });
+    assert.equal(sawHttpFetch, true);
+    assert.equal(response.ok, true);
+    const first = await response.body!.getReader().read();
+    assert.equal(new TextDecoder().decode(first.value), ndjson);
+  } finally {
+    (globalThis as { lynx?: unknown }).lynx = previousLynx;
+    globalThis.NativeModules = previousModules;
+    (globalThis as { SystemInfo?: { platform?: string } }).SystemInfo = previousInfo;
+    globalThis.fetch = previousFetch;
+  }
+});
+
 test("LynxRemote.fetch applies idle-complete raw NDJSON body without streamingId", async () => {
   // Legacy LynxFetchModule path when NativePowerSyncModule.httpFetch is absent.
   const previousLynx = (globalThis as { lynx?: unknown }).lynx;

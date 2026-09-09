@@ -1,4 +1,5 @@
 #import "NativePowerSyncModule.h"
+#import "IdleCompleteHttp.h"
 
 #include "ps_sql.h"
 
@@ -223,7 +224,22 @@ void Finish(void (^callback)(id), Envelope envelope) {
     @"close" : NSStringFromSelector(@selector(close:callback:)),
     @"execute" : NSStringFromSelector(@selector(execute:sql:params:callback:)),
     @"executeBatch" : NSStringFromSelector(@selector(executeBatch:sql:params:callback:)),
+    @"httpFetch" : NSStringFromSelector(@selector(httpFetch:callback:)),
   };
+}
+
+- (void)httpFetch:(NSDictionary*)request callback:(void (^)(id))callback {
+  void (^cb)(id) = [callback copy];
+  if (cb == nil) {
+    return;
+  }
+  // Off the JS thread — idle-complete can block ~2.5s+ after last byte.
+  dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+    NSDictionary* result = IdleCompleteHttpFetch(request);
+    @autoreleasepool {
+      cb(result);
+    }
+  });
 }
 
 - (void)open:(NSDictionary*)options callback:(void (^)(id))callback {

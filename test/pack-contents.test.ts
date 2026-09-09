@@ -71,6 +71,21 @@ test("packed tarball ships iOS build inputs and omits host/build residue", async
       "canonical ios/ podspec compiles sqlite3.h from ios/src (symlink or copy)",
     );
     assert.equal(
+      has("ios/src/IdleCompleteHttp.h"),
+      true,
+      "iOS NativePowerSyncModule.httpFetch needs IdleCompleteHttp.h",
+    );
+    assert.equal(
+      has("ios/src/IdleCompleteHttp.mm"),
+      true,
+      "iOS NativePowerSyncModule.httpFetch needs IdleCompleteHttp.mm",
+    );
+    assert.equal(
+      has("ios/src/NativePowerSyncModule.mm"),
+      true,
+      "iOS NativePowerSyncModule sources ship for Autolink",
+    );
+    assert.equal(
       has("dist/web-host/factory.js"),
       true,
       "attach factory URL needs the bundled ESM entry",

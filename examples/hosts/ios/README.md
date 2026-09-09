@@ -79,7 +79,56 @@ ATS is `NSAllowsLocalNetworking` only (not `NSAllowsArbitraryLoads`).
 | Copy Lynx bundle phase fails | `pnpm --dir examples/showcase build` first. |
 | `connect skipped` | Compose profile `sync` is down, or ATS blocked a non-local URL. |
 | Empty input field | `XElement` pod is missing. |
+| Download hangs / `ps_buckets=0` after server 200 | Use `NativePowerSyncModule.httpFetch` (rebuild showcase + app). Console should show FM-PS-LYNX-003 `via: "raw-body"`. Stock `LynxFetchModule.fetch` alone cannot deliver ~20KB NDJSON bodies on PrimJS. |
 | Stream never incremental | Bundle PageConfig `enableFetchAPIStandardStreaming` is set in `examples/showcase/lynx.config.ts`. Confirm `LynxHttpService` is registered before `LynxEnv` init. |
+
+## `/sync/stream` download path (iOS)
+
+Stock Lynx fetch on iOS does not deliver PowerSync’s live NDJSON body to PrimJS (`via` stays on the identifier/`LynxFetchModule` path, `ps_buckets=0`).
+
+**Current path:** `LynxRemote` calls `NativePowerSyncModule.httpFetch` for streaming downloads on iOS the same way as Android. That method idle-completes `/sync/stream` with `NSURLSession` (~2.5s idle after last byte) and returns the NDJSON as a **UTF-8 string** (`body` + `bodyBase64`) on the SQL RPC callback bridge. JS applies it as `via: "raw-body"`. Presence-only gate — do not require `typeof httpFetch === "function"`.
+
+Confirm the module exports the method: `methodLookup` must include `httpFetch` (with `open` / `close` / `execute` / `executeBatch`).
+
+### Rebuild after this change
+
+```bash
+pnpm --dir examples/showcase install
+pnpm --dir examples/showcase build
+pnpm --dir examples/hosts install
+gem install cocoapods-lynx-library   # once per machine
+
+cd examples/hosts/ios
+pod install
+xcodebuild -workspace PowerSyncLynxShowcase.xcworkspace \
+  -scheme PowerSyncLynxShowcase \
+  -configuration Debug \
+  -sdk iphonesimulator \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
+  -derivedDataPath build \
+  CODE_SIGNING_ALLOWED=NO \
+  build
+
+APP=$(find build -name PowerSyncLynxShowcase.app | head -1)
+UDID=$(xcrun simctl list devices available | awk -F '[()]' '/iPhone 17 Pro/{print $2; exit}')
+xcrun simctl boot "$UDID" || true
+# Prefer a clean install so an old Autolinked module binary is not reused:
+xcrun simctl uninstall "$UDID" com.powersync.lynx.showcase || true
+xcrun simctl install "$UDID" "$APP"
+xcrun simctl launch --console "$UDID" com.powersync.lynx.showcase
+```
+
+### Verify downloads (not `hasSynced` alone)
+
+1. Local stack up (`examples/docker-compose.yml`); create a todo via demo-api / web / Postgres.
+2. On the simulator, confirm the todo appears in the list.
+3. Optional SQLite check: `ps_buckets` count **> 0** and todos present after the server checkpoint.
+4. Upload still works: add a todo on device and see it in Postgres / another client.
+
+Expect console FM-PS-LYNX-003 `invoking NativePowerSyncModule.httpFetch` and `via: "raw-body"` (not identifier-only / empty body).
+
+Adapter tests: `NODE_OPTIONS=--experimental-strip-types pnpm test`  
+Native Module (Mac): `make test-ios`
 
 ## What this environment verified
 
@@ -89,8 +138,8 @@ This checkout, 2026-09-08/09. Simulator **iPhone 17 Pro** (`ADEBF68F-584E-4A5D-9
 |---|---|
 | Build + install + launch | **Yes.** `xcodebuild` Debug iphonesimulator `CODE_SIGNING_ALLOWED=NO`, `simctl install` / `launch`. Bundle id `com.powersync.lynx.showcase` |
 | UI paints, local DB ready after relaunch | **Yes.** After swapping the rebuilt `main.lynx.bundle` and force-stop relaunch (`ios-t2`): navy TODO screen, `DB ready`, composer/filters visible. `connect()` no longer blocks that pill |
-| Sync handshake | **Partial.** Log reached `connect: http://127.0.0.1:8080 as ios-t2` and sometimes `connected` / `sync connected`. Then `errorStreamingMalformedResponse`. `ps_data__todos` stayed 0 |
-| Receive another client's rows | **No this checkout.** Postgres still has `round2add` / `ande2e`; this Simulator store did not download them |
+| Sync handshake | **Partial (pre-httpFetch).** Log reached `connect: http://127.0.0.1:8080 as ios-t2` and sometimes `connected` / `sync connected`. Then `errorStreamingMalformedResponse`. `ps_data__todos` stayed 0 |
+| Receive another client's rows | **No this checkout (pre-httpFetch).** Postgres still has `round2add` / `ande2e`; this Simulator store did not download them. Re-verify after rebuild with `httpFetch` / `via: "raw-body"` |
 | Add / toggle / delete / filter / restart persist | Composer is on screen after relaunch. **HID not used** this checkout |
 | Go offline / Reconnect | Control is visible (`Go offline`). **Not tapped** here |
 | Physical device | **Not run** |
