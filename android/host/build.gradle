@@ -33,6 +33,9 @@ android {
     main {
       java.srcDirs = ["src/main/java", "../src/main/java"]
     }
+    androidTest {
+      assets.srcDirs += ["../../shared/fixtures"]
+    }
   }
 }
 

@@ -1,0 +1,3 @@
+# Issue #18 comment (F landed) — paste if Issues API 403s
+
+FM-PS-LYNX-008 **F** is open as a PR: one canonical NDJSON catalog at `shared/fixtures/sync-stream.json` (checkpoint+ops, error-then-end, idle-complete envelope). JS (`pnpm test`) replays it through `native-http` `streamingId` / `onData*`→`onError?`→`onEnd` and the C idle-complete envelope. `make test` on Linux parses the same file, asserts the B terminal sequence (including the old Android onError-without-onEnd case), and round-trips the fixture over a loopback HTTP server. `make test-ios` / Android instrumentation call `httpFetch` against that catalog when those hosts run. Stacks on B+C (#26). D and G not in this PR.

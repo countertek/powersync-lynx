@@ -12,15 +12,15 @@ public final class Arguments {
   private Arguments() {}
 
   public static WritableMap createMap() {
-    return new JavaOnlyMap();
+    return new HostWritableMap();
   }
 
   public static WritableArray createArray() {
-    return new JavaOnlyArray();
+    return new HostWritableArray();
   }
 }
 
-final class JavaOnlyMap implements WritableMap {
+final class HostWritableMap implements WritableMap {
   private final LinkedHashMap<String, Object> values = new LinkedHashMap<>();
 
   @Override
@@ -145,7 +145,7 @@ final class JavaOnlyMap implements WritableMap {
 
   @Override
   public ReadableType getType(String name) {
-    return JavaOnlyArray.typeOf(values.get(name));
+    return HostWritableArray.typeOf(values.get(name));
   }
 
   @Override
@@ -253,13 +253,13 @@ final class JavaOnlyMap implements WritableMap {
         out.append(",");
       }
       first = false;
-      out.append(entry.getKey()).append(":").append(JavaOnlyArray.render(entry.getValue()));
+      out.append(entry.getKey()).append(":").append(HostWritableArray.render(entry.getValue()));
     }
     return out.append("}").toString();
   }
 }
 
-final class JavaOnlyArray implements WritableArray {
+final class HostWritableArray implements WritableArray {
   private final ArrayList<Object> values = new ArrayList<>();
 
   static ReadableType typeOf(Object value) {
