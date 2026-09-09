@@ -114,6 +114,59 @@ test("identifier fetch uses Response.lynxExtension.streamingId when body is alre
   }
 });
 
+test("LynxRemote.fetch applies idle-complete raw NDJSON body without streamingId", async () => {
+  // ShowcaseLynxHttpService may finish /sync/stream via short idle timeout (no EOF) and
+  // return body bytes on the non-streaming LynxFetchModule path — no streamingId.
+  const previousLynx = (globalThis as { lynx?: unknown }).lynx;
+  const previousModules = globalThis.NativeModules;
+  const previousInfo = (globalThis as { SystemInfo?: { platform?: string } }).SystemInfo;
+  (globalThis as { SystemInfo?: { platform?: string } }).SystemInfo = { platform: "Android" };
+  (globalThis as { lynx?: unknown }).lynx = {
+    getJSModule() {
+      return undefined;
+    },
+  };
+  const ndjson = '{"checkpoint":{"last_op_id":"1"}}\n{"data":{"bucket":"a","data":[]}}\n';
+  const body = new TextEncoder().encode(ndjson);
+  let sawExtension = false;
+  globalThis.NativeModules = {
+    LynxFetchModule: {
+      fetch(request: { lynxExtension?: Record<string, boolean> }, resolve: (response: unknown) => void) {
+        sawExtension = request.lynxExtension?.enableFetchAPIStandardStreaming === true;
+        queueMicrotask(() => {
+          resolve({
+            status: 200,
+            statusText: "OK",
+            headers: { "content-type": "application/x-ndjson" },
+            body,
+          });
+        });
+      },
+    },
+  } as typeof globalThis.NativeModules;
+  try {
+    const remote = new LynxRemote({ fetchCredentials: async () => null }, { log() {} });
+    const response = await remote.fetch({
+      resource: "http://10.0.2.2:8080/sync/stream",
+      request: { method: "POST", body: "{}" },
+      expectStreamingResponse: true,
+    });
+    assert.equal(sawExtension, true);
+    assert.equal(response.ok, true);
+    const reader = response.body!.getReader();
+    const first = await reader.read();
+    assert.equal(first.done, false);
+    assert.ok(first.value != null);
+    assert.equal(new TextDecoder().decode(first.value), ndjson);
+    const second = await reader.read();
+    assert.equal(second.done, true);
+  } finally {
+    (globalThis as { lynx?: unknown }).lynx = previousLynx;
+    globalThis.NativeModules = previousModules;
+    (globalThis as { SystemInfo?: { platform?: string } }).SystemInfo = previousInfo;
+  }
+});
+
 test("LynxRemote.fetch reads LynxFetchModule streamingId before the stream ends", async () => {
   const listeners = new Map<string, (payload: unknown) => void>();
   const previousLynx = (globalThis as { lynx?: unknown }).lynx;

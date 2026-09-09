@@ -47,7 +47,8 @@ Read this before treating a green web preview as "sync works".
 | Local UI ready without waiting for `connect()` | **Unit tested** (`test/demo-boot.test.ts`). iOS Simulator relaunch shows **DB ready** and the composer while `/sync/stream` is still handshake/erroring. Watch starts from local ready, not from first checkpoint |
 | Two-window money shot (A writes, B sees it via PowerSync) | **Not verified this checkout.** iOS `ios-t2` opened **DB ready** / sometimes **sync connected**, but `ps_data__todos` stayed 0 and the log repeated `errorStreamingMalformedResponse`. Web two-window procedure still documented below |
 | Offline / reconnect beat (queue writes, reconnect, watch them sync) | In-app **Go offline / Reconnect** is `disconnect()` / `connect()`, not an OS network drop. **Not re-tapped** this checkout |
-| Live `/sync/stream` incremental delivery on iOS / Android | Handshake can leave `connect()` (iOS log `connect:` / `connected`). Incremental apply is **not proven**: iOS logs `errorStreamingMalformedResponse` and downloaded 0 todos. **Not** Windows / macOS |
+| Live `/sync/stream` download on Android | **Host fix:** `ShowcaseLynxHttpService` idle-completes non-streaming `/sync/stream` (stock `LynxHttpService` hung on `ResponseBody.bytes()`). Rebuild/reinstall the Android APK to pick it up. Prove with a server-created todo appearing on device and `ps_buckets > 0` — not `hasSynced` alone. |
+| Live `/sync/stream` incremental delivery on iOS | Handshake can leave `connect()` (log `connect:` / `connected`). Incremental apply is **not proven** on iOS (`errorStreamingMalformedResponse` / 0 todos historically). **Not** Windows / macOS |
 | `disconnect()` cancelling a live native stream | Same ReactLynx control. **Not tapped** this checkout |
 | Physical iOS / Android Autolink host run | **Documented**. Simulator / emulator is what this checkout exercises |
 | Windows / macOS Autolink host run | **Not verified**. Desktop remains recipe-only |

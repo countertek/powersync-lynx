@@ -73,6 +73,46 @@ builds have no cleartext.
 | Token works, sync does not | Still pointing at `127.0.0.1` from inside the emulator. Use `10.0.2.2`. |
 | `cleartext` / `ERR_CLEARTEXT_NOT_PERMITTED` | Debug network-security-config does not list that host. |
 | Empty `<input>` | `xelement` + `xelement-input` 4.0.0 missing. |
+| Download hangs / `ps_buckets=0` after server 200 | Stock `LynxHttpService` buffers via `ResponseBody.bytes()` on live `/sync/stream` and times out. This host registers `ShowcaseLynxHttpService` instead (idle-complete + long streaming read timeout). Rebuild/reinstall the APK after pulling that change. |
+
+## `/sync/stream` download fix (`ShowcaseLynxHttpService`)
+
+Stock Lynx 4.0.1 `LynxHttpService` on the **non-streaming** path calls `ResponseBody.bytes()` (see `LynxHttpService.kt` ~line 60). PowerSync keeps the chunked NDJSON connection open after `checkpoint_complete`, so OkHttp’s default read timeout surfaces as:
+
+```text
+java.net.SocketTimeoutException: timeout
+  at okhttp3.ResponseBody.bytes
+  at com.lynx.service.http.LynxHttpService$requestInner$1.onResponse
+```
+
+JS never receives body bytes / `streamingId` / `onData` → SQLite stays at `ps_buckets=0` even though the service returned ~19KB of ops.
+
+This host registers `ShowcaseLynxHttpService` in `ShowcaseApplication` instead of `LynxHttpService.INSTANCE`:
+
+- **Non-streaming `/sync/stream`:** read until EOF **or** a short idle timeout (~2.5s), then return the buffered checkpoint + ops to JS (PowerSync applies buckets; the client reconnects for the next batch).
+- **Streaming path:** pipe `byteStream()` into Lynx’s `HttpStreamingDelegate` with a **120s** read timeout so keepalive gaps do not abort the stream.
+
+### Rebuild after this change
+
+```bash
+pnpm --dir examples/showcase install
+pnpm --dir examples/showcase build
+pnpm --dir examples/hosts install
+cd examples/hosts/android
+./gradlew :app:assembleDebug
+adb uninstall com.powersync.lynx.showcase   # clears old DB; force-stop is not enough
+./gradlew :app:installDebug
+adb shell am start -n com.powersync.lynx.showcase/.MainActivity
+```
+
+### Verify downloads (not `hasSynced` alone)
+
+1. Local stack up (`examples/docker-compose.yml`); create a todo via demo-api / web / Postgres.
+2. On the emulator, confirm the todo appears in the list.
+3. Optional SQLite check (after install with a debug shell / your usual DB inspector): `ps_buckets` count **> 0** and todos present after the server checkpoint.
+4. Upload still works: add a todo on device and see it in Postgres / another client.
+
+Host unit tests (no device): `./gradlew :app:testDebugUnitTest`
 
 ## What this environment verified
 

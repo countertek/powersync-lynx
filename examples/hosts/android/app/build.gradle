@@ -65,4 +65,5 @@ dependencies {
   implementation 'com.facebook.fresco:webpsupport:2.3.0'
   implementation 'com.facebook.fresco:animated-base:2.3.0'
   implementation 'com.squareup.okhttp3:okhttp:4.9.0'
+  testImplementation 'junit:junit:4.13.2'
 }

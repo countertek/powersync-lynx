@@ -830,6 +830,11 @@ function streamingExtension(expectStreamingResponse: boolean): Record<string, bo
   if (!expectStreamingResponse) {
     return {};
   }
+  // Standard streaming only. Do NOT set useStreaming: that selects Lynx's deprecated
+  // CRLF chunked parser, which mis-parses PowerSync NDJSON (LF-only) and yields
+  // errorStreamingMalformedResponse / empty onData. Android showcase also registers
+  // ShowcaseLynxHttpService so a non-streaming fallback can idle-complete /sync/stream
+  // instead of hanging on ResponseBody.bytes().
   return { enableFetchAPIStandardStreaming: true };
 }
 
