@@ -1,66 +1,48 @@
 import { getLynxHost } from "../../host.ts";
+import type { NativePowerSyncModule } from "../../adapter/native.ts";
 import { isString } from "../../type-guards.ts";
-import type { NativeHttpFetchEnvelope, NativeHttpFetchRequest } from "../../adapter/native.ts";
+import type {
+  NativeHttpFetchEnvelope,
+  NativeHttpFetchRequest,
+  NativeSyncHttpModule,
+} from "./http-types.ts";
 import { enterEarlyCapture } from "./events.ts";
-import { moduleResponse, unwrapFetchSuccess, type WireFetchSuccess } from "./response.ts";
+import { fromNativeHttpEnvelope, moduleResponse, unwrapFetchSuccess } from "./response.ts";
 import type { SyncStreamRequest, SyncStreamTransport } from "./SyncStreamTransport.ts";
 
-function nativeHttpFetchModule() {
-  return getLynxHost().nativeModules()?.NativePowerSyncModule;
+export type {
+  NativeHttpFetchCallback,
+  NativeHttpFetchEnvelope,
+  NativeHttpFetchRequest,
+  NativeSyncHttpModule,
+} from "./http-types.ts";
+
+/**
+ * HTTP methods live on the Autolink SQL module object on iOS/Android.
+ * Desktop N-API is SQL-only — `httpFetch` is absent.
+ */
+export function lookupNativeSyncHttp(): NativeSyncHttpModule | undefined {
+  const sql = getLynxHost().nativeModules()?.NativePowerSyncModule;
+  if (sql == null) {
+    return undefined;
+  }
+  const http = sql as NativePowerSyncModule & Partial<NativeSyncHttpModule>;
+  if (http.httpFetch == null) {
+    return undefined;
+  }
+  return http;
 }
 
 export function nativeHttpFetchAvailable(): boolean {
-  return nativeHttpFetchModule() != null;
-}
-
-function streamingResponseFromEnvelope(result: NativeHttpFetchEnvelope): WireFetchSuccess {
-  const status = Number(result.status ?? 0);
-  const streamingId =
-    isString(result.streamingId) && result.streamingId.length > 0 ? result.streamingId : undefined;
-  if (streamingId != null) {
-    return {
-      status,
-      statusText: String(result.statusText ?? ""),
-      headers: {
-        "content-type":
-          isString(result.contentType) && result.contentType.length > 0
-            ? result.contentType
-            : "application/x-ndjson",
-      },
-      body: "",
-      lynxExtension: {
-        streamingId,
-        powersyncIdleComplete: false,
-      },
-    };
-  }
-  const bodyText = isString(result.body) ? result.body : "";
-  return {
-    status,
-    statusText: String(result.statusText ?? ""),
-    headers: {
-      "content-type":
-        isString(result.contentType) && result.contentType.length > 0
-          ? result.contentType
-          : "application/x-ndjson",
-    },
-    body: bodyText,
-    lynxExtension: {
-      powersyncIdleComplete: result.idleComplete === true || bodyText.length > 0,
-      powersyncIdleBodyBase64: isString(result.bodyBase64) ? result.bodyBase64 : undefined,
-    },
-  };
+  return lookupNativeSyncHttp() != null;
 }
 
 function fetchViaNativeHttp(request: SyncStreamRequest): Promise<Response> {
-  const native = nativeHttpFetchModule();
+  const native = lookupNativeSyncHttp();
   if (native == null) {
-    throw new Error("NativePowerSyncModule.httpFetch is not registered");
+    throw new Error("Native Module HTTP (httpFetch) is not registered");
   }
   const httpFetch = native.httpFetch;
-  if (httpFetch == null) {
-    throw new Error("NativePowerSyncModule.httpFetch is missing");
-  }
   const payload: NativeHttpFetchRequest = {
     method: request.method,
     url: request.url,
@@ -101,7 +83,7 @@ function fetchViaNativeHttp(request: SyncStreamRequest): Promise<Response> {
         // SAFETY: Native Callback hands NativeHttpFetchEnvelope; unwrap only peels a PrimJS array wrap.
         const result = unwrapFetchSuccess(envelope) as NativeHttpFetchEnvelope;
         if (result.ok === false) {
-          reject(new Error(result.message ?? "NativePowerSyncModule.httpFetch failed"));
+          reject(new Error(result.message ?? "Native Module HTTP httpFetch failed"));
           return;
         }
         const streamingId =
@@ -114,7 +96,7 @@ function fetchViaNativeHttp(request: SyncStreamRequest): Promise<Response> {
             abortNative();
           }
         }
-        resolve(moduleResponse(streamingResponseFromEnvelope(result), false));
+        resolve(moduleResponse(fromNativeHttpEnvelope(result), false));
       } catch (err) {
         reject(err);
       }
@@ -123,9 +105,9 @@ function fetchViaNativeHttp(request: SyncStreamRequest): Promise<Response> {
 }
 
 /**
- * Primary native `/sync/stream` path: NativePowerSyncModule.httpFetch plus
+ * Primary native `/sync/stream` path: Native Module HTTP (`httpFetch`) plus
  * GlobalEventEmitter chunks keyed by streamingId (issue #21). Idle-complete
- * UTF-8 body is a fallback when no streamingId is returned (issue #18 C later).
+ * UTF-8 body is a fallback when no streamingId is returned.
  */
 export const nativeHttpFetchTransport: SyncStreamTransport = {
   name: "native-http",

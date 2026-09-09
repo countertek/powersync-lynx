@@ -1,10 +1,7 @@
 import { installAbortControllerPolyfill } from "./abort-controller.ts";
 import "./globals.ts";
-import type {
-  LynxFetchModule,
-  NativeModulesHost,
-  NativePowerSyncModule,
-} from "./adapter/native.ts";
+import type { NativeModulesHost, NativePowerSyncModule } from "./adapter/native.ts";
+import type { LynxFetchModule } from "./sync/transport/http-types.ts";
 import type {
   LynxGlobalEventEmitter,
   LynxRuntime,

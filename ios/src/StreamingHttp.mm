@@ -1,26 +1,15 @@
 #import "StreamingHttp.h"
 
+#include "sync_http_policy.h"
+
 namespace {
 
-constexpr NSTimeInterval kConnectTimeoutSec = 30.0;
-/// Longer than PowerSync protocol keepalive (~20s).
-constexpr NSTimeInterval kStreamReadTimeoutSec = 120.0;
+NSTimeInterval ConnectTimeoutSec() {
+  return PS_SYNC_HTTP_CONNECT_TIMEOUT_MS / 1000.0;
+}
 
-NSString *HeaderValue(NSDictionary *headers, NSString *name) {
-  if (headers == nil || ![headers isKindOfClass:[NSDictionary class]]) {
-    return nil;
-  }
-  NSString *want = [name lowercaseString];
-  for (id key in headers) {
-    if (![key isKindOfClass:[NSString class]]) {
-      continue;
-    }
-    if ([[(NSString *)key lowercaseString] isEqualToString:want]) {
-      id value = headers[key];
-      return [value isKindOfClass:[NSString class]] ? (NSString *)value : [value description];
-    }
-  }
-  return nil;
+NSTimeInterval StreamReadTimeoutSec() {
+  return PS_SYNC_HTTP_STREAM_READ_TIMEOUT_MS / 1000.0;
 }
 
 NSUInteger TrailingIncompleteUtf8Bytes(NSData *data) {
@@ -128,7 +117,7 @@ NSUInteger TrailingIncompleteUtf8Bytes(NSData *data) {
 
   NSMutableURLRequest *urlRequest = [NSMutableURLRequest requestWithURL:url];
   urlRequest.HTTPMethod = method;
-  urlRequest.timeoutInterval = kStreamReadTimeoutSec;
+  urlRequest.timeoutInterval = StreamReadTimeoutSec();
   urlRequest.cachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
   if (headers != nil) {
     for (id key in headers) {
@@ -140,16 +129,13 @@ NSUInteger TrailingIncompleteUtf8Bytes(NSData *data) {
       [urlRequest setValue:headerValue forHTTPHeaderField:(NSString *)key];
     }
   }
-  if (bodyData != nil && bodyData.length > 0) {
-    urlRequest.HTTPBody = bodyData;
-    if (HeaderValue(headers, @"Content-Type") == nil) {
-      [urlRequest setValue:@"application/json; charset=UTF-8" forHTTPHeaderField:@"Content-Type"];
+    if (bodyData != nil && bodyData.length > 0) {
+      urlRequest.HTTPBody = bodyData;
     }
-  }
 
   NSURLSessionConfiguration *config = [NSURLSessionConfiguration ephemeralSessionConfiguration];
-  config.timeoutIntervalForRequest = kStreamReadTimeoutSec;
-  config.timeoutIntervalForResource = kStreamReadTimeoutSec + kConnectTimeoutSec;
+  config.timeoutIntervalForRequest = StreamReadTimeoutSec();
+  config.timeoutIntervalForResource = StreamReadTimeoutSec() + ConnectTimeoutSec();
   config.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
   self.session = [NSURLSession sessionWithConfiguration:config delegate:self delegateQueue:nil];
   self.task = [self.session dataTaskWithRequest:urlRequest];

@@ -76,6 +76,34 @@ test("pickSyncStreamTransport uses host-fetch when no native HTTP module is pres
   );
 });
 
+test("pickSyncStreamTransport skips native-http when the SQL module has no httpFetch", async () => {
+  await withFakeLynxHost(
+    {
+      nativeModules: {
+        NativePowerSyncModule: {
+          open(_options, callback) {
+            callback({ ok: true, dbId: "ps-1" });
+          },
+          close(_dbId, callback) {
+            callback({ ok: true });
+          },
+          execute(_dbId, _sql, _params, callback) {
+            callback({ ok: true });
+          },
+          executeBatch(_dbId, _sql, _params, callback) {
+            callback({ ok: true });
+          },
+        },
+      },
+      fetchImpl: async () => new Response(null, { status: 200 }),
+    },
+    async () => {
+      const picked = pickSyncStreamTransport(streamingRequest());
+      assert.equal(picked.name, "host-fetch");
+    },
+  );
+});
+
 test("LynxRemote logs the selected streaming transport instead of FM-PS-LYNX-003", async () => {
   const records: { level: number; message: string }[] = [];
   await withFakeLynxHost(

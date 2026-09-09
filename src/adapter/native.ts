@@ -1,5 +1,6 @@
 import type { SqliteValue } from "@powersync/common";
 import { getLynxHost } from "../host.ts";
+import type { LynxFetchModule, NativeSyncHttpModule } from "../sync/transport/http-types.ts";
 import {
   copyToArrayBuffer,
   hasPrimitiveConstructor,
@@ -64,71 +65,16 @@ export interface OpenPayload {
 
 export type NativeCallback = (envelope: NativeWireEnvelope) => void;
 
-export interface NativeHttpFetchRequest {
-  method?: string;
-  url?: string;
-  headers?: Record<string, string>;
-  body?: string;
-}
-
-export interface NativeHttpFetchEnvelope {
-  ok?: boolean;
-  message?: string;
-  status?: number;
-  statusText?: string;
-  contentType?: string;
-  body?: string;
-  bodyBase64?: string;
-  idleComplete?: boolean;
-  streamingId?: string;
-}
-
-export type NativeHttpFetchCallback = (envelope: NativeHttpFetchEnvelope) => void;
-
-export interface LynxFetchRequest {
-  method?: string;
-  url?: string;
-  headers?: Record<string, string>;
-  body?: ArrayBuffer | string;
-  lynxExtension?: {
-    enableFetchAPIStandardStreaming?: boolean;
-    useStreaming?: boolean;
-  };
-}
-
-export interface LynxFetchSuccessPayload {
-  url?: string;
-  body?: ArrayBuffer | Uint8Array | string;
-  headers?: Record<string, string>;
-  status?: number;
-  statusText?: string;
-  lynxExtension?: {
-    streamingId?: string;
-    enableFetchAPIStandardStreaming?: boolean;
-    powersyncIdleComplete?: boolean;
-    powersyncIdleBodyBase64?: string;
-  };
-}
-
-export interface LynxFetchModule {
-  fetch(
-    request: LynxFetchRequest,
-    resolve: (response: LynxFetchSuccessPayload) => void,
-    reject?: (error: { message?: string }) => void,
-  ): void;
-}
-
 export interface NativePowerSyncModule {
   open(options: OpenPayload, callback: NativeCallback): void;
   close(dbId: string, callback: NativeCallback): void;
   execute(dbId: string, sql: string, params: BindValues, callback: NativeCallback): void;
   executeBatch(dbId: string, sql: string, params: BindValueRows, callback: NativeCallback): void;
-  httpFetch?(request: NativeHttpFetchRequest, callback: NativeHttpFetchCallback): void;
-  httpFetchAbort?(streamId: string, callback: NativeHttpFetchCallback): void;
 }
 
 export interface NativeModulesHost {
-  NativePowerSyncModule?: NativePowerSyncModule;
+  /** SQL RPC; iOS/Android Autolink may also carry NativeSyncHttp methods. */
+  NativePowerSyncModule?: NativePowerSyncModule & Partial<NativeSyncHttpModule>;
   LynxFetchModule?: LynxFetchModule;
 }
 

@@ -4,12 +4,12 @@ import { test } from "node:test";
 import { isString } from "../src/type-guards.ts";
 import { LynxRemote } from "../src/sync/LynxRemote.ts";
 import type { LynxStreamEventPayload } from "../src/globals.ts";
+import type { LynxFetchSuccessPayload } from "../src/sync/transport/http-types.ts";
 import type {
-  LynxFetchSuccessPayload,
   NativeHttpFetchCallback,
   NativeHttpFetchEnvelope,
   NativeHttpFetchRequest,
-} from "../src/adapter/native.ts";
+} from "../src/sync/transport/http-types.ts";
 import {
   assignNativeModules,
   chunkReader,
@@ -384,6 +384,52 @@ test("httpFetch incremental streamingId applies onData chunks before onEnd", asy
       const third = await reader.read();
       assert.equal(third.done, true);
       assert.equal(aborted, undefined);
+    },
+  );
+});
+
+test("httpFetch streamingId onError then onEnd fails the reader", async () => {
+  const { emitter, listeners } = createFakeEmitter();
+  await withFakeLynxHost(
+    {
+      platform: "iOS",
+      emitter,
+      nativeModules: {
+        NativePowerSyncModule: nativeWithHttp({
+          httpFetch(_request, callback) {
+            const streamingId = "NativePowerSyncHttpStream-err";
+            queueMicrotask(() => {
+              callback({
+                ok: true,
+                status: 200,
+                statusText: "OK",
+                contentType: "application/x-ndjson",
+                body: "",
+                streamingId,
+                idleComplete: false,
+              });
+              queueMicrotask(() => {
+                for (const fn of listeners.get(streamingId) ?? []) {
+                  fn({ event: "onError", error: "stream reset" });
+                }
+                for (const fn of listeners.get(streamingId) ?? []) {
+                  fn({ event: "onEnd" });
+                }
+              });
+            });
+          },
+        }),
+      },
+    },
+    async () => {
+      const remote = new LynxRemote(stubConnector(), silentLogger);
+      const response = await remote.fetch({
+        resource: "http://127.0.0.1:8080/sync/stream",
+        request: { method: "POST", body: "{}" },
+        expectStreamingResponse: true,
+      });
+      const reader = response.body!.getReader();
+      await assert.rejects(() => reader.read(), /stream reset/);
     },
   );
 });

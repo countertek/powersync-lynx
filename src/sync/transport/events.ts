@@ -245,10 +245,10 @@ function createStreamingReader(eventNames: string[]): ReadableStreamDefaultReade
         : undefined;
     if (event === "onData") {
       queue.push(toUint8(data));
-    } else if (event === "onEnd") {
-      finished = true;
     } else if (event === "onError") {
+      // Record failure; onEnd is the terminator (onData* → onError? → onEnd).
       failure = new Error(error == null ? "Lynx HTTP stream error" : String(error));
+    } else if (event === "onEnd") {
       finished = true;
     }
     wake?.();
