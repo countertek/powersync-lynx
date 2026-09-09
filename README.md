@@ -90,7 +90,7 @@ Idle-complete / `raw-body` remains a fallback when no event sender is available.
 
 | Signal | What it means |
 | --- | --- |
-| **`hasSynced` alone** | Not proof that downloads applied. Confirm `ps_buckets > 0` / row presence and FM-PS-LYNX-003 logs (`via: "chunked"`, `streamingId`). |
+| **`hasSynced` alone** | Not proof that downloads applied. Confirm `ps_buckets > 0` / row presence and the native `streamingId` realtime path (GlobalEventEmitter `onData` before `onEnd`). |
 | **Realtime on native** | Depends on `streamingId` + GlobalEventEmitter chunks staying open, not a single buffered body. |
 | **Local UI ready** | `waitForReady()` opens SQLite; it does **not** wait for `connect()` / first checkpoint. |
 | **Demo tokens** | The examples stack mints a static HS256 JWT. Not PowerSync Cloud / JWKS production auth. |
