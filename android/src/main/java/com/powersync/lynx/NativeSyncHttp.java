@@ -25,12 +25,10 @@ import java.util.concurrent.atomic.AtomicReference;
  * <p>Primary: {@code streamingId} + GlobalEventEmitter {@code onData*} → {@code onError?} → {@code
  * onEnd}. Idle-complete UTF-8 body is fallback when {@link LynxContext} is absent.
  *
- * <p>Timeouts and URL heuristics match {@code shared/sync_http_policy.h}.
+ * <p>Timeouts and stream event names come from {@link SyncHttpPolicy} ({@code
+ * shared/sync_http_policy.h}).
  */
 final class NativeSyncHttp {
-  /** Keep in lockstep with {@code PS_SYNC_HTTP_STREAM_EVENT_PREFIX}. */
-  static final String STREAM_EVENT_PREFIX = "NativePowerSyncHttpStream";
-
   interface ContextSource {
     @Nullable
     LynxContext lynxContext();
@@ -83,7 +81,7 @@ final class NativeSyncHttp {
   }
 
   private void fetchStreaming(ParsedHttpRequest parsed, Callback callback) {
-    final String streamId = STREAM_EVENT_PREFIX + nextStreamId.getAndIncrement();
+    final String streamId = SyncHttpPolicy.STREAM_EVENT_PREFIX + nextStreamId.getAndIncrement();
     final StreamHandle handle = new StreamHandle();
     activeStreams.put(streamId, handle);
     final AtomicBoolean headersSent = new AtomicBoolean(false);
@@ -119,12 +117,12 @@ final class NativeSyncHttp {
               if (utf8Chunk == null || utf8Chunk.isEmpty()) {
                 return;
               }
-              sendStreamEvent(streamId, "onData", utf8Chunk, null);
+              sendStreamEvent(streamId, SyncHttpPolicy.EVENT_ON_DATA, utf8Chunk, null);
             }
 
             @Override
             public void onEnd() {
-              sendStreamEvent(streamId, "onEnd", null, null);
+              sendStreamEvent(streamId, SyncHttpPolicy.EVENT_ON_END, null, null);
               activeStreams.remove(streamId);
             }
 
@@ -155,8 +153,8 @@ final class NativeSyncHttp {
       invoke(callback, fail(text));
       return;
     }
-    sendStreamEvent(streamId, "onError", null, text);
-    sendStreamEvent(streamId, "onEnd", null, null);
+    sendStreamEvent(streamId, SyncHttpPolicy.EVENT_ON_ERROR, null, text);
+    sendStreamEvent(streamId, SyncHttpPolicy.EVENT_ON_END, null, null);
   }
 
   private WritableMap fetchIdleComplete(ParsedHttpRequest parsed) {

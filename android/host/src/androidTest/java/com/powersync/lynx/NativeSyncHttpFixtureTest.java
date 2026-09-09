@@ -55,7 +55,7 @@ public class NativeSyncHttpFixtureTest {
       expect(headers.getBoolean("ok"), "streaming httpFetch ok");
       String streamingId = headers.getString("streamingId");
       expect(
-          streamingId != null && streamingId.startsWith("NativePowerSyncHttpStream"),
+          streamingId != null && streamingId.startsWith(SyncHttpPolicy.STREAM_EVENT_PREFIX),
           "streaming httpFetch returns streamingId");
       expect(!headers.getBoolean("idleComplete"), "streaming idleComplete is false");
       expect(
@@ -63,8 +63,12 @@ public class NativeSyncHttpFixtureTest {
           "streaming body is empty");
       expect(lynx.waitForEnd(10, TimeUnit.SECONDS), "onEnd after onData");
       List<RecordingLynxContext.Event> events = lynx.snapshot();
-      expect(!events.isEmpty() && "onData".equals(events.get(0).event), "first event is onData");
-      expect("onEnd".equals(events.get(events.size() - 1).event), "terminal event is onEnd");
+      expect(
+          !events.isEmpty() && SyncHttpPolicy.EVENT_ON_DATA.equals(events.get(0).event),
+          "first event is onData");
+      expect(
+          SyncHttpPolicy.EVENT_ON_END.equals(events.get(events.size() - 1).event),
+          "terminal event is onEnd");
       expect(!lynx.sawError(), "checkpoint-ops has no onError");
       expect(lynx.joinedData().equals(checkpointBody), "onData concatenates checkpoint-ops NDJSON");
     }
@@ -200,7 +204,7 @@ public class NativeSyncHttpFixtureTest {
         }
       }
       events.add(new Event(name, event, data, error));
-      if ("onEnd".equals(event)) {
+      if (SyncHttpPolicy.EVENT_ON_END.equals(event)) {
         ended.countDown();
       }
     }
@@ -215,7 +219,7 @@ public class NativeSyncHttpFixtureTest {
 
     boolean sawError() {
       for (Event event : events) {
-        if ("onError".equals(event.event)) {
+        if (SyncHttpPolicy.EVENT_ON_ERROR.equals(event.event)) {
           return true;
         }
       }
@@ -225,7 +229,7 @@ public class NativeSyncHttpFixtureTest {
     String joinedData() {
       StringBuilder body = new StringBuilder();
       for (Event event : events) {
-        if ("onData".equals(event.event) && event.data != null) {
+        if (SyncHttpPolicy.EVENT_ON_DATA.equals(event.event) && event.data != null) {
           body.append(event.data);
         }
       }

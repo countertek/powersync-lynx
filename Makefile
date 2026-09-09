@@ -22,7 +22,9 @@ else
 endif
 TEST_BIN := shared/build/ps_sql_test
 FIXTURE_TEST_BIN := shared/build/sync_stream_fixtures_test
+POLICY_ANDROID_TEST_BIN := shared/build/sync_http_policy_android_test
 IOS_TEST_BIN := shared/build/ios_module_rpc_test
+ANDROID_JAVA_DIR := $(CURDIR)/android/src/main/java/com/powersync/lynx
 FIXTURES_JSON := $(CURDIR)/shared/fixtures/sync-stream.json
 NODE := dist/macos/arm64/powersync-lynx.node
 WIN_NODE := dist/windows/x64/powersync-lynx.node
@@ -79,11 +81,25 @@ $(FIXTURE_TEST_BIN): shared/tests/sync_stream_fixtures_test.cc \
 		-DPS_SYNC_STREAM_FIXTURES_PATH='"$(FIXTURES_JSON)"' \
 		shared/tests/sync_stream_fixtures_test.cc $(LDFLAGS) -o $@
 
-test: deps $(TEST_BIN) $(FIXTURE_TEST_BIN) $(JNI_OBJ)
+$(POLICY_ANDROID_TEST_BIN): shared/tests/sync_http_policy_android_test.cc \
+		shared/sync_http_policy.h \
+		android/src/main/java/com/powersync/lynx/SyncHttpPolicy.java \
+		android/src/main/java/com/powersync/lynx/IdleCompleteHttp.java \
+		android/src/main/java/com/powersync/lynx/StreamingHttp.java \
+		android/src/main/java/com/powersync/lynx/NativeSyncHttp.java
+	mkdir -p shared/build
+	$(CXX) $(CXXFLAGS) \
+		-DPS_SYNC_HTTP_POLICY_H_PATH='"$(CURDIR)/shared/sync_http_policy.h"' \
+		-DPS_ANDROID_JAVA_DIR='"$(ANDROID_JAVA_DIR)"' \
+		shared/tests/sync_http_policy_android_test.cc -o $@
+
+test: deps $(TEST_BIN) $(FIXTURE_TEST_BIN) $(POLICY_ANDROID_TEST_BIN) $(JNI_OBJ)
 	@! grep -n 'UIApplication.sharedApplication.windows' ios/src/NativeSyncHttp.mm
 	@! grep -n 'findLynxViewIn' ios/src/NativeSyncHttp.mm
 	POWERSYNC_CORE_PATH="$(CURDIR)/$(CORE_DYLIB)" $(TEST_BIN)
 	PS_SYNC_STREAM_FIXTURES_PATH="$(FIXTURES_JSON)" $(FIXTURE_TEST_BIN)
+	$(POLICY_ANDROID_TEST_BIN)
+	node scripts/gen-sync-http-policy-java.mjs --check
 
 $(JNI_OBJ): android/src/main/cpp/ps_sql_jni.cc shared/ps_sql.h
 	mkdir -p shared/build

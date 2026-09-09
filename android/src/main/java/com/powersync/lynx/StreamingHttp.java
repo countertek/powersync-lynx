@@ -21,16 +21,11 @@ import java.util.concurrent.atomic.AtomicReference;
  * Unlike {@link IdleCompleteHttp}, this does <strong>not</strong> close after a short idle window —
  * PowerSync keepalive (~20s) and later checkpoints stay on the same session.
  *
- * <p>Read timeout is {@code PS_SYNC_HTTP_STREAM_READ_TIMEOUT_MS} (120s) so keepalive gaps do not
- * abort. Terminal GlobalEventEmitter sequence ({@code onData*} → {@code onError?} → {@code onEnd})
- * is assembled by {@link NativeSyncHttp}, not this reader.
+ * <p>Read timeout is {@link SyncHttpPolicy#STREAM_READ_TIMEOUT_MS} so keepalive gaps do not abort.
+ * Terminal GlobalEventEmitter sequence ({@code onData*} → {@code onError?} → {@code onEnd}) is
+ * assembled by {@link NativeSyncHttp}, not this reader.
  */
 final class StreamingHttp {
-  /** Keep in lockstep with {@code PS_SYNC_HTTP_CONNECT_TIMEOUT_MS}. */
-  static final long CONNECT_TIMEOUT_MS = 30_000L;
-  /** Keep in lockstep with {@code PS_SYNC_HTTP_STREAM_READ_TIMEOUT_MS}. */
-  static final long STREAM_READ_TIMEOUT_MS = 120_000L;
-
   interface Listener {
     void onHeaders(int status, String statusText, String contentType);
 
@@ -58,8 +53,8 @@ final class StreamingHttp {
       bound.set(conn);
     }
     conn.setInstanceFollowRedirects(true);
-    conn.setConnectTimeout((int) CONNECT_TIMEOUT_MS);
-    conn.setReadTimeout((int) STREAM_READ_TIMEOUT_MS);
+    conn.setConnectTimeout((int) SyncHttpPolicy.CONNECT_TIMEOUT_MS);
+    conn.setReadTimeout((int) SyncHttpPolicy.STREAM_READ_TIMEOUT_MS);
     conn.setRequestMethod(httpMethod);
     conn.setUseCaches(false);
     if (headers != null) {
