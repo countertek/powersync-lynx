@@ -187,8 +187,10 @@ Mobile hosts still register a Lynx HTTP Service for Connector traffic: iOS `Lynx
 
 1. One-shot callback returns HTTP status + `streamingId` with an empty body (Lynx Callback is one-shot).
 2. Chunks are UTF-8 strings on GlobalEventEmitter. Terminal sequence after headers: **`onData*` → `onError?` → `onEnd`**. JS waits for `onEnd`; `onError` records failure.
-3. `httpFetchAbort(streamingId)` cancels the native request.
+3. `httpFetchAbort(streamingId)` cancels the native request. After headers this is `onError` then `onEnd`. Before headers the one-shot Callback is `{ok:false,status:-1,message,…}` and no events fire.
 4. Idle-complete (2.5 s quiet window after bytes, UTF-8 `body` / `bodyBase64`, `idleComplete: true`) runs only when streaming cannot be started. It is not the primary realtime path.
+
+Pre-headers / I/O failure Callback on iOS and Android: `{ok:false,status:-1,statusText:"",message,body,idleComplete:false}`. Session decisions live in `shared/sync_http_session.h` (hosts keep their HTTP I/O).
 
 iOS GlobalEventEmitter posting uses a **host-provided** sender (`sendGlobalEvent:withParams:`): Autolink `initWithParam:` / `NativeSyncHttp initWithEventSender:`, or `+[NativePowerSyncModule setSharedStreamEventSender:]` (showcase registers the `LynxView`). The library does not walk `UIWindow`s. If no sender is registered, `httpFetch` uses idle-complete. Android posts through `LynxContext.sendGlobalEvent` when the module was constructed with a `LynxContext`; otherwise idle-complete.
 

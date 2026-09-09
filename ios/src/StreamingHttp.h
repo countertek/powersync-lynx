@@ -5,6 +5,8 @@ NS_ASSUME_NONNULL_BEGIN
 /// Incremental HTTP for PowerSync NDJSON sync streams.
 /// Keeps the connection open and delivers UTF-8 string chunks via the listener
 /// (no idle-complete batching; no ResponseBody.bytes hang).
+/// Terminal onData* → onError? → onEnd is assembled by NativeSyncHttp via
+/// shared/sync_http_session.h, not this reader.
 @interface StreamingHttpSession : NSObject
 
 - (instancetype)initWithRequest:(NSDictionary *)request

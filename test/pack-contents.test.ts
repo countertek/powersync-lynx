@@ -119,6 +119,21 @@ test("packed tarball ships iOS build inputs and omits host/build residue", async
       "native incomplete UTF-8 hold lives in shared/utf8_hold.h",
     );
     assert.equal(
+      has("shared/sync_http_session.h"),
+      true,
+      "NativeSyncHttp session contract lives in shared/sync_http_session.h",
+    );
+    assert.equal(
+      has("android/src/main/cpp/sync_http_session_jni.cc"),
+      true,
+      "Android session JNI must ship",
+    );
+    assert.equal(
+      has("android/src/main/java/com/powersync/lynx/SyncHttpSession.java"),
+      true,
+      "Android SyncHttpSession JNI wrapper must ship",
+    );
+    assert.equal(
       has("android/src/main/java/com/powersync/lynx/SyncHttpPolicy.java"),
       true,
       "Android compiles generated SyncHttpPolicy.java from the shared header",

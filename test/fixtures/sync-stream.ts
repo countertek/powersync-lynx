@@ -19,6 +19,7 @@ export interface SyncStreamFixtureCatalog {
   contentType: string;
   idleCompleteEnvelopeKeys: string[];
   streamingEnvelopeKeys: string[];
+  failEnvelopeKeys: string[];
   scenarios: SyncStreamScenario[];
 }
 
@@ -32,6 +33,7 @@ interface CatalogJson {
   contentType?: unknown;
   idleCompleteEnvelopeKeys?: unknown;
   streamingEnvelopeKeys?: unknown;
+  failEnvelopeKeys?: unknown;
   scenarios?: unknown;
 }
 
@@ -97,6 +99,9 @@ export function loadSyncStreamFixtures(): SyncStreamFixtureCatalog {
   if (!isStringArray(parsed.streamingEnvelopeKeys)) {
     throw new Error("catalog streamingEnvelopeKeys must be strings");
   }
+  if (!isStringArray(parsed.failEnvelopeKeys)) {
+    throw new Error("catalog failEnvelopeKeys must be strings");
+  }
   if (!Array.isArray(parsed.scenarios)) {
     throw new Error("catalog scenarios must be an array");
   }
@@ -111,6 +116,7 @@ export function loadSyncStreamFixtures(): SyncStreamFixtureCatalog {
     contentType: parsed.contentType,
     idleCompleteEnvelopeKeys: parsed.idleCompleteEnvelopeKeys,
     streamingEnvelopeKeys: parsed.streamingEnvelopeKeys,
+    failEnvelopeKeys: parsed.failEnvelopeKeys,
     scenarios,
   };
 }

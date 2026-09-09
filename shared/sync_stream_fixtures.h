@@ -45,6 +45,7 @@ struct Catalog {
   std::string content_type;
   std::vector<std::string> idle_complete_keys;
   std::vector<std::string> streaming_keys;
+  std::vector<std::string> fail_keys;
   std::vector<Scenario> scenarios;
 };
 
@@ -359,6 +360,8 @@ class Parser {
         catalog.idle_complete_keys = parse_string_array();
       } else if (key == "streamingEnvelopeKeys") {
         catalog.streaming_keys = parse_string_array();
+      } else if (key == "failEnvelopeKeys") {
+        catalog.fail_keys = parse_string_array();
       } else if (key == "scenarios") {
         catalog.scenarios = parse_scenario_array();
       } else {

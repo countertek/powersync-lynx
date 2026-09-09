@@ -3,6 +3,7 @@
 #import "StreamingHttp.h"
 
 #include "sync_http_policy.h"
+#include "sync_http_session.h"
 
 #include <atomic>
 #include <string>
@@ -31,6 +32,19 @@ BOOL UrlLooksLikeSyncStream(NSDictionary* request) {
   return ps_sync_http_is_sync_stream_url(Utf8FromNSString((NSString*)urlValue).c_str()) != 0;
 }
 
+NSDictionary* FailEnvelope(NSString* message) {
+  NSString* text =
+      message.length > 0 ? message : @(PS_SYNC_HTTP_FAIL_MESSAGE_DEFAULT);
+  return @{
+    @"ok" : @NO,
+    @"status" : @(PS_SYNC_HTTP_FAIL_STATUS),
+    @"statusText" : @"",
+    @"message" : text,
+    @"body" : text,
+    @"idleComplete" : @NO,
+  };
+}
+
 }  // namespace
 
 // LynxView declares sendGlobalEvent:withParams:, but this translation unit does
@@ -39,9 +53,21 @@ BOOL UrlLooksLikeSyncStream(NSDictionary* request) {
 - (void)sendGlobalEvent:(NSString*)name withParams:(id)params;
 @end
 
+@interface PSSyncHttpStreamHandle : NSObject {
+ @public
+  ps_sync_http_session session;
+}
+@property(nonatomic, copy) NSString* streamId;
+@property(nonatomic, copy) void (^callback)(id);
+@property(nonatomic, strong, nullable) StreamingHttpSession* io;
+@end
+
+@implementation PSSyncHttpStreamHandle
+@end
+
 @interface NativeSyncHttp ()
 @property(nonatomic, strong, nullable) id streamEventSender;
-@property(nonatomic, strong) NSMutableDictionary<NSString*, StreamingHttpSession*>* activeStreams;
+@property(nonatomic, strong) NSMutableDictionary<NSString*, PSSyncHttpStreamHandle*>* activeStreams;
 @end
 
 @implementation NativeSyncHttp
@@ -90,6 +116,67 @@ static __weak id g_sharedStreamEventSender = nil;
   [sender sendGlobalEvent:streamId withParams:@[ payload ]];
 }
 
+- (void)applyEffects:(int)effects
+              handle:(PSSyncHttpStreamHandle*)handle
+              status:(NSInteger)status
+         contentType:(NSString*_Nullable)contentType
+                data:(NSString*_Nullable)data
+               error:(NSString*_Nullable)error {
+  if (handle == nil) {
+    return;
+  }
+  NSString* streamId = handle.streamId;
+  void (^callback)(id) = handle.callback;
+  if ((effects & PS_SYNC_HTTP_EFFECT_CALLBACK_HEADERS) != 0 && callback != nil) {
+    NSMutableDictionary* result = [@{
+      @"ok" : @YES,
+      @"status" : @(status),
+      @"statusText" : @"",
+      @"body" : @"",
+      @"streamingId" : streamId ?: @"",
+      @"idleComplete" : @NO,
+    } mutableCopy];
+    if (contentType != nil) {
+      result[@"contentType"] = contentType;
+    }
+    @autoreleasepool {
+      callback(result);
+    }
+  }
+  if ((effects & PS_SYNC_HTTP_EFFECT_CALLBACK_FAIL) != 0 && callback != nil) {
+    @autoreleasepool {
+      callback(FailEnvelope(error));
+    }
+  }
+  if ((effects & PS_SYNC_HTTP_EFFECT_EVENT_DATA) != 0) {
+    [self sendStreamEvent:streamId
+                    event:@(PS_SYNC_HTTP_EVENT_ON_DATA)
+                     data:data
+                    error:nil];
+  }
+  if ((effects & PS_SYNC_HTTP_EFFECT_EVENT_ERROR) != 0) {
+    NSString* text =
+        error.length > 0 ? error : @(PS_SYNC_HTTP_FAIL_MESSAGE_DEFAULT);
+    [self sendStreamEvent:streamId
+                    event:@(PS_SYNC_HTTP_EVENT_ON_ERROR)
+                     data:nil
+                    error:text];
+  }
+  if ((effects & PS_SYNC_HTTP_EFFECT_EVENT_END) != 0) {
+    [self sendStreamEvent:streamId event:@(PS_SYNC_HTTP_EVENT_ON_END) data:nil error:nil];
+  }
+  if ((effects & PS_SYNC_HTTP_EFFECT_CANCEL_IO) != 0) {
+    [handle.io cancel];
+  }
+  if ((effects & PS_SYNC_HTTP_EFFECT_DROP) != 0) {
+    @synchronized(self.activeStreams) {
+      if (streamId != nil) {
+        [self.activeStreams removeObjectForKey:streamId];
+      }
+    }
+  }
+}
+
 - (void)fetch:(NSDictionary*)request callback:(void (^)(id))callback {
   void (^cb)(id) = [callback copy];
   if (cb == nil) {
@@ -97,7 +184,8 @@ static __weak id g_sharedStreamEventSender = nil;
   }
   BOOL syncStream = UrlLooksLikeSyncStream(request);
   id sender = syncStream ? [self resolveStreamEventSender] : nil;
-  if (syncStream && sender != nil) {
+  int route = ps_sync_http_route(syncStream ? 1 : 0, sender != nil ? 1 : 0);
+  if (route == PS_SYNC_HTTP_ROUTE_STREAMING) {
     [self fetchStreaming:request callback:cb];
     return;
   }
@@ -112,74 +200,86 @@ static __weak id g_sharedStreamEventSender = nil;
 - (void)fetchStreaming:(NSDictionary*)request callback:(void (^)(id))callback {
   NSString* streamId = [NSString
       stringWithFormat:@"%s%ld", PS_SYNC_HTTP_STREAM_EVENT_PREFIX, g_stream_counter.fetch_add(1)];
-  __block BOOL headersSent = NO;
+  PSSyncHttpStreamHandle* handle = [PSSyncHttpStreamHandle new];
+  handle.streamId = streamId;
+  handle.callback = callback;
+  ps_sync_http_session_init(&handle->session);
   __weak NativeSyncHttp* weakSelf = self;
-  StreamingHttpSession* session = [[StreamingHttpSession alloc]
+  __weak PSSyncHttpStreamHandle* weakHandle = handle;
+  handle.io = [[StreamingHttpSession alloc]
       initWithRequest:request
             onHeaders:^(NSInteger status, NSString*_Nullable contentType) {
-              headersSent = YES;
-              NSMutableDictionary* result = [@{
-                @"ok" : @YES,
-                @"status" : @(status),
-                @"statusText" : @"",
-                @"body" : @"",
-                @"streamingId" : streamId,
-                @"idleComplete" : @NO,
-              } mutableCopy];
-              if (contentType != nil) {
-                result[@"contentType"] = contentType;
+              PSSyncHttpStreamHandle* strongHandle = weakHandle;
+              NativeSyncHttp* strongSelf = weakSelf;
+              if (strongHandle == nil || strongSelf == nil) {
+                return;
               }
-              @autoreleasepool {
-                callback(result);
-              }
+              int effects = ps_sync_http_session_on_headers(&strongHandle->session);
+              [strongSelf applyEffects:effects
+                                handle:strongHandle
+                                status:status
+                           contentType:contentType
+                                  data:nil
+                                 error:nil];
             }
                onData:^(NSString* utf8Chunk) {
+                 PSSyncHttpStreamHandle* strongHandle = weakHandle;
                  NativeSyncHttp* strongSelf = weakSelf;
-                 [strongSelf sendStreamEvent:streamId event:@"onData" data:utf8Chunk error:nil];
+                 if (strongHandle == nil || strongSelf == nil || utf8Chunk.length == 0) {
+                   return;
+                 }
+                 int effects = ps_sync_http_session_on_data(&strongHandle->session);
+                 [strongSelf applyEffects:effects
+                                   handle:strongHandle
+                                   status:0
+                              contentType:nil
+                                     data:utf8Chunk
+                                    error:nil];
                }
                 onEnd:^{
+                  PSSyncHttpStreamHandle* strongHandle = weakHandle;
                   NativeSyncHttp* strongSelf = weakSelf;
-                  [strongSelf sendStreamEvent:streamId event:@"onEnd" data:nil error:nil];
-                  @synchronized(strongSelf.activeStreams) {
-                    [strongSelf.activeStreams removeObjectForKey:streamId];
+                  if (strongHandle == nil || strongSelf == nil) {
+                    return;
                   }
+                  int effects = ps_sync_http_session_on_end(&strongHandle->session);
+                  [strongSelf applyEffects:effects
+                                    handle:strongHandle
+                                    status:0
+                               contentType:nil
+                                      data:nil
+                                     error:nil];
                 }
               onError:^(NSString* message) {
+                PSSyncHttpStreamHandle* strongHandle = weakHandle;
                 NativeSyncHttp* strongSelf = weakSelf;
-                if (!headersSent) {
-                  @autoreleasepool {
-                    callback(@{
-                      @"ok" : @NO,
-                      @"status" : @(-1),
-                      @"statusText" : @"",
-                      @"message" : message ?: @"httpFetch stream failed",
-                      @"body" : message ?: @"",
-                      @"idleComplete" : @NO,
-                    });
-                  }
-                } else {
-                  NSString* text = message ?: @"httpFetch stream failed";
-                  [strongSelf sendStreamEvent:streamId event:@"onError" data:nil error:text];
-                  [strongSelf sendStreamEvent:streamId event:@"onEnd" data:nil error:nil];
+                if (strongHandle == nil || strongSelf == nil) {
+                  return;
                 }
-                @synchronized(strongSelf.activeStreams) {
-                  [strongSelf.activeStreams removeObjectForKey:streamId];
-                }
+                int effects = ps_sync_http_session_on_error(&strongHandle->session);
+                [strongSelf applyEffects:effects
+                                  handle:strongHandle
+                                  status:0
+                             contentType:nil
+                                    data:nil
+                                   error:message];
               }];
   @synchronized(self.activeStreams) {
-    self.activeStreams[streamId] = session;
+    self.activeStreams[streamId] = handle;
   }
-  [session start];
+  [handle.io start];
 }
 
 - (void)abort:(NSString*)streamId callback:(void (^)(id))callback {
   void (^cb)(id) = [callback copy];
-  StreamingHttpSession* session = nil;
+  PSSyncHttpStreamHandle* handle = nil;
   @synchronized(self.activeStreams) {
-    session = self.activeStreams[streamId];
-    [self.activeStreams removeObjectForKey:streamId];
+    handle = streamId != nil ? self.activeStreams[streamId] : nil;
   }
-  [session cancel];
+  if (handle != nil) {
+    int effects = ps_sync_http_session_abort(&handle->session);
+    [self applyEffects:effects handle:handle status:0 contentType:nil data:nil error:nil];
+  }
   if (cb != nil) {
     @autoreleasepool {
       cb(@{@"ok" : @YES});

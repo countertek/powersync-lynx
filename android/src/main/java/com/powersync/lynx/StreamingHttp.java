@@ -23,7 +23,7 @@ import java.util.concurrent.atomic.AtomicReference;
  *
  * <p>Read timeout is {@link SyncHttpPolicy#STREAM_READ_TIMEOUT_MS} so keepalive gaps do not abort.
  * Terminal GlobalEventEmitter sequence ({@code onData*} → {@code onError?} → {@code onEnd}) is
- * assembled by {@link NativeSyncHttp}, not this reader.
+ * assembled by {@link NativeSyncHttp} via {@link SyncHttpSession}, not this reader.
  */
 final class StreamingHttp {
   interface Listener {

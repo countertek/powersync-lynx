@@ -106,6 +106,103 @@ public class NativeSyncHttpFixtureTest {
     }
   }
 
+  @Test
+  public void preHeadersFailureEnvelopeMatchesSessionContract() throws Exception {
+    Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+    new NativePowerSyncModule(context);
+    RecordingLynxContext lynx = new RecordingLynxContext(context);
+    NativePowerSyncModule module = new NativePowerSyncModule(lynx);
+
+    WritableMap missingUrl = Arguments.createMap();
+    missingUrl.putString("method", "POST");
+    ReadableMap parseFail = await(callback -> module.httpFetch(missingUrl, callback));
+    assertFailEnvelope(parseFail, "parse missing url");
+    expect(lynx.snapshot().isEmpty(), "parse fail emits no GlobalEventEmitter events");
+
+    try (ReplayServer rst = ReplayServer.start(ReplayServer.Mode.RST_BEFORE_HEADERS, "text/plain", "")) {
+      WritableMap request = Arguments.createMap();
+      request.putString("method", "GET");
+      request.putString("url", rst.url());
+      ReadableMap envelope = await(callback -> module.httpFetch(request, callback));
+      assertFailEnvelope(envelope, "RST before headers");
+      expect(!lynx.sawError() && lynx.snapshot().isEmpty(), "pre-headers RST has no stream events");
+    }
+  }
+
+  @Test
+  public void abortAfterHeadersEmitsErrorThenEnd() throws Exception {
+    Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+    JSONObject catalog = loadCatalog(context);
+    JSONObject checkpoint = scenario(catalog, "checkpoint-ops");
+    String contentType = catalog.getString("contentType");
+    String first = checkpoint.getJSONArray("chunks").getString(0);
+    new NativePowerSyncModule(context);
+
+    try (ReplayServer hold =
+        ReplayServer.start(ReplayServer.Mode.HOLD_OPEN, contentType, first)) {
+      RecordingLynxContext lynx = new RecordingLynxContext(context);
+      NativePowerSyncModule module = new NativePowerSyncModule(lynx);
+      WritableMap request = Arguments.createMap();
+      request.putString("method", "GET");
+      request.putString("url", hold.url());
+      ReadableMap headers = await(callback -> module.httpFetch(request, callback));
+      expect(headers.getBoolean("ok"), "abort path received headers");
+      String streamingId = headers.getString("streamingId");
+      expect(streamingId != null, "abort path received streamingId");
+      expect(lynx.waitForEventCount(1, 10, TimeUnit.SECONDS), "abort path got initial onData");
+      int before = lynx.snapshot().size();
+      ReadableMap aborted =
+          await(callback -> module.httpFetchAbort(streamingId, callback));
+      expect(aborted.getBoolean("ok"), "httpFetchAbort returns ok");
+      expect(lynx.waitForEventCount(before + 2, 10, TimeUnit.SECONDS),
+          "abort emits onError then onEnd");
+      expect(lynx.sawError(), "abort after headers emits onError");
+      List<RecordingLynxContext.Event> events = lynx.snapshot();
+      expect(
+          SyncHttpPolicy.EVENT_ON_END.equals(events.get(events.size() - 1).event),
+          "abort terminal sequence ends with onEnd");
+    }
+  }
+
+  @Test
+  public void errorThenEndAfterFirstChunk() throws Exception {
+    Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+    JSONObject catalog = loadCatalog(context);
+    JSONObject errored = scenario(catalog, "error-then-end");
+    String contentType = catalog.getString("contentType");
+    String first = errored.getJSONArray("chunks").getString(0);
+    new NativePowerSyncModule(context);
+
+    try (ReplayServer rst =
+        ReplayServer.start(ReplayServer.Mode.RST_AFTER_FIRST, contentType, first)) {
+      RecordingLynxContext lynx = new RecordingLynxContext(context);
+      NativePowerSyncModule module = new NativePowerSyncModule(lynx);
+      WritableMap request = Arguments.createMap();
+      request.putString("method", "POST");
+      request.putString("url", rst.url());
+      request.putString("body", "{}");
+      ReadableMap headers = await(callback -> module.httpFetch(request, callback));
+      expect(headers.getBoolean("ok"), "error-then-end headers ok");
+      expect(lynx.waitForEnd(10, TimeUnit.SECONDS), "error-then-end waits for onEnd");
+      expect(lynx.sawError(), "error-then-end records onError");
+      List<RecordingLynxContext.Event> events = lynx.snapshot();
+      expect(
+          SyncHttpPolicy.EVENT_ON_END.equals(events.get(events.size() - 1).event),
+          "error-then-end terminal is onEnd");
+      expect(lynx.joinedData().equals(first), "error-then-end onData is the first fixture chunk");
+    }
+  }
+
+  private static void assertFailEnvelope(ReadableMap envelope, String what) {
+    expect(envelope.getBoolean("ok") == false, what + ": ok is false");
+    expect(envelope.getDouble("status") == SyncHttpSession.FAIL_STATUS, what + ": status is -1");
+    expect(envelope.hasKey("message") && envelope.getString("message") != null,
+        what + ": message present");
+    expect(envelope.hasKey("body"), what + ": body present");
+    expect(envelope.hasKey("idleComplete") && !envelope.getBoolean("idleComplete"),
+        what + ": idleComplete is false");
+  }
+
   private static JSONObject loadCatalog(Context context) throws Exception {
     try (InputStream in = context.getAssets().open("sync-stream.json")) {
       ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -201,6 +298,7 @@ public class NativeSyncHttpFixtureTest {
 
     private final List<Event> events = new CopyOnWriteArrayList<>();
     private final CountDownLatch ended = new CountDownLatch(1);
+    private final Object eventLock = new Object();
 
     RecordingLynxContext(Context base) {
       super(base);
@@ -232,6 +330,9 @@ public class NativeSyncHttpFixtureTest {
         }
       }
       events.add(new Event(name, event, data, error));
+      synchronized (eventLock) {
+        eventLock.notifyAll();
+      }
       if (SyncHttpPolicy.EVENT_ON_END.equals(event)) {
         ended.countDown();
       }
@@ -243,6 +344,20 @@ public class NativeSyncHttpFixtureTest {
 
     boolean waitForEnd(long timeout, TimeUnit unit) throws InterruptedException {
       return ended.await(timeout, unit);
+    }
+
+    boolean waitForEventCount(int count, long timeout, TimeUnit unit) throws InterruptedException {
+      long deadline = System.nanoTime() + unit.toNanos(timeout);
+      synchronized (eventLock) {
+        while (events.size() < count) {
+          long remaining = deadline - System.nanoTime();
+          if (remaining <= 0) {
+            return false;
+          }
+          eventLock.wait(remaining / 1_000_000L, (int) (remaining % 1_000_000L));
+        }
+      }
+      return events.size() >= count;
     }
 
     boolean sawError() {
@@ -266,11 +381,18 @@ public class NativeSyncHttpFixtureTest {
   }
 
   static final class ReplayServer implements AutoCloseable {
+    enum Mode {
+      CLEAN,
+      HOLD_OPEN,
+      RST_BEFORE_HEADERS,
+      RST_AFTER_FIRST
+    }
+
     private final ServerSocket server;
     private final Thread worker;
     private volatile boolean stop;
 
-    private ReplayServer(ServerSocket server, String contentType, String body) {
+    private ReplayServer(ServerSocket server, Mode mode, String contentType, String body) {
       this.server = server;
       this.worker =
           new Thread(
@@ -278,14 +400,37 @@ public class NativeSyncHttpFixtureTest {
                 while (!stop) {
                   try (Socket socket = server.accept()) {
                     readHeaders(socket.getInputStream());
+                    if (mode == Mode.RST_BEFORE_HEADERS) {
+                      rstClose(socket);
+                      continue;
+                    }
+                    OutputStream out = socket.getOutputStream();
                     byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+                    if (mode == Mode.RST_AFTER_FIRST || mode == Mode.HOLD_OPEN) {
+                      String header =
+                          "HTTP/1.1 200 OK\r\nContent-Type: "
+                              + contentType
+                              + "\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
+                      out.write(header.getBytes(StandardCharsets.US_ASCII));
+                      writeChunked(out, bytes);
+                      out.flush();
+                      if (mode == Mode.RST_AFTER_FIRST) {
+                        rstClose(socket);
+                        continue;
+                      }
+                      for (int i = 0; i < 50 && !stop; i++) {
+                        Thread.sleep(100);
+                      }
+                      out.write("0\r\n\r\n".getBytes(StandardCharsets.US_ASCII));
+                      out.flush();
+                      continue;
+                    }
                     String header =
                         "HTTP/1.1 200 OK\r\nContent-Type: "
                             + contentType
                             + "\r\nContent-Length: "
                             + bytes.length
                             + "\r\nConnection: close\r\n\r\n";
-                    OutputStream out = socket.getOutputStream();
                     out.write(header.getBytes(StandardCharsets.US_ASCII));
                     out.write(bytes);
                     out.flush();
@@ -302,9 +447,30 @@ public class NativeSyncHttpFixtureTest {
     }
 
     static ReplayServer start(String contentType, String body) throws Exception {
+      return start(Mode.CLEAN, contentType, body);
+    }
+
+    static ReplayServer start(Mode mode, String contentType, String body) throws Exception {
       ServerSocket server = new ServerSocket(0);
       server.setReuseAddress(true);
-      return new ReplayServer(server, contentType, body);
+      return new ReplayServer(server, mode, contentType, body);
+    }
+
+    private static void writeChunked(OutputStream out, byte[] bytes) throws Exception {
+      if (bytes.length == 0) {
+        return;
+      }
+      out.write((Integer.toHexString(bytes.length) + "\r\n").getBytes(StandardCharsets.US_ASCII));
+      out.write(bytes);
+      out.write("\r\n".getBytes(StandardCharsets.US_ASCII));
+    }
+
+    private static void rstClose(Socket socket) {
+      try {
+        socket.setSoLinger(true, 0);
+        socket.close();
+      } catch (Exception ignored) {
+      }
     }
 
     String url() {

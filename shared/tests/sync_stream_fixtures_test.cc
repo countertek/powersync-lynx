@@ -52,6 +52,12 @@ int main() {
   expect(has_key(catalog.streaming_keys, "idleComplete"),
          "streaming envelope has idleComplete=false");
   expect(has_key(catalog.streaming_keys, "body"), "streaming envelope has empty body key");
+  expect(has_key(catalog.fail_keys, "ok"), "fail envelope has ok");
+  expect(has_key(catalog.fail_keys, "status"), "fail envelope has status");
+  expect(has_key(catalog.fail_keys, "message"), "fail envelope has message");
+  expect(has_key(catalog.fail_keys, "body"), "fail envelope has body");
+  expect(has_key(catalog.fail_keys, "idleComplete"), "fail envelope has idleComplete");
+  expect(!has_key(catalog.fail_keys, "streamingId"), "fail envelope has no streamingId");
 
   const auto* checkpoint = find_scenario(catalog, "checkpoint-ops");
   expect(checkpoint != nullptr, "checkpoint-ops scenario present");
