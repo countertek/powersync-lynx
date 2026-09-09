@@ -114,6 +114,10 @@ test("shared NDJSON catalog covers checkpoint-ops, error-then-end, idle-complete
   }
   assert.equal(catalog.idleCompleteEnvelopeKeys.includes("streamingId"), false);
   assert.equal(catalog.streamingEnvelopeKeys.includes("streamingId"), true);
+  for (const key of ["ok", "status", "message", "body", "idleComplete"] as const) {
+    assert.equal(catalog.failEnvelopeKeys.includes(key), true, key);
+  }
+  assert.equal(catalog.failEnvelopeKeys.includes("streamingId"), false);
 });
 
 test("fixture checkpoint-ops streams onData chunks on streamingId before onEnd", async () => {

@@ -15,7 +15,8 @@ export interface NativeHttpFetchRequest {
 
 /**
  * One envelope for native `httpFetch`: streaming callback (`streamingId`, empty
- * body) or idle-complete fallback (`body` UTF-8, optional `bodyBase64`).
+ * body), idle-complete fallback (`body` UTF-8, optional `bodyBase64`), or
+ * pre-headers failure (`ok: false`, `status: -1`, `message`).
  */
 export interface NativeHttpFetchEnvelope {
   ok?: boolean;

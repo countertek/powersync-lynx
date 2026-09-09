@@ -18,6 +18,14 @@
     "streamingId",
     "idleComplete"
   ],
+  "failEnvelopeKeys": [
+    "ok",
+    "status",
+    "statusText",
+    "message",
+    "body",
+    "idleComplete"
+  ],
   "scenarios": [
     {
       "id": "checkpoint-ops",
