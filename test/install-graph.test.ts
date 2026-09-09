@@ -32,6 +32,7 @@ test("android consumer-rules.pro keeps Autolink provider and Native Module", () 
   const rules = readFileSync(path.join(root, "android/consumer-rules.pro"), "utf8");
   assert.match(rules, /com\.powersync\.lynx\.LynxLibraryProviderImpl/);
   assert.match(rules, /com\.powersync\.lynx\.NativePowerSyncModule/);
+  assert.match(rules, /com\.powersync\.lynx\.PsSqlEngine/);
 });
 
 test("package.json keeps @powersync/web as an optional peer only", () => {
