@@ -50,12 +50,21 @@ JNIEnv* AttachEnv(bool* attached) {
   if (rc == JNI_OK) {
     return env;
   }
+  // Android NDK jni.h: AttachCurrentThread(JNIEnv**, void*).
+  // Desktop/OpenJDK jni.h: AttachCurrentThread(void**, void*).
+#if defined(__ANDROID__)
+  if (g_vm->AttachCurrentThread(&env, nullptr) != JNI_OK) {
+    return nullptr;
+  }
+#else
   void* raw = env;
   if (g_vm->AttachCurrentThread(&raw, nullptr) != JNI_OK) {
     return nullptr;
   }
+  env = static_cast<JNIEnv*>(raw);
+#endif
   *attached = true;
-  return static_cast<JNIEnv*>(raw);
+  return env;
 }
 
 void DetachIfNeeded(bool attached) {

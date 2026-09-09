@@ -33,6 +33,12 @@ BOOL UrlLooksLikeSyncStream(NSDictionary* request) {
 
 }  // namespace
 
+// LynxView declares sendGlobalEvent:withParams:, but this translation unit does
+// not import Lynx headers (pod TUs and Linux fixture tests compile without them).
+@protocol PSLynxStreamEventSender
+- (void)sendGlobalEvent:(NSString*)name withParams:(id)params;
+@end
+
 @interface NativeSyncHttp ()
 @property(nonatomic, strong, nullable) id streamEventSender;
 @property(nonatomic, strong) NSMutableDictionary<NSString*, StreamingHttpSession*>* activeStreams;
@@ -54,14 +60,14 @@ static __weak id g_sharedStreamEventSender = nil;
   return self;
 }
 
-- (id)resolveStreamEventSender {
+- (id<PSLynxStreamEventSender>)resolveStreamEventSender {
   // Host-provided only: initWithEventSender: / Autolink initWithParam, or
   // +setSharedStreamEventSender: (showcase registers the LynxView). No UIWindow walk.
   if ([self.streamEventSender respondsToSelector:@selector(sendGlobalEvent:withParams:)]) {
-    return self.streamEventSender;
+    return (id<PSLynxStreamEventSender>)self.streamEventSender;
   }
   if ([g_sharedStreamEventSender respondsToSelector:@selector(sendGlobalEvent:withParams:)]) {
-    return g_sharedStreamEventSender;
+    return (id<PSLynxStreamEventSender>)g_sharedStreamEventSender;
   }
   return nil;
 }
@@ -70,7 +76,7 @@ static __weak id g_sharedStreamEventSender = nil;
                   event:(NSString*)event
                    data:(NSString*_Nullable)data
                   error:(NSString*_Nullable)error {
-  id sender = [self resolveStreamEventSender];
+  id<PSLynxStreamEventSender> sender = [self resolveStreamEventSender];
   if (sender == nil) {
     return;
   }
