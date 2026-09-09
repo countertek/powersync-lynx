@@ -17,7 +17,18 @@
 #define PS_SYNC_HTTP_IDLE_COMPLETE_MS 2500
 #define PS_SYNC_HTTP_CONNECT_TIMEOUT_MS 30000
 #define PS_SYNC_HTTP_BUFFERED_READ_TIMEOUT_MS 30000
+/**
+ * Idle/read gap for a live streaming session (HttpURLConnection read timeout,
+ * NSURLSession timeoutIntervalForRequest). Keepalive (~20s) must not abort.
+ *
+ * Do not use this (or this + CONNECT) as NSURLSession timeoutIntervalForResource:
+ * that timer is the total lifetime of the load. A healthy /sync/stream lives for
+ * hours; a 150s resource cap reconnects forever. 0 = leave the platform default
+ * (NSURLSession: 7 days). Idle-complete fallback still uses BUFFERED_READ /
+ * IDLE_COMPLETE as a total wait — do not change that path.
+ */
 #define PS_SYNC_HTTP_STREAM_READ_TIMEOUT_MS 120000
+#define PS_SYNC_HTTP_STREAM_RESOURCE_TIMEOUT_MS 0
 #define PS_SYNC_HTTP_STREAM_EVENT_PREFIX "NativePowerSyncHttpStream"
 
 /** Terminal GlobalEventEmitter sequence after headers: onData* → onError? → onEnd. */

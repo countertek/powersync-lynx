@@ -116,6 +116,13 @@ int main() {
     server.stop();
   }
 
+  expect(PS_SYNC_HTTP_STREAM_READ_TIMEOUT_MS == 120000,
+         "streaming idle/read gap is 120s (not a total lifetime)");
+  expect(PS_SYNC_HTTP_STREAM_RESOURCE_TIMEOUT_MS == 0,
+         "streaming resource lifetime is platform default, not STREAM_READ+CONNECT");
+  expect(PS_SYNC_HTTP_BUFFERED_READ_TIMEOUT_MS == 30000,
+         "idle-complete buffered read timeout stays 30s");
+
   if (g_failures != 0) {
     std::fprintf(stderr, "%d sync-stream fixture check(s) failed\n", g_failures);
     return 1;

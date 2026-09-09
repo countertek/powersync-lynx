@@ -302,6 +302,8 @@ NSDictionary* IdleCompleteHttpFetch(NSDictionary* request) {
                                               readTimeoutSec:readTimeoutSec];
     NSURLSessionConfiguration* config = [NSURLSessionConfiguration ephemeralSessionConfiguration];
     config.timeoutIntervalForRequest = readTimeoutSec;
+    // Idle-complete is a bounded fallback: resource timeout *is* a total wait.
+    // StreamingHttp must not copy this — live /sync/stream uses idle/read only.
     config.timeoutIntervalForResource = readTimeoutSec;
     config.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
     NSURLSession* session = [NSURLSession sessionWithConfiguration:config

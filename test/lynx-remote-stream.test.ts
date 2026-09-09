@@ -388,6 +388,209 @@ test("httpFetch incremental streamingId applies onData chunks before onEnd", asy
   );
 });
 
+test("httpFetchAbort runs when the streaming reader is cancelled after the first chunk", async () => {
+  const { emitter, listeners } = createFakeEmitter();
+  const streamingId = "NativePowerSyncHttpStream-abort";
+  const abortIds: string[] = [];
+  await withFakeLynxHost(
+    {
+      platform: "Android",
+      emitter,
+      nativeModules: {
+        NativePowerSyncModule: nativeWithHttp({
+          httpFetch(_request, callback) {
+            queueMicrotask(() => {
+              callback({
+                ok: true,
+                status: 200,
+                statusText: "OK",
+                contentType: "application/x-ndjson",
+                body: "",
+                streamingId,
+                idleComplete: false,
+              });
+              queueMicrotask(() => {
+                for (const fn of listeners.get(streamingId) ?? []) {
+                  fn({ event: "onData", data: '{"checkpoint":{"last_op_id":"1"}}\n' });
+                }
+              });
+            });
+          },
+          httpFetchAbort(streamId, callback) {
+            abortIds.push(streamId);
+            callback({ ok: true });
+          },
+        }),
+      },
+    },
+    async () => {
+      const remote = new LynxRemote(stubConnector(), silentLogger);
+      const response = await remote.fetch({
+        resource: "http://10.0.2.2:8080/sync/stream",
+        request: { method: "POST", body: "{}" },
+        expectStreamingResponse: true,
+      });
+      const reader = response.body!.getReader();
+      const first = await reader.read();
+      assert.equal(first.done, false);
+      await reader.cancel();
+      assert.deepEqual(abortIds, [streamingId]);
+    },
+  );
+});
+
+test("httpFetchAbort runs when fetchStream is aborted after the first chunk", async () => {
+  const { emitter, listeners } = createFakeEmitter();
+  const streamingId = "NativePowerSyncHttpStream-fetchStream-abort";
+  const abortIds: string[] = [];
+  await withFakeLynxHost(
+    {
+      platform: "iOS",
+      emitter,
+      nativeModules: {
+        NativePowerSyncModule: nativeWithHttp({
+          httpFetch(_request, callback) {
+            queueMicrotask(() => {
+              callback({
+                ok: true,
+                status: 200,
+                contentType: "application/x-ndjson",
+                body: "",
+                streamingId,
+                idleComplete: false,
+              });
+              queueMicrotask(() => {
+                for (const fn of listeners.get(streamingId) ?? []) {
+                  fn([{ event: "onData", data: '{"checkpoint":{"last_op_id":"9"}}\n' }]);
+                }
+              });
+            });
+          },
+          httpFetchAbort(streamId, callback) {
+            abortIds.push(streamId);
+            callback({ ok: true });
+          },
+        }),
+      },
+    },
+    async () => {
+      const remote = new LynxRemote(demoConnector("http://127.0.0.1:8080"), silentLogger);
+      const controller = new AbortController();
+      const stream = await remote.fetchStream({
+        path: "/sync/stream",
+        data: {},
+        abortSignal: controller.signal,
+      });
+      const first = await Promise.race([
+        stream.next(),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 2000)),
+      ]);
+      assert.equal(first.done, false);
+      controller.abort();
+      const deadline = Date.now() + 500;
+      while (abortIds.length === 0 && Date.now() < deadline) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      }
+      assert.ok(abortIds.length >= 1, "httpFetchAbort must run after fetchStream abort");
+      assert.ok(abortIds.every((id) => id === streamingId));
+    },
+  );
+});
+
+test("second streaming reader does not replay already-consumed chunks", async () => {
+  const { emitter } = createFakeEmitter();
+  const streamingId = "NativePowerSyncHttpStream-replay";
+  await withFakeLynxHost(
+    {
+      platform: "Android",
+      emitter,
+      nativeModules: {
+        NativePowerSyncModule: nativeWithHttp({
+          httpFetch(_request, callback) {
+            queueMicrotask(() => {
+              callback({
+                ok: true,
+                status: 200,
+                statusText: "OK",
+                contentType: "application/x-ndjson",
+                body: "",
+                streamingId,
+                idleComplete: false,
+              });
+            });
+          },
+        }),
+      },
+    },
+    async () => {
+      const remote = new LynxRemote(stubConnector(), silentLogger);
+      const firstResponse = await remote.fetch({
+        resource: "http://10.0.2.2:8080/sync/stream",
+        request: { method: "POST", body: "{}" },
+        expectStreamingResponse: true,
+      });
+      const firstReader = firstResponse.body!.getReader();
+      emitter.emit?.(streamingId, { event: "onData", data: "chunk-1\n" });
+      const first = await firstReader.read();
+      assert.equal(new TextDecoder().decode(first.value), "chunk-1\n");
+      emitter.emit?.(streamingId, { event: "onEnd" });
+      const ended = await firstReader.read();
+      assert.equal(ended.done, true);
+
+      const secondResponse = await remote.fetch({
+        resource: "http://10.0.2.2:8080/sync/stream",
+        request: { method: "POST", body: "{}" },
+        expectStreamingResponse: true,
+      });
+      const secondReader = secondResponse.body!.getReader();
+      const pending = secondReader.read();
+      const raced = await Promise.race([
+        pending.then((result) => ({ kind: "read" as const, result })),
+        new Promise<{ kind: "timeout" }>((resolve) => {
+          setTimeout(() => resolve({ kind: "timeout" }), 50);
+        }),
+      ]);
+      assert.equal(raced.kind, "timeout", "second reader must not replay chunk-1");
+      emitter.emit?.(streamingId, { event: "onData", data: "chunk-2\n" });
+      const next = await pending;
+      assert.equal(next.done, false);
+      assert.equal(new TextDecoder().decode(next.value), "chunk-2\n");
+      await secondReader.cancel();
+    },
+  );
+});
+
+test("pre-aborted httpFetch signal does not start a native request", async () => {
+  let fetches = 0;
+  await withFakeLynxHost(
+    {
+      platform: "iOS",
+      nativeModules: {
+        NativePowerSyncModule: nativeWithHttp({
+          httpFetch() {
+            fetches += 1;
+          },
+        }),
+      },
+    },
+    async () => {
+      const remote = new LynxRemote(stubConnector(), silentLogger);
+      const controller = new AbortController();
+      controller.abort();
+      await assert.rejects(
+        () =>
+          remote.fetch({
+            resource: "http://127.0.0.1:8080/sync/stream",
+            request: { method: "POST", body: "{}", signal: controller.signal },
+            expectStreamingResponse: true,
+          }),
+        /Aborted/,
+      );
+      assert.equal(fetches, 0);
+    },
+  );
+});
+
 test("httpFetch streamingId onError then onEnd fails the reader", async () => {
   const { emitter, listeners } = createFakeEmitter();
   await withFakeLynxHost(

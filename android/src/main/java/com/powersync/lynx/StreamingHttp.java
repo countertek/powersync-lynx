@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Incremental HTTP for PowerSync {@code /sync/stream}.
@@ -48,10 +49,14 @@ final class StreamingHttp {
       Map<String, String> headers,
       byte[] body,
       AtomicBoolean cancelled,
+      AtomicReference<HttpURLConnection> bound,
       Listener listener)
       throws IOException {
     String httpMethod = method == null || method.isEmpty() ? "GET" : method.toUpperCase(Locale.US);
     HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+    if (bound != null) {
+      bound.set(conn);
+    }
     conn.setInstanceFollowRedirects(true);
     conn.setConnectTimeout((int) CONNECT_TIMEOUT_MS);
     conn.setReadTimeout((int) STREAM_READ_TIMEOUT_MS);
@@ -84,6 +89,10 @@ final class StreamingHttp {
       status = conn.getResponseCode();
     } catch (IOException first) {
       conn.disconnect();
+      if (cancelled.get()) {
+        listener.onError("aborted");
+        return;
+      }
       throw first;
     }
     String statusText = conn.getResponseMessage();
@@ -113,8 +122,18 @@ final class StreamingHttp {
           // because the read already failed. Disconnect and end so PowerSync can reconnect.
           listener.onEnd();
           return;
+        } catch (IOException io) {
+          if (cancelled.get()) {
+            listener.onError("aborted");
+            return;
+          }
+          throw io;
         }
         if (n < 0) {
+          if (cancelled.get()) {
+            listener.onError("aborted");
+            return;
+          }
           if (carry.length > 0) {
             listener.onData(new String(carry, StandardCharsets.UTF_8));
             carry = new byte[0];
