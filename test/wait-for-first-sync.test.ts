@@ -1,10 +1,16 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Schema, Table, column } from "../src/index.ts";
+import type { CommonPowerSyncDatabase } from "../src/index.ts";
 import { PowerSyncDatabase } from "../src/PowerSyncDatabase.ts";
 import { SyncStatusSnapshot } from "@powersync/shared-internals";
 import type { CoreSyncStatus } from "@powersync/shared-internals";
-import type { BindValueRows, OpenPayload } from "../src/adapter/native.ts";
+import type {
+  BindValueRows,
+  BindValues,
+  NativeCallback,
+  OpenPayload,
+} from "../src/adapter/native.ts";
 
 const FULL_SYNC_PRIORITY = 2147483647;
 
@@ -56,27 +62,17 @@ function installAppNative() {
 
   globalThis.NativeModules = {
     NativePowerSyncModule: {
-      open(_payload: OpenPayload, cb: (envelope: { ok: boolean; dbId: string }) => void) {
+      open(_payload: OpenPayload, cb: NativeCallback) {
         const dbId = `db-${nextId++}`;
         queueMicrotask(() => cb({ ok: true, dbId }));
       },
-      close(_dbId: string, cb: (envelope: { ok: boolean }) => void) {
+      close(_dbId: string, cb: NativeCallback) {
         queueMicrotask(() => cb({ ok: true }));
       },
-      execute(
-        _dbId: string,
-        sql: string,
-        _params: BindValueRows | undefined,
-        cb: (envelope: ReturnType<typeof handleExecute>) => void,
-      ) {
+      execute(_dbId: string, sql: string, _params: BindValues, cb: NativeCallback) {
         queueMicrotask(() => cb(handleExecute(sql)));
       },
-      executeBatch(
-        _dbId: string,
-        sql: string,
-        _params: BindValueRows | undefined,
-        cb: (envelope: ReturnType<typeof handleExecute>) => void,
-      ) {
+      executeBatch(_dbId: string, sql: string, _params: BindValueRows, cb: NativeCallback) {
         queueMicrotask(() => cb(handleExecute(sql)));
       },
     },
@@ -133,7 +129,7 @@ test("waitForFirstSync stays pending on connected and resolves on hasSynced", as
     await new Promise((resolve) => setImmediate(resolve));
 
     // SAFETY: Client instance is BaseObserver; iterateListeners is the status fan-out waitForFirstSync uses.
-    const emitter: StatusEmitter = db;
+    const emitter = db as CommonPowerSyncDatabase & StatusEmitter;
     emitStatus(emitter, true, false);
     assert.equal(db.currentStatus.connected, true);
     assert.notEqual(db.currentStatus.hasSynced, true);
