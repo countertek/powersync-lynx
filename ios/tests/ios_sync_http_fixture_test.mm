@@ -11,6 +11,7 @@
 - (instancetype)initWithParam:(id)param;
 - (void)httpFetch:(NSDictionary*)request callback:(void (^)(id))callback;
 - (void)httpFetchAbort:(NSString*)streamId callback:(void (^)(id))callback;
++ (void)setSharedStreamEventSender:(id)sender;
 @end
 
 @interface RecordingStreamSender : NSObject
@@ -123,6 +124,7 @@ NSString* JoinedData(NSArray<NSDictionary*>* events) {
 
 int RunSyncHttpFixtureTests(void) {
   @autoreleasepool {
+    [NativePowerSyncModule setSharedStreamEventSender:nil];
     ps_sync_fixtures::Catalog catalog;
     try {
       catalog = ps_sync_fixtures::load_default();
@@ -232,6 +234,39 @@ int RunSyncHttpFixtureTests(void) {
                     std::string([idle_body UTF8String]) == idle_want,
                 "idle-complete body matches fixture NDJSON");
     idle_server.stop();
+
+    ps_sync_fixtures::NdjsonReplayServer shared_server;
+    expect_http(shared_server.start(config), "shared-sender fixture HTTP server starts");
+    NSString* sharedUrl =
+        [NSString stringWithUTF8String:shared_server.url().c_str()];
+    RecordingStreamSender* shared_sender = [RecordingStreamSender new];
+    [NativePowerSyncModule setSharedStreamEventSender:shared_sender];
+    NativePowerSyncModule* shared_module = [NativePowerSyncModule new];
+    NSDictionary* shared_headers = WaitForHttp(^(void (^cb)(id)) {
+      [shared_module httpFetch:@{
+        @"method" : @"POST",
+        @"url" : sharedUrl,
+        @"headers" : @{@"accept" : @"application/json"},
+        @"body" : @"{}",
+      }
+                      callback:cb];
+    });
+    expect_http([shared_headers[@"ok"] boolValue], "shared-sender httpFetch ok");
+    NSString* shared_id = shared_headers[@"streamingId"];
+    expect_http([shared_id isKindOfClass:[NSString class]] &&
+                    [shared_id hasPrefix:@"NativePowerSyncHttpStream"],
+                "shared-sender returns streamingId (not idle-complete)");
+    expect_http([shared_headers[@"idleComplete"] boolValue] == NO,
+                "shared-sender idleComplete is false");
+    expect_http(WaitForEventCount(shared_sender, 2),
+                "shared-sender onData* arrived without UIWindow walk");
+    expect_http(WaitForEventCount(shared_sender, [shared_sender snapshot].count + 1) ||
+                    [[shared_sender snapshot].lastObject[@"event"] isEqualToString:@"onEnd"],
+                "shared-sender onEnd follows onData");
+    expect_http([[[shared_sender snapshot] lastObject][@"event"] isEqualToString:@"onEnd"],
+                "shared-sender terminal event is onEnd");
+    [NativePowerSyncModule setSharedStreamEventSender:nil];
+    shared_server.stop();
 
     RecordingStreamSender* abort_sender = [RecordingStreamSender new];
     NativePowerSyncModule* abort_module =

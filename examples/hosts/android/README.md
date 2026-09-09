@@ -9,7 +9,7 @@ Floors: minSdk **24**, compileSdk 35, Lynx **4.0.1** (PrimJS **4.0.0** — Maven
 ## Prerequisites
 
 - JDK 17 (`JAVA_HOME`)
-- Android SDK with `platforms;android-35` (or 36) and an ARM64 emulator image
+- Android SDK with `platforms;android-35` (or 36), NDK (for JNI `ps_sql`), and an ARM64 emulator image
 - pnpm **12**
 - The local compose stack from [`examples/README.md`](../../README.md)
 

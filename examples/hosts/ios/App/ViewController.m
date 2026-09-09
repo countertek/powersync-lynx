@@ -42,8 +42,9 @@
   [self.view addSubview:_lynxView];
 
   [_lynxView updateGlobalPropsWithDictionary:[HostConfig globalProps]];
-  // Autolink constructs NativePowerSyncModule without a LynxView param; wire sendGlobalEvent
-  // so incremental /sync/stream onData reaches GlobalEventEmitter.
+  // Autolink constructs NativePowerSyncModule without a LynxView param. The library
+  // does not walk UIWindows; the host must register sendGlobalEvent for incremental
+  // /sync/stream (otherwise NativeSyncHttp falls back to idle-complete).
   if ([NativePowerSyncModule respondsToSelector:@selector(setSharedStreamEventSender:)]) {
     [NativePowerSyncModule setSharedStreamEventSender:_lynxView];
   }

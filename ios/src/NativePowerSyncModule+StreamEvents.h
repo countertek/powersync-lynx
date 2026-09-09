@@ -3,8 +3,12 @@
 NS_ASSUME_NONNULL_BEGIN
 
 @interface NativePowerSyncModule (StreamEvents)
-/// Hosts should call this with the active LynxView so incremental /sync/stream
-/// can post onData via sendGlobalEvent (Lynx Callback is one-shot).
+/// Host-provided GlobalEventEmitter sender for incremental /sync/stream.
+/// Pass the active {@code LynxView} (or any object implementing
+/// {@code sendGlobalEvent:withParams:}). Autolink does not pass the view as
+/// {@code initWithParam}; showcase {@code ViewController} calls this after
+/// creating the view. If no sender is registered, NativeSyncHttp uses the
+/// idle-complete fallback. The library does not walk {@code UIWindow}s.
 + (void)setSharedStreamEventSender:(nullable id)sender;
 @end
 

@@ -51,6 +51,29 @@ public class NativePowerSyncModuleRpcTest {
     expect(sqliteText != null && compareVersion(sqliteText, "3.44") >= 0, "bundled SQLite 3.44+");
     System.out.println("sqlite_version=" + sqliteText);
 
+    ReadableMap stringTypeof =
+        await(
+            callback ->
+                module.execute(dbId, "SELECT typeof(?)", stringParams("9007199254740993"), callback));
+    expect(stringTypeof.getBoolean("ok"), "String snowflake bind ok");
+    expect("text".equals(firstString(stringTypeof)), "String snowflake BindValue stays TEXT");
+
+    WritableMap tagged = Arguments.createMap();
+    tagged.putBoolean("__psBig", true);
+    tagged.putString("v", "99");
+    WritableArray taggedParams = Arguments.createArray();
+    taggedParams.pushMap(tagged);
+    ReadableMap taggedType =
+        await(callback -> module.execute(dbId, "SELECT typeof(?)", taggedParams, callback));
+    expect(taggedType.getBoolean("ok"), "tagged __psBig bind ok");
+    expect("integer".equals(firstString(taggedType)), "tagged __psBig BindValue binds as INTEGER");
+
+    ReadableMap unsafeInt =
+        await(callback -> module.execute(dbId, "SELECT 9007199254740993", empty(), callback));
+    expect(unsafeInt.getBoolean("ok"), "unsafe INTEGER select ok");
+    expect(firstIsLong(unsafeInt, 9007199254740993L),
+        "INTEGER past MAX_SAFE_INTEGER maps to Lynx Long (not tagged __psBig)");
+
     ReadableMap created =
         await(
             callback ->
@@ -109,6 +132,27 @@ public class NativePowerSyncModuleRpcTest {
 
   private static WritableArray empty() {
     return Arguments.createArray();
+  }
+
+  private static WritableArray stringParams(String value) {
+    WritableArray params = Arguments.createArray();
+    params.pushString(value);
+    return params;
+  }
+
+  private static boolean firstIsLong(ReadableMap envelope, long want) {
+    if (!envelope.hasKey("rawRows") || envelope.isNull("rawRows")) {
+      return false;
+    }
+    ReadableArray rows = envelope.getArray("rawRows");
+    if (rows == null || rows.size() == 0) {
+      return false;
+    }
+    ReadableArray row = rows.getArray(0);
+    if (row == null || row.size() == 0 || row.isNull(0)) {
+      return false;
+    }
+    return row.getType(0) == com.lynx.react.bridge.ReadableType.Long && row.getLong(0) == want;
   }
 
   private static ReadableMap await(RpcCall call) throws Exception {

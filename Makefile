@@ -40,6 +40,10 @@ PNPM ?= $(shell \
 		printf '%s\n' "pnpm"; \
 	fi)
 
+JAVA_HOME ?= $(shell dirname $$(dirname $$(readlink -f $$(command -v java))))
+JNI_CFLAGS := -I$(JAVA_HOME)/include -I$(JAVA_HOME)/include/linux
+JNI_OBJ := shared/build/ps_sql_jni.o
+
 ANDROID_SDK ?= $(ANDROID_HOME)
 ADB := $(ANDROID_SDK)/platform-tools/adb
 EMULATOR := $(ANDROID_SDK)/emulator/emulator
@@ -75,9 +79,15 @@ $(FIXTURE_TEST_BIN): shared/tests/sync_stream_fixtures_test.cc \
 		-DPS_SYNC_STREAM_FIXTURES_PATH='"$(FIXTURES_JSON)"' \
 		shared/tests/sync_stream_fixtures_test.cc $(LDFLAGS) -o $@
 
-test: deps $(TEST_BIN) $(FIXTURE_TEST_BIN)
+test: deps $(TEST_BIN) $(FIXTURE_TEST_BIN) $(JNI_OBJ)
+	@! grep -n 'UIApplication.sharedApplication.windows' ios/src/NativeSyncHttp.mm
+	@! grep -n 'findLynxViewIn' ios/src/NativeSyncHttp.mm
 	POWERSYNC_CORE_PATH="$(CURDIR)/$(CORE_DYLIB)" $(TEST_BIN)
 	PS_SYNC_STREAM_FIXTURES_PATH="$(FIXTURES_JSON)" $(FIXTURE_TEST_BIN)
+
+$(JNI_OBJ): android/src/main/cpp/ps_sql_jni.cc shared/ps_sql.h
+	mkdir -p shared/build
+	$(CXX) $(CXXFLAGS) $(SQLITE_FLAGS) $(JNI_CFLAGS) -c android/src/main/cpp/ps_sql_jni.cc -o $@
 
 $(IOS_TEST_BIN): deps ios/tests/ios_module_rpc_test.mm ios/tests/ios_sync_http_fixture_test.mm \
 		ios/tests/ios_sync_http_fixtures.h \

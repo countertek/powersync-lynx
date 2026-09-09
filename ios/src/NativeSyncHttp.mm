@@ -7,13 +7,6 @@
 #include <atomic>
 #include <string>
 
-#if __has_include(<UIKit/UIKit.h>)
-#import <UIKit/UIKit.h>
-#endif
-#if __has_include(<Lynx/LynxView.h>)
-#import <Lynx/LynxView.h>
-#endif
-
 namespace {
 
 std::atomic_long g_stream_counter{0};
@@ -62,50 +55,16 @@ static __weak id g_sharedStreamEventSender = nil;
 }
 
 - (id)resolveStreamEventSender {
+  // Host-provided only: initWithEventSender: / Autolink initWithParam, or
+  // +setSharedStreamEventSender: (showcase registers the LynxView). No UIWindow walk.
   if ([self.streamEventSender respondsToSelector:@selector(sendGlobalEvent:withParams:)]) {
     return self.streamEventSender;
   }
   if ([g_sharedStreamEventSender respondsToSelector:@selector(sendGlobalEvent:withParams:)]) {
     return g_sharedStreamEventSender;
   }
-#if __has_include(<UIKit/UIKit.h>) && __has_include(<Lynx/LynxView.h>)
-  for (UIWindow* window in UIApplication.sharedApplication.windows) {
-    LynxView* found = [self findLynxViewIn:window];
-    if (found != nil) {
-      return found;
-    }
-  }
-  if (@available(iOS 13.0, *)) {
-    for (UIScene* scene in UIApplication.sharedApplication.connectedScenes) {
-      if (![scene isKindOfClass:[UIWindowScene class]]) {
-        continue;
-      }
-      for (UIWindow* window in ((UIWindowScene*)scene).windows) {
-        LynxView* found = [self findLynxViewIn:window];
-        if (found != nil) {
-          return found;
-        }
-      }
-    }
-  }
-#endif
   return nil;
 }
-
-#if __has_include(<UIKit/UIKit.h>) && __has_include(<Lynx/LynxView.h>)
-- (LynxView*)findLynxViewIn:(UIView*)view {
-  if ([view isKindOfClass:[LynxView class]]) {
-    return (LynxView*)view;
-  }
-  for (UIView* child in view.subviews) {
-    LynxView* found = [self findLynxViewIn:child];
-    if (found != nil) {
-      return found;
-    }
-  }
-  return nil;
-}
-#endif
 
 - (void)sendStreamEvent:(NSString*)streamId
                   event:(NSString*)event
