@@ -119,9 +119,9 @@ $(IOS_TEST_BIN): deps ios/tests/ios_module_rpc_test.mm ios/tests/ios_sync_http_f
 		$(CORE_DYLIB) -framework Foundation $(LDFLAGS) \
 		-Wl,-rpath,$(CURDIR)/dist/macos/arm64 \
 		-o $@
-	install_name_tool -change \
-		/Users/runner/work/powersync-sqlite-core/powersync-sqlite-core/target/aarch64-apple-darwin/release/deps/libpowersync.dylib \
-		$(CURDIR)/$(CORE_DYLIB) $@
+	core_id=$$(otool -D "$(CORE_DYLIB)" | awk 'NR==2 { print; exit }'); \
+	test -n "$$core_id"; \
+	install_name_tool -change "$$core_id" "$(CURDIR)/$(CORE_DYLIB)" $@
 
 test-ios: $(IOS_TEST_BIN)
 	$(IOS_TEST_BIN)

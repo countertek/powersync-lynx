@@ -1,6 +1,7 @@
 // @ts-nocheck
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -25,6 +26,16 @@ test("packed tarball ships iOS build inputs and omits host/build residue", async
       cwd: root,
       stdio: "pipe",
     });
+    assert.equal(
+      existsSync(path.join(root, "ios/src/ps_sql.cc")),
+      false,
+      "fetch-native-deps must not materialize ios/src/ps_sql.cc",
+    );
+    assert.equal(
+      existsSync(path.join(root, "ios/src/ps_sql.h")),
+      false,
+      "fetch-native-deps must not materialize ios/src/ps_sql.h",
+    );
     execFileSync("node", ["scripts/bundle-web-host-factory.mjs"], { cwd: root, stdio: "pipe" });
     const packed = execFileSync("pnpm", ["pack", "--pack-destination", dest, "--ignore-scripts"], {
       cwd: root,
@@ -54,14 +65,24 @@ test("packed tarball ships iOS build inputs and omits host/build residue", async
       "published layout is one canonical ios/powersync-lynx.podspec, not a root duplicate",
     );
     assert.equal(
-      has("ios/src/ps_sql.cc"),
+      has("shared/ps_sql.cc"),
       true,
-      "canonical ios/ podspec compiles ps_sql.cc from ios/src (symlink or copy)",
+      "CocoaPods compiles canonical shared/ps_sql.cc — it must ship",
+    );
+    assert.equal(
+      has("shared/ps_sql.h"),
+      true,
+      "CocoaPods compiles canonical shared/ps_sql.h — it must ship",
+    );
+    assert.equal(
+      has("ios/src/ps_sql.cc"),
+      false,
+      "must not ship a materialized ios/src copy of ps_sql.cc",
     );
     assert.equal(
       has("ios/src/ps_sql.h"),
-      true,
-      "canonical ios/ podspec compiles ps_sql.h from ios/src (symlink or copy)",
+      false,
+      "must not ship a materialized ios/src copy of ps_sql.h",
     );
     assert.equal(
       has("ios/src/sqlite3.c"),
@@ -179,4 +200,34 @@ test("packed tarball ships iOS build inputs and omits host/build residue", async
   } finally {
     await rm(dest, { recursive: true, force: true });
   }
+});
+
+test("iOS podspec compiles shared/ps_sql by path; test-ios uses otool -D", () => {
+  const podspec = readFileSync(path.join(root, "ios/powersync-lynx.podspec"), "utf8");
+  assert.match(
+    podspec,
+    /\.\.\/shared\/ps_sql\.\{cc,h\}/,
+    "podspec must compile canonical ../shared/ps_sql.{cc,h}",
+  );
+  assert.doesNotMatch(
+    podspec,
+    /materializeIosSrcCompileInputs/,
+    "podspec must not depend on iOS ps_sql materialization",
+  );
+
+  const fetchScript = readFileSync(path.join(root, "scripts/fetch-native-deps.mjs"), "utf8");
+  assert.match(fetchScript, /removeStaleIosPsSqlCopies/);
+  assert.doesNotMatch(fetchScript, /materializeIosSrcCompileInputs/);
+  assert.doesNotMatch(
+    fetchScript,
+    /materializeRegularFile\(path\.join\(ROOT, 'shared', 'ps_sql/,
+  );
+
+  const makefile = readFileSync(path.join(root, "Makefile"), "utf8");
+  assert.match(makefile, /otool -D/, "make test-ios must discover the core dylib id with otool -D");
+  assert.doesNotMatch(
+    makefile,
+    /\/Users\/runner\/work\/powersync-sqlite-core/,
+    "make test-ios must not hard-code the CI runner core dylib install name",
+  );
 });
