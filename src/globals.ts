@@ -1,6 +1,3 @@
-import type { NativeModulesHost } from "./adapter/native.ts";
-import type { LynxTextCodecHelper } from "./sync/LynxRemote.ts";
-
 export interface LynxGlobalProps {
   device?: string;
   demoApiUrl?: string;
@@ -29,10 +26,16 @@ export interface LynxRuntime {
   __globalProps?: LynxGlobalProps;
 }
 
-declare global {
-  var NativeModules: NativeModulesHost | undefined;
-  var TextCodecHelper: LynxTextCodecHelper | undefined;
-  /** Lynx BTS global — prefer bare `lynx` so the bundler keeps the runtime binding. */
-  var lynx: LynxRuntime | undefined;
-  var SystemInfo: { platform?: string } | undefined;
+export interface LynxSystemInfo {
+  platform?: string;
 }
+
+export interface LynxTextCodecHelper {
+  decode(buffer: ArrayBuffer): string;
+}
+
+/**
+ * Do not `declare global` NativeModules / TextCodecHelper / lynx / SystemInfo
+ * here. `@lynx-js/types` already declares those vars; a second declaration is
+ * TS2403 under rspeedy `pluginTypeCheck`. PrimJS lookup lives in `host.ts`.
+ */

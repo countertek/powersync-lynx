@@ -6,6 +6,7 @@ import { PowerSyncDatabase } from "../src/PowerSyncDatabase.ts";
 import { LynxRemote } from "../src/sync/LynxRemote.ts";
 import { LynxStreamingSyncImplementation } from "../src/sync/LynxStreamingSyncImplementation.ts";
 import type { BindValueRows, OpenPayload } from "../src/adapter/native.ts";
+import { withFakeLynxHost } from "./fake-lynx-host.ts";
 
 function installAppNative(store: { lists: { id: string; name: string }[] } = { lists: [] }) {
   let nextId = 1;
@@ -165,18 +166,24 @@ test("app constructs PowerSyncDatabase and uses official SQL including executeBa
   }
 });
 
-test("LynxRemote createTextDecoder uses TextCodecHelper UTF-8", () => {
+test("LynxRemote createTextDecoder uses TextCodecHelper UTF-8", async () => {
   const decoded = [];
-  globalThis.TextCodecHelper = {
-    decode(buf) {
-      decoded.push(buf);
-      return new TextDecoder().decode(buf);
+  await withFakeLynxHost(
+    {
+      textCodec: {
+        decode(buf) {
+          decoded.push(buf);
+          return new TextDecoder().decode(buf);
+        },
+      },
     },
-  };
-  const remote = new LynxRemote({ fetchCredentials: async () => null }, { log() {} });
-  const decoder = remote.createTextDecoder();
-  const bytes = new TextEncoder().encode("hello");
-  assert.equal(decoder.decode(bytes), "hello");
-  assert.equal(decoded.length, 1);
-  assert.ok(decoded[0] instanceof ArrayBuffer);
+    async () => {
+      const remote = new LynxRemote({ fetchCredentials: async () => null }, { log() {} });
+      const decoder = remote.createTextDecoder();
+      const bytes = new TextEncoder().encode("hello");
+      assert.equal(decoder.decode(bytes), "hello");
+      assert.equal(decoded.length, 1);
+      assert.ok(decoded[0] instanceof ArrayBuffer);
+    },
+  );
 });

@@ -4,15 +4,16 @@ import { test } from "node:test";
 import { isString } from "../src/type-guards.ts";
 import { LynxRemote } from "../src/sync/LynxRemote.ts";
 import type { LynxStreamEventPayload } from "../src/globals.ts";
+import type { LynxFetchSuccessPayload } from "../src/sync/transport/http-types.ts";
 import type {
-  LynxFetchSuccessPayload,
   NativeHttpFetchCallback,
   NativeHttpFetchEnvelope,
   NativeHttpFetchRequest,
-} from "../src/adapter/native.ts";
+} from "../src/sync/transport/http-types.ts";
 import {
   assignNativeModules,
   chunkReader,
+  createFakeEmitter,
   demoConnector,
   identifierResponse,
   hangResponse,
@@ -20,118 +21,101 @@ import {
   nativeWithHttp,
   silentLogger,
   stubConnector,
+  withFakeLynxHost,
 } from "./remote-harness.ts";
 
 test("LynxRemote.fetch returns a streaming Response before the body ends", async () => {
   let streamEnded = false;
-  const previousFetch = globalThis.fetch;
-  globalThis.fetch = async (_url, init) => {
-    if (!lynxStreamingRequested(init)) {
-      return hangResponse();
-    }
-    return identifierResponse({
-      contentType: "application/x-ndjson",
-      mockBody: {
-        getReader() {
-          let sent = false;
-          return {
-            async read() {
-              if (!sent) {
-                sent = true;
-                return { done: false, value: new TextEncoder().encode('{"checkpoint":1}\n') };
-              }
-              streamEnded = true;
-              return { done: true, value: undefined };
+  await withFakeLynxHost(
+    {
+      fetchImpl: async (_url, init) => {
+        if (!lynxStreamingRequested(init)) {
+          return hangResponse();
+        }
+        return identifierResponse({
+          contentType: "application/x-ndjson",
+          mockBody: {
+            getReader() {
+              let sent = false;
+              return {
+                async read() {
+                  if (!sent) {
+                    sent = true;
+                    return { done: false, value: new TextEncoder().encode('{"checkpoint":1}\n') };
+                  }
+                  streamEnded = true;
+                  return { done: true, value: undefined };
+                },
+                cancel() {
+                  return Promise.resolve();
+                },
+                releaseLock() {},
+              };
             },
-            cancel() {
-              return Promise.resolve();
-            },
-            releaseLock() {},
-          };
-        },
+          },
+        });
       },
-    });
-  };
-  try {
-    const remote = new LynxRemote(stubConnector(), silentLogger);
-    const raced = await Promise.race([
-      remote
-        .fetch({
-          resource: "http://127.0.0.1:8080/sync/stream",
-          request: { method: "POST", body: "{}" },
-          expectStreamingResponse: true,
-        })
-        .then((response) => response),
-      new Promise<null>((resolve) => {
-        setTimeout(() => resolve(null), 80);
-      }),
-    ]);
-    assert.ok(raced != null, "fetch() must return before the live /sync/stream body ends");
-    assert.equal(raced.status, 200);
-    assert.equal(streamEnded, false);
-    const first = await raced.body!.getReader().read();
-    assert.equal(first.done, false);
-  } finally {
-    globalThis.fetch = previousFetch;
-  }
+    },
+    async () => {
+      const remote = new LynxRemote(stubConnector(), silentLogger);
+      const raced = await Promise.race([
+        remote
+          .fetch({
+            resource: "http://127.0.0.1:8080/sync/stream",
+            request: { method: "POST", body: "{}" },
+            expectStreamingResponse: true,
+          })
+          .then((response) => response),
+        new Promise<null>((resolve) => {
+          setTimeout(() => resolve(null), 80);
+        }),
+      ]);
+      assert.ok(raced != null, "fetch() must return before the live /sync/stream body ends");
+      assert.equal(raced.status, 200);
+      assert.equal(streamEnded, false);
+      const first = await raced.body!.getReader().read();
+      assert.equal(first.done, false);
+    },
+  );
 });
 
 test("identifier fetch uses Response.lynxExtension.streamingId when body is already used", async () => {
-  const listeners = new Map<string, (payload: LynxStreamEventPayload) => void>();
-  const previousLynx = globalThis.lynx;
-  const previousFetch = globalThis.fetch;
-  globalThis.lynx = {
-    getJSModule(name: string) {
-      if (name !== "GlobalEventEmitter") {
-        return undefined;
-      }
-      return {
-        addListener(eventName: string, fn: (payload: LynxStreamEventPayload) => void) {
-          listeners.set(eventName, fn);
-          if (eventName === "stream-ios") {
-            queueMicrotask(() => fn({ event: "onData", data: '{"ok":1}\n' }));
-          }
-        },
-      };
+  const { emitter, listeners } = createFakeEmitter();
+  await withFakeLynxHost(
+    {
+      emitter,
+      fetchImpl: async (_url, init) => {
+        if (!lynxStreamingRequested(init)) {
+          return hangResponse();
+        }
+        return identifierResponse({
+          contentType: "application/x-ndjson",
+          streamingId: "stream-ios",
+          bodyUsedError: true,
+        });
+      },
     },
-  };
-  globalThis.fetch = async (_url, init) => {
-    if (!lynxStreamingRequested(init)) {
-      return hangResponse();
-    }
-    return identifierResponse({
-      contentType: "application/x-ndjson",
-      streamingId: "stream-ios",
-      bodyUsedError: true,
-    });
-  };
-  try {
-    const remote = new LynxRemote(stubConnector(), silentLogger);
-    const response = await remote.fetch({
-      resource: "http://127.0.0.1:8080/sync/stream",
-      request: { method: "POST", body: "{}" },
-      expectStreamingResponse: true,
-    });
-    const first = await response.body!.getReader().read();
-    assert.equal(first.done, false);
-    assert.ok(first.value != null && first.value.byteLength > 0);
-  } finally {
-    globalThis.lynx = previousLynx;
-    globalThis.fetch = previousFetch;
-  }
+    async () => {
+      const remote = new LynxRemote(stubConnector(), silentLogger);
+      const response = await remote.fetch({
+        resource: "http://127.0.0.1:8080/sync/stream",
+        request: { method: "POST", body: "{}" },
+        expectStreamingResponse: true,
+      });
+      queueMicrotask(() => {
+        for (const fn of listeners.get("stream-ios") ?? []) {
+          fn({ event: "onData", data: '{"ok":1}\n' });
+        }
+      });
+      const first = await response.body!.getReader().read();
+      assert.equal(first.done, false);
+      assert.ok(first.value != null && first.value.byteLength > 0);
+    },
+  );
 });
 
 test("nativeHttpFetch gate accepts module without typeof===function on httpFetch", async () => {
   // PrimJS host methods often report typeof !== "function"; the old gate skipped httpFetch.
-  const previousLynx = globalThis.lynx;
-  const previousModules = globalThis.NativeModules;
-  const previousInfo = globalThis.SystemInfo;
-  globalThis.SystemInfo = { platform: "Android" };
-  globalThis.lynx = {
-    getJSModule() {
-      return undefined;
-    },
-  };
   const ndjson = '{"checkpoint":{"last_op_id":"1"}}\n';
   let invoked = false;
   function hostMethod(_request: NativeHttpFetchRequest, callback: NativeHttpFetchCallback): void {
@@ -147,522 +131,495 @@ test("nativeHttpFetch gate accepts module without typeof===function on httpFetch
       });
     });
   }
-  // Simulate PrimJS: callable but Object.prototype.toString / typeof quirks — keep callable
-  // while ensuring our gate does not require typeof === "function" exclusively via presence.
   Object.defineProperty(hostMethod, Symbol.toStringTag, { value: "HostFunction" });
-  assignNativeModules({
-    LynxFetchModule: {
-      fetch() {
-        throw new Error("LynxFetchModule must not be used when httpFetch is present");
+  await withFakeLynxHost(
+    {
+      platform: "Android",
+      nativeModules: {
+        LynxFetchModule: {
+          fetch() {
+            throw new Error("LynxFetchModule must not be used when httpFetch is present");
+          },
+        },
+        NativePowerSyncModule: nativeWithHttp({
+          httpFetch: hostMethod,
+        }),
       },
     },
-    NativePowerSyncModule: nativeWithHttp({
-      httpFetch: hostMethod,
-    }),
-  });
-  try {
-    const remote = new LynxRemote(stubConnector(), silentLogger);
-    const response = await remote.fetch({
-      resource: "http://10.0.2.2:8080/sync/stream",
-      request: { method: "POST", body: "{}" },
-      expectStreamingResponse: true,
-    });
-    assert.equal(invoked, true);
-    const first = await response.body!.getReader().read();
-    assert.equal(new TextDecoder().decode(first.value), ndjson);
-  } finally {
-    globalThis.lynx = previousLynx;
-    globalThis.NativeModules = previousModules;
-    globalThis.SystemInfo = previousInfo;
-  }
+    async () => {
+      const remote = new LynxRemote(stubConnector(), silentLogger);
+      const response = await remote.fetch({
+        resource: "http://10.0.2.2:8080/sync/stream",
+        request: { method: "POST", body: "{}" },
+        expectStreamingResponse: true,
+      });
+      assert.equal(invoked, true);
+      const first = await response.body!.getReader().read();
+      assert.equal(new TextDecoder().decode(first.value), ndjson);
+    },
+  );
 });
 
 test("LynxRemote.fetch applies NativePowerSyncModule.httpFetch UTF-8 body (device shape)", async () => {
   // Real LynxFetchModule drops large byte[] / customInfo; httpFetch returns strings only.
-  const previousLynx = globalThis.lynx;
-  const previousModules = globalThis.NativeModules;
-  const previousInfo = globalThis.SystemInfo;
-  globalThis.SystemInfo = { platform: "Android" };
-  globalThis.lynx = {
-    getJSModule(name: string) {
-      if (name !== "GlobalEventEmitter") {
-        return undefined;
-      }
-      return { addListener() {} };
-    },
-  };
+  const { emitter } = createFakeEmitter();
   const ndjson = '{"checkpoint":{"last_op_id":"1"}}\n{"data":{"bucket":"a","data":[]}}\n';
   let sawHttpFetch = false;
   let sawLynxFetch = false;
-  assignNativeModules({
-    LynxFetchModule: {
-      fetch(
-        _request: NativeHttpFetchRequest,
-        resolve: (response: LynxFetchSuccessPayload) => void,
-      ) {
-        sawLynxFetch = true;
-        queueMicrotask(() => resolve({ status: 500, body: new ArrayBuffer(0) }));
+  await withFakeLynxHost(
+    {
+      platform: "Android",
+      emitter,
+      nativeModules: {
+        LynxFetchModule: {
+          fetch(
+            _request: NativeHttpFetchRequest,
+            resolve: (response: LynxFetchSuccessPayload) => void,
+          ) {
+            sawLynxFetch = true;
+            queueMicrotask(() => resolve({ status: 500, body: new ArrayBuffer(0) }));
+          },
+        },
+        NativePowerSyncModule: nativeWithHttp({
+          httpFetch(
+            request: { url?: string; body?: string },
+            callback: (envelope: NativeHttpFetchEnvelope) => void,
+          ) {
+            sawHttpFetch = true;
+            assert.ok(String(request.url).includes("/sync/stream"));
+            assert.equal(isString(request.body), true);
+            queueMicrotask(() => {
+              callback({
+                ok: true,
+                status: 200,
+                statusText: "OK",
+                contentType: "application/x-ndjson",
+                body: ndjson,
+                bodyBase64: Buffer.from(ndjson, "utf8").toString("base64"),
+                idleComplete: true,
+              });
+            });
+          },
+        }),
       },
     },
-    NativePowerSyncModule: nativeWithHttp({
-      httpFetch(
-        request: { url?: string; body?: string },
-        callback: (envelope: NativeHttpFetchEnvelope) => void,
-      ) {
-        sawHttpFetch = true;
-        assert.ok(String(request.url).includes("/sync/stream"));
-        assert.equal(isString(request.body), true);
-        queueMicrotask(() => {
-          callback({
-            ok: true,
-            status: 200,
-            statusText: "OK",
-            contentType: "application/x-ndjson",
-            body: ndjson,
-            bodyBase64: Buffer.from(ndjson, "utf8").toString("base64"),
-            idleComplete: true,
-          });
-        });
-      },
-    }),
-  });
-  try {
-    const remote = new LynxRemote(stubConnector(), silentLogger);
-    const response = await remote.fetch({
-      resource: "http://10.0.2.2:8080/sync/stream",
-      request: { method: "POST", body: "{}" },
-      expectStreamingResponse: true,
-    });
-    assert.equal(sawHttpFetch, true);
-    assert.equal(sawLynxFetch, false, "must not fall back to LynxFetchModule for Android streams");
-    assert.equal(response.ok, true);
-    const reader = response.body!.getReader();
-    const first = await reader.read();
-    assert.equal(first.done, false);
-    assert.equal(new TextDecoder().decode(first.value), ndjson);
-    const second = await reader.read();
-    assert.equal(second.done, true);
-  } finally {
-    globalThis.lynx = previousLynx;
-    globalThis.NativeModules = previousModules;
-    globalThis.SystemInfo = previousInfo;
-  }
+    async () => {
+      const remote = new LynxRemote(stubConnector(), silentLogger);
+      const response = await remote.fetch({
+        resource: "http://10.0.2.2:8080/sync/stream",
+        request: { method: "POST", body: "{}" },
+        expectStreamingResponse: true,
+      });
+      assert.equal(sawHttpFetch, true);
+      assert.equal(
+        sawLynxFetch,
+        false,
+        "must not fall back to LynxFetchModule for Android streams",
+      );
+      assert.equal(response.ok, true);
+      const reader = response.body!.getReader();
+      const first = await reader.read();
+      assert.equal(first.done, false);
+      assert.equal(new TextDecoder().decode(first.value), ndjson);
+      const second = await reader.read();
+      assert.equal(second.done, true);
+    },
+  );
 });
 
 test("Android fetchStream applies httpFetch string NDJSON through PowerSync line split", async () => {
-  const previousLynx = globalThis.lynx;
-  const previousModules = globalThis.NativeModules;
-  const previousInfo = globalThis.SystemInfo;
-  globalThis.SystemInfo = { platform: "Android" };
-  globalThis.lynx = {
-    getJSModule(name: string) {
-      if (name !== "GlobalEventEmitter") {
-        return undefined;
-      }
-      return { addListener() {} };
-    },
-  };
+  const { emitter } = createFakeEmitter();
   const line = '{"checkpoint":{"last_op_id":"1"}}\n';
-  assignNativeModules({
-    NativePowerSyncModule: nativeWithHttp({
-      httpFetch(
-        _request: NativeHttpFetchRequest,
-        callback: (envelope: NativeHttpFetchEnvelope) => void,
-      ) {
-        queueMicrotask(() => {
-          callback({
-            ok: true,
-            status: 200,
-            statusText: "OK",
-            contentType: "application/x-ndjson",
-            body: line,
-            idleComplete: true,
-          });
-        });
+  await withFakeLynxHost(
+    {
+      platform: "Android",
+      emitter,
+      nativeModules: {
+        NativePowerSyncModule: nativeWithHttp({
+          httpFetch(
+            _request: NativeHttpFetchRequest,
+            callback: (envelope: NativeHttpFetchEnvelope) => void,
+          ) {
+            queueMicrotask(() => {
+              callback({
+                ok: true,
+                status: 200,
+                statusText: "OK",
+                contentType: "application/x-ndjson",
+                body: line,
+                idleComplete: true,
+              });
+            });
+          },
+        }),
       },
-    }),
-  });
-  try {
-    const remote = new LynxRemote(demoConnector("http://10.0.2.2:8080"), silentLogger);
-    const stream = await remote.fetchStream({
-      path: "/sync/stream",
-      data: {},
-      abortSignal: new AbortController().signal,
-    });
-    const first = await stream.next();
-    assert.equal(first.done, false);
-    assert.deepEqual(JSON.parse(String(first.value)), { checkpoint: { last_op_id: "1" } });
-  } finally {
-    globalThis.lynx = previousLynx;
-    globalThis.NativeModules = previousModules;
-    globalThis.SystemInfo = previousInfo;
-  }
+    },
+    async () => {
+      const remote = new LynxRemote(demoConnector("http://10.0.2.2:8080"), silentLogger);
+      const stream = await remote.fetchStream({
+        path: "/sync/stream",
+        data: {},
+        abortSignal: new AbortController().signal,
+      });
+      const first = await stream.next();
+      assert.equal(first.done, false);
+      assert.deepEqual(JSON.parse(String(first.value)), { checkpoint: { last_op_id: "1" } });
+    },
+  );
 });
 
 test("iOS LynxRemote.fetch uses NativePowerSyncModule.httpFetch like Android", async () => {
-  const previousLynx = globalThis.lynx;
-  const previousModules = globalThis.NativeModules;
-  const previousInfo = globalThis.SystemInfo;
-  const previousFetch = globalThis.fetch;
-  globalThis.SystemInfo = { platform: "iOS" };
-  globalThis.lynx = {
-    getJSModule() {
-      return undefined;
-    },
-  };
-  globalThis.fetch = async () => {
-    throw new Error("identifier fetch must not run when httpFetch is present");
-  };
   const ndjson = '{"checkpoint":{"last_op_id":"1"}}\n';
   let sawHttpFetch = false;
-  assignNativeModules({
-    NativePowerSyncModule: nativeWithHttp({
-      httpFetch(request: { url?: string }, callback: (envelope: NativeHttpFetchEnvelope) => void) {
-        sawHttpFetch = true;
-        assert.ok(String(request.url).includes("/sync/stream"));
-        queueMicrotask(() => {
-          callback({
-            ok: true,
-            status: 200,
-            statusText: "OK",
-            contentType: "application/x-ndjson",
-            body: ndjson,
-            bodyBase64: Buffer.from(ndjson, "utf8").toString("base64"),
-            idleComplete: true,
-          });
-        });
+  await withFakeLynxHost(
+    {
+      platform: "iOS",
+      fetchImpl: async () => {
+        throw new Error("identifier fetch must not run when httpFetch is present");
       },
-    }),
-  });
-  try {
-    const remote = new LynxRemote(stubConnector(), silentLogger);
-    const response = await remote.fetch({
-      resource: "http://127.0.0.1:8080/sync/stream",
-      request: { method: "POST", body: "{}" },
-      expectStreamingResponse: true,
-    });
-    assert.equal(sawHttpFetch, true);
-    assert.equal(response.ok, true);
-    const first = await response.body!.getReader().read();
-    assert.equal(new TextDecoder().decode(first.value), ndjson);
-  } finally {
-    globalThis.lynx = previousLynx;
-    globalThis.NativeModules = previousModules;
-    globalThis.SystemInfo = previousInfo;
-    globalThis.fetch = previousFetch;
-  }
+      nativeModules: {
+        NativePowerSyncModule: nativeWithHttp({
+          httpFetch(
+            request: { url?: string },
+            callback: (envelope: NativeHttpFetchEnvelope) => void,
+          ) {
+            sawHttpFetch = true;
+            assert.ok(String(request.url).includes("/sync/stream"));
+            queueMicrotask(() => {
+              callback({
+                ok: true,
+                status: 200,
+                statusText: "OK",
+                contentType: "application/x-ndjson",
+                body: ndjson,
+                bodyBase64: Buffer.from(ndjson, "utf8").toString("base64"),
+                idleComplete: true,
+              });
+            });
+          },
+        }),
+      },
+    },
+    async () => {
+      const remote = new LynxRemote(stubConnector(), silentLogger);
+      const response = await remote.fetch({
+        resource: "http://127.0.0.1:8080/sync/stream",
+        request: { method: "POST", body: "{}" },
+        expectStreamingResponse: true,
+      });
+      assert.equal(sawHttpFetch, true);
+      assert.equal(response.ok, true);
+      const first = await response.body!.getReader().read();
+      assert.equal(new TextDecoder().decode(first.value), ndjson);
+    },
+  );
 });
 
 test("httpFetch incremental streamingId applies onData chunks before onEnd", async () => {
   // Device path: one-shot Callback returns streamingId; chunks are UTF-8 strings on GlobalEventEmitter.
-  const previousLynx = globalThis.lynx;
-  const previousModules = globalThis.NativeModules;
-  const previousInfo = globalThis.SystemInfo;
-  globalThis.SystemInfo = { platform: "Android" };
-  const listeners = new Map<string, Array<(payload: LynxStreamEventPayload) => void>>();
-  globalThis.lynx = {
-    getJSModule(name: string) {
-      if (name !== "GlobalEventEmitter") {
-        return undefined;
-      }
-      return {
-        addListener(eventName: string, fn: (payload: LynxStreamEventPayload) => void) {
-          const list = listeners.get(eventName) ?? [];
-          list.push(fn);
-          listeners.set(eventName, list);
-        },
-      };
-    },
-  };
+  const { emitter, listeners } = createFakeEmitter();
   const chunk1 = '{"checkpoint":{"last_op_id":"1"}}\n';
   const chunk2 = '{"data":{"bucket":"a","data":[]}}\n';
   let aborted: string | undefined;
-  assignNativeModules({
-    NativePowerSyncModule: nativeWithHttp({
-      httpFetch(
-        _request: NativeHttpFetchRequest,
-        callback: (envelope: NativeHttpFetchEnvelope) => void,
-      ) {
-        const streamingId = "NativePowerSyncHttpStream0";
-        queueMicrotask(() => {
-          callback({
-            ok: true,
-            status: 200,
-            statusText: "OK",
-            contentType: "application/x-ndjson",
-            body: "",
-            streamingId,
-            idleComplete: false,
-          });
-          queueMicrotask(() => {
-            for (const fn of listeners.get(streamingId) ?? []) {
-              fn({ event: "onData", data: chunk1 });
-            }
+  await withFakeLynxHost(
+    {
+      platform: "Android",
+      emitter,
+      nativeModules: {
+        NativePowerSyncModule: nativeWithHttp({
+          httpFetch(
+            _request: NativeHttpFetchRequest,
+            callback: (envelope: NativeHttpFetchEnvelope) => void,
+          ) {
+            const streamingId = "NativePowerSyncHttpStream0";
             queueMicrotask(() => {
-              for (const fn of listeners.get(streamingId) ?? []) {
-                fn({ event: "onData", data: chunk2 });
-              }
+              callback({
+                ok: true,
+                status: 200,
+                statusText: "OK",
+                contentType: "application/x-ndjson",
+                body: "",
+                streamingId,
+                idleComplete: false,
+              });
               queueMicrotask(() => {
+                for (const fn of listeners.get(streamingId) ?? []) {
+                  fn({ event: "onData", data: chunk1 });
+                }
+                queueMicrotask(() => {
+                  for (const fn of listeners.get(streamingId) ?? []) {
+                    fn({ event: "onData", data: chunk2 });
+                  }
+                  queueMicrotask(() => {
+                    for (const fn of listeners.get(streamingId) ?? []) {
+                      fn({ event: "onEnd" });
+                    }
+                  });
+                });
+              });
+            });
+          },
+          httpFetchAbort(streamId: string, callback: (envelope: NativeHttpFetchEnvelope) => void) {
+            aborted = streamId;
+            callback({ ok: true });
+          },
+        }),
+      },
+    },
+    async () => {
+      const remote = new LynxRemote(stubConnector(), silentLogger);
+      const response = await remote.fetch({
+        resource: "http://10.0.2.2:8080/sync/stream",
+        request: { method: "POST", body: "{}" },
+        expectStreamingResponse: true,
+      });
+      assert.equal(response.ok, true);
+      const reader = response.body!.getReader();
+      const first = await reader.read();
+      assert.equal(first.done, false);
+      assert.equal(new TextDecoder().decode(first.value), chunk1);
+      const second = await reader.read();
+      assert.equal(second.done, false);
+      assert.equal(new TextDecoder().decode(second.value), chunk2);
+      const third = await reader.read();
+      assert.equal(third.done, true);
+      assert.equal(aborted, undefined);
+    },
+  );
+});
+
+test("httpFetch streamingId onError then onEnd fails the reader", async () => {
+  const { emitter, listeners } = createFakeEmitter();
+  await withFakeLynxHost(
+    {
+      platform: "iOS",
+      emitter,
+      nativeModules: {
+        NativePowerSyncModule: nativeWithHttp({
+          httpFetch(_request, callback) {
+            const streamingId = "NativePowerSyncHttpStream-err";
+            queueMicrotask(() => {
+              callback({
+                ok: true,
+                status: 200,
+                statusText: "OK",
+                contentType: "application/x-ndjson",
+                body: "",
+                streamingId,
+                idleComplete: false,
+              });
+              queueMicrotask(() => {
+                for (const fn of listeners.get(streamingId) ?? []) {
+                  fn({ event: "onError", error: "stream reset" });
+                }
                 for (const fn of listeners.get(streamingId) ?? []) {
                   fn({ event: "onEnd" });
                 }
               });
             });
-          });
-        });
+          },
+        }),
       },
-      httpFetchAbort(streamId: string, callback: (envelope: NativeHttpFetchEnvelope) => void) {
-        aborted = streamId;
-        callback({ ok: true });
-      },
-    }),
-  });
-  try {
-    const remote = new LynxRemote(stubConnector(), silentLogger);
-    const response = await remote.fetch({
-      resource: "http://10.0.2.2:8080/sync/stream",
-      request: { method: "POST", body: "{}" },
-      expectStreamingResponse: true,
-    });
-    assert.equal(response.ok, true);
-    const reader = response.body!.getReader();
-    const first = await reader.read();
-    assert.equal(first.done, false);
-    assert.equal(new TextDecoder().decode(first.value), chunk1);
-    const second = await reader.read();
-    assert.equal(second.done, false);
-    assert.equal(new TextDecoder().decode(second.value), chunk2);
-    const third = await reader.read();
-    assert.equal(third.done, true);
-    assert.equal(aborted, undefined);
-  } finally {
-    globalThis.lynx = previousLynx;
-    globalThis.NativeModules = previousModules;
-    globalThis.SystemInfo = previousInfo;
-  }
+    },
+    async () => {
+      const remote = new LynxRemote(stubConnector(), silentLogger);
+      const response = await remote.fetch({
+        resource: "http://127.0.0.1:8080/sync/stream",
+        request: { method: "POST", body: "{}" },
+        expectStreamingResponse: true,
+      });
+      const reader = response.body!.getReader();
+      await assert.rejects(() => reader.read(), /stream reset/);
+    },
+  );
 });
 
 test("httpFetch incremental fetchStream yields NDJSON lines as chunks arrive", async () => {
-  const previousLynx = globalThis.lynx;
-  const previousModules = globalThis.NativeModules;
-  const previousInfo = globalThis.SystemInfo;
-  globalThis.SystemInfo = { platform: "iOS" };
-  const listeners = new Map<string, Array<(payload: LynxStreamEventPayload) => void>>();
-  globalThis.lynx = {
-    getJSModule(name: string) {
-      if (name !== "GlobalEventEmitter") {
-        return undefined;
-      }
-      return {
-        addListener(eventName: string, fn: (payload: LynxStreamEventPayload) => void) {
-          const list = listeners.get(eventName) ?? [];
-          list.push(fn);
-          listeners.set(eventName, list);
-        },
-      };
-    },
-  };
-  assignNativeModules({
-    NativePowerSyncModule: nativeWithHttp({
-      httpFetch(
-        _request: NativeHttpFetchRequest,
-        callback: (envelope: NativeHttpFetchEnvelope) => void,
-      ) {
-        const streamingId = "NativePowerSyncHttpStream7";
-        queueMicrotask(() => {
-          callback({
-            ok: true,
-            status: 200,
-            contentType: "application/x-ndjson",
-            body: "",
-            streamingId,
-            idleComplete: false,
-          });
-          queueMicrotask(() => {
-            for (const fn of listeners.get(streamingId) ?? []) {
-              // Array shape matches native sendGlobalEvent(name, [map]).
-              fn([{ event: "onData", data: '{"checkpoint":{"last_op_id":"9"}}\n' }]);
-            }
-          });
-        });
+  const { emitter, listeners } = createFakeEmitter();
+  await withFakeLynxHost(
+    {
+      platform: "iOS",
+      emitter,
+      nativeModules: {
+        NativePowerSyncModule: nativeWithHttp({
+          httpFetch(
+            _request: NativeHttpFetchRequest,
+            callback: (envelope: NativeHttpFetchEnvelope) => void,
+          ) {
+            const streamingId = "NativePowerSyncHttpStream7";
+            queueMicrotask(() => {
+              callback({
+                ok: true,
+                status: 200,
+                contentType: "application/x-ndjson",
+                body: "",
+                streamingId,
+                idleComplete: false,
+              });
+              queueMicrotask(() => {
+                for (const fn of listeners.get(streamingId) ?? []) {
+                  // Array shape matches native sendGlobalEvent(name, [map]).
+                  fn([{ event: "onData", data: '{"checkpoint":{"last_op_id":"9"}}\n' }]);
+                }
+              });
+            });
+          },
+        }),
       },
-    }),
-  });
-  try {
-    const remote = new LynxRemote(demoConnector("http://127.0.0.1:8080"), silentLogger);
-    const stream = await remote.fetchStream({
-      path: "/sync/stream",
-      data: {},
-      abortSignal: new AbortController().signal,
-    });
-    const first = await Promise.race([
-      stream.next(),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 2000)),
-    ]);
-    assert.equal(first.done, false);
-    assert.deepEqual(JSON.parse(String(first.value)), { checkpoint: { last_op_id: "9" } });
-  } finally {
-    globalThis.lynx = previousLynx;
-    globalThis.NativeModules = previousModules;
-    globalThis.SystemInfo = previousInfo;
-  }
+    },
+    async () => {
+      const remote = new LynxRemote(demoConnector("http://127.0.0.1:8080"), silentLogger);
+      const stream = await remote.fetchStream({
+        path: "/sync/stream",
+        data: {},
+        abortSignal: new AbortController().signal,
+      });
+      const first = await Promise.race([
+        stream.next(),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 2000)),
+      ]);
+      assert.equal(first.done, false);
+      assert.deepEqual(JSON.parse(String(first.value)), { checkpoint: { last_op_id: "9" } });
+    },
+  );
 });
 
 test("LynxRemote.fetch applies idle-complete raw NDJSON body without streamingId", async () => {
   // Legacy LynxFetchModule path when NativePowerSyncModule.httpFetch is absent.
-  const previousLynx = globalThis.lynx;
-  const previousModules = globalThis.NativeModules;
-  const previousInfo = globalThis.SystemInfo;
-  globalThis.SystemInfo = { platform: "Android" };
-  globalThis.lynx = {
-    getJSModule() {
-      return undefined;
-    },
-  };
   const ndjson = '{"checkpoint":{"last_op_id":"1"}}\n{"data":{"bucket":"a","data":[]}}\n';
   const body = new TextEncoder().encode(ndjson);
   let requestedStreaming = false;
-  assignNativeModules({
-    LynxFetchModule: {
-      fetch(
-        request: { lynxExtension?: Record<string, boolean> },
-        resolve: (response: LynxFetchSuccessPayload) => void,
-      ) {
-        requestedStreaming = request.lynxExtension?.enableFetchAPIStandardStreaming === true;
-        queueMicrotask(() => {
-          resolve({
-            status: 200,
-            statusText: "OK",
-            headers: { "content-type": "application/x-ndjson" },
-            body,
-          });
-        });
+  await withFakeLynxHost(
+    {
+      platform: "Android",
+      nativeModules: {
+        LynxFetchModule: {
+          fetch(
+            request: { lynxExtension?: Record<string, boolean> },
+            resolve: (response: LynxFetchSuccessPayload) => void,
+          ) {
+            requestedStreaming = request.lynxExtension?.enableFetchAPIStandardStreaming === true;
+            queueMicrotask(() => {
+              resolve({
+                status: 200,
+                statusText: "OK",
+                headers: { "content-type": "application/x-ndjson" },
+                body,
+              });
+            });
+          },
+        },
       },
     },
-  });
-  try {
-    const remote = new LynxRemote(stubConnector(), silentLogger);
-    const response = await remote.fetch({
-      resource: "http://10.0.2.2:8080/sync/stream",
-      request: { method: "POST", body: "{}" },
-      expectStreamingResponse: true,
-    });
-    assert.equal(
-      requestedStreaming,
-      false,
-      "Android must force idle-complete, not Lynx streaming flags",
-    );
-    assert.equal(response.ok, true);
-    const reader = response.body!.getReader();
-    const first = await reader.read();
-    assert.equal(first.done, false);
-    assert.ok(first.value != null);
-    assert.equal(new TextDecoder().decode(first.value), ndjson);
-    const second = await reader.read();
-    assert.equal(second.done, true);
-  } finally {
-    globalThis.lynx = previousLynx;
-    globalThis.NativeModules = previousModules;
-    globalThis.SystemInfo = previousInfo;
-  }
+    async () => {
+      const remote = new LynxRemote(stubConnector(), silentLogger);
+      const response = await remote.fetch({
+        resource: "http://10.0.2.2:8080/sync/stream",
+        request: { method: "POST", body: "{}" },
+        expectStreamingResponse: true,
+      });
+      assert.equal(
+        requestedStreaming,
+        false,
+        "Android must force idle-complete, not Lynx streaming flags",
+      );
+      assert.equal(response.ok, true);
+      const reader = response.body!.getReader();
+      const first = await reader.read();
+      assert.equal(first.done, false);
+      assert.ok(first.value != null);
+      assert.equal(new TextDecoder().decode(first.value), ndjson);
+      const second = await reader.read();
+      assert.equal(second.done, true);
+    },
+  );
 });
 
 test("LynxRemote.fetch reads LynxFetchModule streamingId before the stream ends", async () => {
-  const listeners = new Map<string, (payload: LynxStreamEventPayload) => void>();
-  const previousLynx = globalThis.lynx;
-  const previousModules = globalThis.NativeModules;
-  const previousInfo = globalThis.SystemInfo;
-  globalThis.SystemInfo = { platform: "Android" };
-  globalThis.lynx = {
-    getJSModule(name: string) {
-      if (name !== "GlobalEventEmitter") {
-        return undefined;
-      }
-      return {
-        addListener(eventName: string, fn: (payload: LynxStreamEventPayload) => void) {
-          listeners.set(eventName, fn);
+  const { emitter, listeners } = createFakeEmitter();
+  await withFakeLynxHost(
+    {
+      platform: "Android",
+      emitter,
+      nativeModules: {
+        LynxFetchModule: {
+          fetch(
+            _request: NativeHttpFetchRequest,
+            resolve: (response: LynxFetchSuccessPayload) => void,
+          ) {
+            queueMicrotask(() => {
+              resolve({
+                status: 200,
+                statusText: "OK",
+                headers: { "content-type": "application/x-ndjson" },
+                lynxExtension: { streamingId: "stream-1" },
+              });
+              queueMicrotask(() => {
+                for (const fn of listeners.get("stream-1") ?? []) {
+                  fn({ event: "onData", data: '{"ok":1}\n' });
+                }
+              });
+            });
+          },
         },
-      };
-    },
-  };
-  assignNativeModules({
-    LynxFetchModule: {
-      fetch(
-        _request: NativeHttpFetchRequest,
-        resolve: (response: LynxFetchSuccessPayload) => void,
-      ) {
-        queueMicrotask(() => {
-          resolve({
-            status: 200,
-            statusText: "OK",
-            headers: { "content-type": "application/x-ndjson" },
-            lynxExtension: { streamingId: "stream-1" },
-          });
-          queueMicrotask(() => {
-            listeners.get("stream-1")?.({ event: "onData", data: '{"ok":1}\n' });
-          });
-        });
       },
     },
-  });
-  try {
-    const remote = new LynxRemote(stubConnector(), silentLogger);
-    const response = await remote.fetch({
-      resource: "http://127.0.0.1:8080/sync/stream",
-      request: { method: "POST", body: "{}" },
-      expectStreamingResponse: true,
-    });
-    const first = await response.body!.getReader().read();
-    assert.equal(first.done, false);
-    assert.ok(first.value != null && first.value.byteLength > 0);
-  } finally {
-    globalThis.lynx = previousLynx;
-    globalThis.NativeModules = previousModules;
-    globalThis.SystemInfo = previousInfo;
-  }
+    async () => {
+      const remote = new LynxRemote(stubConnector(), silentLogger);
+      const response = await remote.fetch({
+        resource: "http://127.0.0.1:8080/sync/stream",
+        request: { method: "POST", body: "{}" },
+        expectStreamingResponse: true,
+      });
+      const first = await response.body!.getReader().read();
+      assert.equal(first.done, false);
+      assert.ok(first.value != null && first.value.byteLength > 0);
+    },
+  );
 });
 
 test("streaming Response body can be inspected then getReader() without body used", async () => {
-  const previousFetch = globalThis.fetch;
-  globalThis.fetch = async () => {
-    const chunk = new TextEncoder().encode("ok\n");
-    return identifierResponse({
-      contentType: "application/x-ndjson",
-      inspectOnce: true,
-      mockBody: {
-        getReader() {
-          let sent = false;
-          return {
-            async read() {
-              if (!sent) {
-                sent = true;
-                return { done: false, value: chunk };
-              }
-              return { done: true, value: undefined };
+  await withFakeLynxHost(
+    {
+      fetchImpl: async () => {
+        const chunk = new TextEncoder().encode("ok\n");
+        return identifierResponse({
+          contentType: "application/x-ndjson",
+          inspectOnce: true,
+          mockBody: {
+            getReader() {
+              let sent = false;
+              return {
+                async read() {
+                  if (!sent) {
+                    sent = true;
+                    return { done: false, value: chunk };
+                  }
+                  return { done: true, value: undefined };
+                },
+                cancel() {
+                  return Promise.resolve();
+                },
+                releaseLock() {},
+              };
             },
-            cancel() {
-              return Promise.resolve();
-            },
-            releaseLock() {},
-          };
-        },
+          },
+        });
       },
-    });
-  };
-  try {
-    const remote = new LynxRemote(stubConnector(), silentLogger);
-    const response = await remote.fetch({
-      resource: "http://127.0.0.1:8080/sync/stream",
-      request: { method: "POST", body: "{}" },
-      expectStreamingResponse: true,
-    });
-    assert.equal(Boolean(response.body), true);
-    const first = await response.body!.getReader().read();
-    assert.equal(first.done, false);
-    assert.deepEqual(first.value, new TextEncoder().encode("ok\n"));
-  } finally {
-    globalThis.fetch = previousFetch;
-  }
+    },
+    async () => {
+      const remote = new LynxRemote(stubConnector(), silentLogger);
+      const response = await remote.fetch({
+        resource: "http://127.0.0.1:8080/sync/stream",
+        request: { method: "POST", body: "{}" },
+        expectStreamingResponse: true,
+      });
+      assert.equal(Boolean(response.body), true);
+      const first = await response.body!.getReader().read();
+      assert.equal(first.done, false);
+      assert.deepEqual(first.value, new TextEncoder().encode("ok\n"));
+    },
+  );
 });
 
 const BSON_STREAM = "application/vnd.powersync.bson-stream";
@@ -688,27 +645,28 @@ function serviceFaithfulBody(accept: string): Uint8Array {
 }
 
 test("fetchStream yields JSON checkpoint lines when the service honors Accept", async () => {
-  const previousFetch = globalThis.fetch;
-  globalThis.fetch = async (_url, init) => {
-    const body = serviceFaithfulBody(headerAccept(init?.headers));
-    return identifierResponse({
-      mockBody: chunkReader([body]),
-    });
-  };
-  try {
-    const remote = new LynxRemote(demoConnector("http://127.0.0.1:8080"), silentLogger);
-    const stream = await remote.fetchStream({
-      path: "/sync/stream",
-      data: {},
-      abortSignal: new AbortController().signal,
-    });
-    const first = await stream.next();
-    assert.equal(first.done, false);
-    assert.equal(isString(first.value), true);
-    assert.deepEqual(JSON.parse(String(first.value)), { checkpoint: { last_op_id: "1" } });
-  } finally {
-    globalThis.fetch = previousFetch;
-  }
+  await withFakeLynxHost(
+    {
+      fetchImpl: async (_url, init) => {
+        const body = serviceFaithfulBody(headerAccept(init?.headers));
+        return identifierResponse({
+          mockBody: chunkReader([body]),
+        });
+      },
+    },
+    async () => {
+      const remote = new LynxRemote(demoConnector("http://127.0.0.1:8080"), silentLogger);
+      const stream = await remote.fetchStream({
+        path: "/sync/stream",
+        data: {},
+        abortSignal: new AbortController().signal,
+      });
+      const first = await stream.next();
+      assert.equal(first.done, false);
+      assert.equal(isString(first.value), true);
+      assert.deepEqual(JSON.parse(String(first.value)), { checkpoint: { last_op_id: "1" } });
+    },
+  );
 });
 
 test("identifier fetchStream keeps NDJSON native delivered before addListener without emit", async () => {
@@ -1307,58 +1265,62 @@ test("identifier fetchStream keeps incremental NDJSON when Response has no strea
   }
 });
 
-test("identifier fetchStream keeps incremental NDJSON when Response.body is an empty stream", async () => {
-  const listeners = new Map<string, (payload: LynxStreamEventPayload) => void>();
-  const previousLynx = globalThis.lynx;
-  const previousFetch = globalThis.fetch;
-  globalThis.lynx = {
-    getJSModule(name: string) {
-      if (name !== "GlobalEventEmitter") {
-        return undefined;
-      }
-      return {
-        addListener(eventName: string, fn: (payload: LynxStreamEventPayload) => void) {
-          listeners.set(eventName, fn);
+test("host-fetch fetchStream applies NDJSON body when GlobalEventEmitter is present", async () => {
+  // Lynx-for-Web: SQL NativePowerSyncModule has no httpFetch; lynx-bg still has
+  // GlobalEventEmitter. Discarding Response.body for that emitter is the A↔B
+  // download regression. Native streamingId remains a separate path (see
+  // "httpFetch incremental streamingId applies onData chunks before onEnd").
+  const { emitter } = createFakeEmitter();
+  await withFakeLynxHost(
+    {
+      emitter,
+      nativeModules: {
+        NativePowerSyncModule: {
+          open(_options, callback) {
+            callback({ ok: true, dbId: "web" });
+          },
+          close(_dbId, callback) {
+            callback({ ok: true });
+          },
+          execute(_dbId, _sql, _params, callback) {
+            callback({ ok: true });
+          },
+          executeBatch(_dbId, _sql, _params, callback) {
+            callback({ ok: true });
+          },
         },
-      };
+      },
+      fetchImpl: async (_url, init) => {
+        if (!lynxStreamingRequested(init)) {
+          return hangResponse();
+        }
+        return identifierResponse({
+          contentType: "application/x-ndjson",
+          mockBody: chunkReader([new TextEncoder().encode(NDJSON_LINE)]),
+        });
+      },
     },
-  };
-  globalThis.fetch = async (_url, init) => {
-    if (!lynxStreamingRequested(init)) {
-      return hangResponse();
-    }
-    return identifierResponse({
-      contentType: "application/x-ndjson",
-      mockBody: chunkReader([]),
-    });
-  };
-  try {
-    const remote = new LynxRemote(demoConnector("http://127.0.0.1:8080"), silentLogger);
-    const stream = await remote.fetchStream({
-      path: "/sync/stream",
-      data: {},
-      abortSignal: new AbortController().signal,
-    });
-    queueMicrotask(() => {
-      listeners.get("LynxFetchModuleStreamingEvent0")?.({ event: "onData", data: NDJSON_LINE });
-      listeners.get("LynxFetchModuleStreamingEvent0")?.({ event: "onEnd" });
-    });
-    const first = await Promise.race([
-      stream.next(),
-      new Promise<{ done: true; value: undefined }>((resolve) => {
-        setTimeout(() => resolve({ done: true, value: undefined }), 80);
-      }),
-    ]);
-    assert.equal(
-      first.done,
-      false,
-      "incremental checkpoint must not be dropped when identifier fetch returns an empty standard body",
-    );
-    assert.deepEqual(JSON.parse(String(first.value)), { checkpoint: { last_op_id: "1" } });
-  } finally {
-    globalThis.lynx = previousLynx;
-    globalThis.fetch = previousFetch;
-  }
+    async () => {
+      const remote = new LynxRemote(demoConnector("http://127.0.0.1:8080"), silentLogger);
+      const stream = await remote.fetchStream({
+        path: "/sync/stream",
+        data: {},
+        abortSignal: new AbortController().signal,
+      });
+      const first = await Promise.race([
+        stream.next(),
+        new Promise<{ done: true; value: undefined }>((resolve) => {
+          setTimeout(() => resolve({ done: true, value: undefined }), 80);
+        }),
+      ]);
+      assert.equal(
+        first.done,
+        false,
+        "Lynx-for-Web host-fetch must apply Response.body, not wait on GlobalEventEmitter",
+      );
+      assert.deepEqual(JSON.parse(String(first.value)), { checkpoint: { last_op_id: "1" } });
+    },
+  );
 });
 
 function gzipAsBinaryString(bytes: Uint8Array): string {

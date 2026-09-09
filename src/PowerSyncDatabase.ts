@@ -1,4 +1,3 @@
-import "./abort-controller.ts";
 import { SyncStreamConnectionMethod } from "@powersync/common";
 import type {
   BasePowerSyncDatabaseOptions,

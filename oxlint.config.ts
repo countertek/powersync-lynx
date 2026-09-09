@@ -19,9 +19,11 @@ const ignorePatterns = [
   // ReactLynx consumer: component props are incompatible with anti-slop
   // no-object-parameters. See examples/README.md.
   "examples/**",
-  // PrimJS /sync/stream client: host probes and wire casts. Out of verification-gate H
-  // (no SyncStreamTransport rewrite). Follow-up anti-slop pass, not this PR.
-  "src/sync/LynxRemote.ts",
+  // PrimJS /sync/stream wire: host probes, realm-tagged buffers, GlobalEventEmitter
+  // hooks. LynxRemote and the SyncStreamTransport seam are linted.
+  "src/sync/transport/bytes.ts",
+  "src/sync/transport/events.ts",
+  "src/sync/transport/response.ts",
   "ios/**",
   "lynxtron/**",
   "native-vendor/**",

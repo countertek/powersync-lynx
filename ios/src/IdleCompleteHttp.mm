@@ -1,29 +1,63 @@
 #import "IdleCompleteHttp.h"
 
+#include "sync_http_policy.h"
+
+#include <string>
+
 namespace {
 
-constexpr NSTimeInterval kDefaultIdleCompleteMs = 2500.0;
-constexpr NSTimeInterval kConnectTimeoutSec = 30.0;
-constexpr NSTimeInterval kMinReadTimeoutSec = 120.0;
+NSTimeInterval IdleCompleteSec() {
+  return PS_SYNC_HTTP_IDLE_COMPLETE_MS / 1000.0;
+}
 
-NSString *HeaderValue(NSDictionary *headers, NSString *name) {
+NSTimeInterval ConnectTimeoutSec() {
+  return PS_SYNC_HTTP_CONNECT_TIMEOUT_MS / 1000.0;
+}
+
+NSTimeInterval BufferedTimeoutSec() {
+  return PS_SYNC_HTTP_BUFFERED_READ_TIMEOUT_MS / 1000.0;
+}
+
+std::string Utf8FromNSString(NSString* value) {
+  if (value == nil) {
+    return {};
+  }
+  NSData* data = [value dataUsingEncoding:NSUTF8StringEncoding];
+  if (data == nil || data.length == 0) {
+    return {};
+  }
+  const auto* bytes = static_cast<const char*>(data.bytes);
+  return std::string(bytes, bytes + data.length);
+}
+
+NSString* HeaderValue(NSDictionary* headers, NSString* name) {
   if (headers == nil || ![headers isKindOfClass:[NSDictionary class]]) {
     return nil;
   }
-  NSString *want = [name lowercaseString];
+  NSString* want = [name lowercaseString];
   for (id key in headers) {
     if (![key isKindOfClass:[NSString class]]) {
       continue;
     }
-    if ([[(NSString *)key lowercaseString] isEqualToString:want]) {
+    if ([[(NSString*)key lowercaseString] isEqualToString:want]) {
       id value = headers[key];
-      return [value isKindOfClass:[NSString class]] ? (NSString *)value : [value description];
+      return [value isKindOfClass:[NSString class]] ? (NSString*)value : [value description];
     }
   }
   return nil;
 }
 
-NSDictionary *ErrorResult(NSInteger status, NSString *message) {
+BOOL LooksLikeLongLivedHeaders(NSDictionary* headers) {
+  NSString* encoding = HeaderValue(headers, @"transfer-encoding");
+  NSString* length = HeaderValue(headers, @"content-length");
+  NSString* contentType = HeaderValue(headers, @"content-type");
+  return ps_sync_http_looks_like_long_lived(
+             encoding != nil ? Utf8FromNSString(encoding).c_str() : nullptr,
+             length != nil ? Utf8FromNSString(length).c_str() : nullptr,
+             contentType != nil ? Utf8FromNSString(contentType).c_str() : nullptr) != 0;
+}
+
+NSDictionary* ErrorResult(NSInteger status, NSString* message) {
   return @{
     @"ok" : @NO,
     @"status" : @(status),
@@ -36,18 +70,17 @@ NSDictionary *ErrorResult(NSInteger status, NSString *message) {
   };
 }
 
-NSDictionary *SuccessResult(NSInteger status, NSData *bytes, NSString *_Nullable contentType,
-                            BOOL idleComplete) {
-  NSString *body = [[NSString alloc] initWithData:bytes encoding:NSUTF8StringEncoding];
+NSDictionary* SuccessResult(NSInteger status, NSString* statusText, NSData* bytes,
+                            NSString*_Nullable contentType, BOOL idleComplete) {
+  NSString* body = [[NSString alloc] initWithData:bytes encoding:NSUTF8StringEncoding];
   if (body == nil) {
     body = @"";
   }
-  NSString *b64 = [bytes base64EncodedStringWithOptions:0] ?: @"";
-  // Match Android: ok=true means the RPC completed (status/body carry HTTP outcome).
+  NSString* b64 = [bytes base64EncodedStringWithOptions:0] ?: @"";
   return @{
     @"ok" : @YES,
     @"status" : @(status),
-    @"statusText" : @"",
+    @"statusText" : statusText ?: @"",
     @"body" : body,
     @"bodyBase64" : b64,
     @"contentType" : contentType ?: @"",
@@ -55,12 +88,13 @@ NSDictionary *SuccessResult(NSInteger status, NSData *bytes, NSString *_Nullable
   };
 }
 
-} // namespace
+}  // namespace
 
 @interface IdleCompleteHttpSession : NSObject <NSURLSessionDataDelegate>
-@property(nonatomic, strong) NSMutableData *buffer;
-@property(nonatomic, strong, nullable) NSHTTPURLResponse *httpResponse;
-@property(nonatomic, strong, nullable) NSError *sessionError;
+@property(nonatomic, strong) NSMutableData* buffer;
+@property(nonatomic, strong, nullable) NSHTTPURLResponse* httpResponse;
+@property(nonatomic, strong, nullable) NSError* sessionError;
+@property(nonatomic, assign) BOOL useIdleTimer;
 @property(nonatomic, assign) NSTimeInterval idleSec;
 @property(nonatomic, assign) NSTimeInterval readDeadline;
 @property(nonatomic, strong, nullable) dispatch_source_t idleTimer;
@@ -71,11 +105,12 @@ NSDictionary *SuccessResult(NSInteger status, NSData *bytes, NSString *_Nullable
 
 @implementation IdleCompleteHttpSession
 
-- (instancetype)initWithIdleMs:(NSTimeInterval)idleMs readTimeoutSec:(NSTimeInterval)readTimeoutSec {
+- (instancetype)initWithIdleEnabled:(BOOL)idleEnabled readTimeoutSec:(NSTimeInterval)readTimeoutSec {
   self = [super init];
   if (self) {
     _buffer = [NSMutableData data];
-    _idleSec = idleMs / 1000.0;
+    _useIdleTimer = idleEnabled;
+    _idleSec = IdleCompleteSec();
     _readDeadline = [NSDate date].timeIntervalSince1970 + readTimeoutSec;
     _syncQueue = dispatch_queue_create("com.powersync.IdleCompleteHttp", DISPATCH_QUEUE_SERIAL);
     _done = dispatch_semaphore_create(0);
@@ -84,8 +119,7 @@ NSDictionary *SuccessResult(NSInteger status, NSData *bytes, NSString *_Nullable
   return self;
 }
 
-- (void)finishLockedWithError:(NSError *_Nullable)error {
-  // Caller must already be on syncQueue.
+- (void)finishLockedWithError:(NSError*_Nullable)error {
   if (self.finished) {
     return;
   }
@@ -100,13 +134,16 @@ NSDictionary *SuccessResult(NSInteger status, NSData *bytes, NSString *_Nullable
   dispatch_semaphore_signal(self.done);
 }
 
-- (void)finishWithError:(NSError *_Nullable)error {
+- (void)finishWithError:(NSError*_Nullable)error {
   dispatch_async(self.syncQueue, ^{
     [self finishLockedWithError:error];
   });
 }
 
 - (void)armIdleTimer {
+  if (!self.useIdleTimer) {
+    return;
+  }
   dispatch_async(self.syncQueue, ^{
     if (self.finished) {
       return;
@@ -118,9 +155,9 @@ NSDictionary *SuccessResult(NSInteger status, NSData *bytes, NSString *_Nullable
     dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, self.syncQueue);
     dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(self.idleSec * NSEC_PER_SEC)),
                               DISPATCH_TIME_FOREVER, (int64_t)(0.05 * NSEC_PER_SEC));
-    __weak IdleCompleteHttpSession *weakSelf = self;
+    __weak IdleCompleteHttpSession* weakSelf = self;
     dispatch_source_set_event_handler(timer, ^{
-      IdleCompleteHttpSession *strongSelf = weakSelf;
+      IdleCompleteHttpSession* strongSelf = weakSelf;
       if (strongSelf == nil) {
         return;
       }
@@ -131,20 +168,23 @@ NSDictionary *SuccessResult(NSInteger status, NSData *bytes, NSString *_Nullable
   });
 }
 
-- (void)URLSession:(NSURLSession *)session
-          dataTask:(NSURLSessionDataTask *)dataTask
-didReceiveResponse:(NSURLResponse *)response
+- (void)URLSession:(NSURLSession*)session
+          dataTask:(NSURLSessionDataTask*)dataTask
+didReceiveResponse:(NSURLResponse*)response
  completionHandler:(void (^)(NSURLSessionResponseDisposition))completionHandler {
   if ([response isKindOfClass:[NSHTTPURLResponse class]]) {
-    self.httpResponse = (NSHTTPURLResponse *)response;
+    self.httpResponse = (NSHTTPURLResponse*)response;
+    if (!self.useIdleTimer && LooksLikeLongLivedHeaders(self.httpResponse.allHeaderFields)) {
+      self.useIdleTimer = YES;
+    }
   }
   [self armIdleTimer];
   completionHandler(NSURLSessionResponseAllow);
 }
 
-- (void)URLSession:(NSURLSession *)session
-          dataTask:(NSURLSessionDataTask *)dataTask
-    didReceiveData:(NSData *)data {
+- (void)URLSession:(NSURLSession*)session
+          dataTask:(NSURLSessionDataTask*)dataTask
+    didReceiveData:(NSData*)data {
   dispatch_async(self.syncQueue, ^{
     if (self.finished) {
       return;
@@ -154,30 +194,32 @@ didReceiveResponse:(NSURLResponse *)response
   [self armIdleTimer];
 }
 
-- (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task didCompleteWithError:(NSError *)error {
+- (void)URLSession:(NSURLSession*)session task:(NSURLSessionTask*)task didCompleteWithError:(NSError*)error {
   [self finishWithError:error];
 }
 
-- (NSDictionary *)waitForResult {
+- (NSDictionary*)waitForResult:(BOOL)syncStream {
   NSTimeInterval remaining = self.readDeadline - [NSDate date].timeIntervalSince1970;
   if (remaining < 1.0) {
     remaining = 1.0;
   }
-  long waitRc = dispatch_semaphore_wait(self.done, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(remaining * NSEC_PER_SEC)));
+  long waitRc = dispatch_semaphore_wait(
+      self.done, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(remaining * NSEC_PER_SEC)));
   if (waitRc != 0) {
     dispatch_sync(self.syncQueue, ^{
       [self finishLockedWithError:[NSError errorWithDomain:@"IdleCompleteHttp"
                                                       code:-1
                                                   userInfo:@{
-                                                    NSLocalizedDescriptionKey : @"idle-complete read deadline exceeded"
+                                                    NSLocalizedDescriptionKey :
+                                                        @"idle-complete read deadline exceeded"
                                                   }]];
     });
     dispatch_semaphore_wait(self.done, DISPATCH_TIME_FOREVER);
   }
 
-  __block NSData *bytes = nil;
-  __block NSError *error = nil;
-  __block NSHTTPURLResponse *response = nil;
+  __block NSData* bytes = nil;
+  __block NSError* error = nil;
+  __block NSHTTPURLResponse* response = nil;
   dispatch_sync(self.syncQueue, ^{
     bytes = [self.buffer copy];
     error = self.sessionError;
@@ -188,73 +230,55 @@ didReceiveResponse:(NSURLResponse *)response
     return ErrorResult(-1, error.localizedDescription ?: @"request failed");
   }
   NSInteger status = response != nil ? response.statusCode : -1;
-  NSString *contentType = nil;
+  NSString* statusText = @"";
+  NSString* contentType = nil;
   if (response != nil) {
-    contentType = response.allHeaderFields[@"Content-Type"];
-    if (contentType == nil) {
-      contentType = response.allHeaderFields[@"content-type"];
-    }
+    statusText = [NSHTTPURLResponse localizedStringForStatusCode:response.statusCode] ?: @"";
+    contentType = HeaderValue(response.allHeaderFields, @"content-type");
   }
-  BOOL idleComplete = error == nil;
-  if (error != nil && bytes.length > 0) {
-    idleComplete = NO;
-  }
-  return SuccessResult(status, bytes, contentType, idleComplete);
+  BOOL idleComplete = syncStream && (error == nil || bytes.length > 0);
+  return SuccessResult(status, statusText, bytes, contentType, idleComplete);
 }
 
 @end
 
-NSDictionary *IdleCompleteHttpFetch(NSDictionary *request) {
+NSDictionary* IdleCompleteHttpFetch(NSDictionary* request) {
   @autoreleasepool {
     if (request == nil || ![request isKindOfClass:[NSDictionary class]]) {
       return ErrorResult(-1, @"httpFetch request must be an object");
     }
     id urlValue = request[@"url"];
-    if (![urlValue isKindOfClass:[NSString class]] || [(NSString *)urlValue length] == 0) {
+    if (![urlValue isKindOfClass:[NSString class]] || [(NSString*)urlValue length] == 0) {
       return ErrorResult(-1, @"httpFetch requires string url");
     }
-    NSURL *url = [NSURL URLWithString:(NSString *)urlValue];
+    NSURL* url = [NSURL URLWithString:(NSString*)urlValue];
     if (url == nil) {
       return ErrorResult(-1, @"httpFetch invalid url");
     }
 
-    NSString *method = @"GET";
+    NSString* method = @"GET";
     id methodValue = request[@"method"];
-    if ([methodValue isKindOfClass:[NSString class]] && [(NSString *)methodValue length] > 0) {
-      method = [(NSString *)methodValue uppercaseString];
+    if ([methodValue isKindOfClass:[NSString class]] && [(NSString*)methodValue length] > 0) {
+      method = [(NSString*)methodValue uppercaseString];
     }
 
-    NSDictionary *headers = nil;
+    NSDictionary* headers = nil;
     id headersValue = request[@"headers"];
     if ([headersValue isKindOfClass:[NSDictionary class]]) {
-      headers = (NSDictionary *)headersValue;
+      headers = (NSDictionary*)headersValue;
     }
 
-    NSData *bodyData = nil;
+    NSData* bodyData = nil;
     id bodyValue = request[@"body"];
     if ([bodyValue isKindOfClass:[NSString class]]) {
-      bodyData = [(NSString *)bodyValue dataUsingEncoding:NSUTF8StringEncoding];
+      bodyData = [(NSString*)bodyValue dataUsingEncoding:NSUTF8StringEncoding];
     }
 
-    NSTimeInterval idleMs = kDefaultIdleCompleteMs;
-    id idleValue = request[@"idleCompleteMs"];
-    if ([idleValue isKindOfClass:[NSNumber class]]) {
-      idleMs = [(NSNumber *)idleValue doubleValue];
-    }
-    if (idleMs < 250.0) {
-      idleMs = 250.0;
-    }
+    BOOL syncStream = ps_sync_http_is_sync_stream_url(Utf8FromNSString((NSString*)urlValue).c_str()) != 0;
+    NSTimeInterval readTimeoutSec = syncStream ? (IdleCompleteSec() + ConnectTimeoutSec())
+                                               : (BufferedTimeoutSec() + ConnectTimeoutSec());
 
-    NSTimeInterval readTimeoutSec = kMinReadTimeoutSec;
-    id timeoutValue = request[@"timeoutMs"];
-    if ([timeoutValue isKindOfClass:[NSNumber class]]) {
-      double timeoutMs = [(NSNumber *)timeoutValue doubleValue];
-      if (timeoutMs > 0) {
-        readTimeoutSec = MAX(timeoutMs / 1000.0, kMinReadTimeoutSec);
-      }
-    }
-
-    NSMutableURLRequest *urlRequest = [NSMutableURLRequest requestWithURL:url];
+    NSMutableURLRequest* urlRequest = [NSMutableURLRequest requestWithURL:url];
     urlRequest.HTTPMethod = method;
     urlRequest.timeoutInterval = readTimeoutSec;
     urlRequest.cachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
@@ -264,39 +288,30 @@ NSDictionary *IdleCompleteHttpFetch(NSDictionary *request) {
           continue;
         }
         id value = headers[key];
-        NSString *headerValue = [value isKindOfClass:[NSString class]] ? (NSString *)value : [value description];
-        [urlRequest setValue:headerValue forHTTPHeaderField:(NSString *)key];
+        NSString* headerValue =
+            [value isKindOfClass:[NSString class]] ? (NSString*)value : [value description];
+        [urlRequest setValue:headerValue forHTTPHeaderField:(NSString*)key];
       }
     }
     if (bodyData != nil && bodyData.length > 0) {
       urlRequest.HTTPBody = bodyData;
-      if (HeaderValue(headers, @"Content-Type") == nil) {
-        [urlRequest setValue:@"application/json; charset=UTF-8" forHTTPHeaderField:@"Content-Type"];
-      }
     }
 
-    IdleCompleteHttpSession *delegate = [[IdleCompleteHttpSession alloc] initWithIdleMs:idleMs
-                                                                        readTimeoutSec:readTimeoutSec];
-    NSURLSessionConfiguration *config = [NSURLSessionConfiguration ephemeralSessionConfiguration];
+    IdleCompleteHttpSession* delegate =
+        [[IdleCompleteHttpSession alloc] initWithIdleEnabled:syncStream
+                                              readTimeoutSec:readTimeoutSec];
+    NSURLSessionConfiguration* config = [NSURLSessionConfiguration ephemeralSessionConfiguration];
     config.timeoutIntervalForRequest = readTimeoutSec;
-    config.timeoutIntervalForResource = readTimeoutSec + kConnectTimeoutSec;
+    config.timeoutIntervalForResource = readTimeoutSec;
     config.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
-    NSURLSession *session = [NSURLSession sessionWithConfiguration:config
+    NSURLSession* session = [NSURLSession sessionWithConfiguration:config
                                                           delegate:delegate
                                                      delegateQueue:nil];
-    NSURLSessionDataTask *task = [session dataTaskWithRequest:urlRequest];
+    NSURLSessionDataTask* task = [session dataTaskWithRequest:urlRequest];
     [task resume];
-    NSDictionary *result = [delegate waitForResult];
+    NSDictionary* result = [delegate waitForResult:syncStream];
     [task cancel];
     [session invalidateAndCancel];
-    // Match Android: idleComplete flag means this was a sync-stream style fetch.
-    NSString *urlString = (NSString *)urlValue;
-    BOOL syncStream = [[urlString lowercaseString] containsString:@"/sync/stream"];
-    if (syncStream && [result[@"ok"] boolValue]) {
-      NSMutableDictionary *adjusted = [result mutableCopy];
-      adjusted[@"idleComplete"] = @YES;
-      return adjusted;
-    }
     return result;
   }
 }

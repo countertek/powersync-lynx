@@ -74,9 +74,39 @@ test("packed tarball ships iOS build inputs and omits host/build residue", async
       "canonical ios/ podspec compiles sqlite3.h from ios/src (symlink or copy)",
     );
     assert.equal(
-      has("ios/src/IdleCompleteHttp.h"),
+      has("ios/src/NativeSyncHttp.h"),
       true,
-      "iOS NativePowerSyncModule.httpFetch needs IdleCompleteHttp.h",
+      "iOS Native Module HTTP lives in NativeSyncHttp.h",
+    );
+    assert.equal(
+      has("ios/src/NativeSyncHttp.mm"),
+      true,
+      "iOS Native Module HTTP lives in NativeSyncHttp.mm",
+    );
+    assert.equal(
+      has("android/src/main/java/com/powersync/lynx/NativeSyncHttp.java"),
+      true,
+      "Android Native Module HTTP lives in NativeSyncHttp.java",
+    );
+    assert.equal(
+      has("android/src/main/java/com/powersync/lynx/PsSqlEngine.java"),
+      true,
+      "Android SQL JNI binder Java seam must ship",
+    );
+    assert.equal(
+      has("android/src/main/cpp/ps_sql_jni.cc"),
+      true,
+      "Android SQL JNI binder must ship",
+    );
+    assert.equal(
+      has("android/src/main/cpp/CMakeLists.txt"),
+      true,
+      "Android NDK CMake for ps_sql must ship",
+    );
+    assert.equal(
+      has("shared/sync_http_policy.h"),
+      true,
+      "idle-complete / streaming timeouts live in shared/sync_http_policy.h",
     );
     assert.equal(
       has("ios/src/IdleCompleteHttp.mm"),

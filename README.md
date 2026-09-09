@@ -81,7 +81,7 @@ import { attach } from "powersync-lynx/web-host";
 Stock Lynx fetch cannot reliably deliver live `/sync/stream` NDJSON on device. Native hosts use **`NativePowerSyncModule.httpFetch`**:
 
 1. One-shot callback returns status + `streamingId` (empty body).
-2. Chunks arrive as UTF-8 strings on **`GlobalEventEmitter`** (`onData` / `onEnd` / `onError`).
+2. Chunks arrive as UTF-8 strings on **`GlobalEventEmitter`**. Terminal sequence: `onData*` → `onError?` → `onEnd`.
 3. `LynxRemote` rebuilds a ReadableStream so PowerSync applies NDJSON incrementally.
 
 Idle-complete / `raw-body` remains a fallback when no event sender is available. Rebuild showcase + host after pulling streaming changes. Details: [iOS host](https://github.com/countertek/powersync-lynx/blob/main/examples/hosts/ios/README.md), [Android host](https://github.com/countertek/powersync-lynx/blob/main/examples/hosts/android/README.md).
@@ -90,7 +90,7 @@ Idle-complete / `raw-body` remains a fallback when no event sender is available.
 
 | Signal | What it means |
 | --- | --- |
-| **`hasSynced` alone** | Not proof that downloads applied. Confirm `ps_buckets > 0` / row presence and FM-PS-LYNX-003 logs (`via: "chunked"`, `streamingId`). |
+| **`hasSynced` alone** | Not proof that downloads applied. Confirm `ps_buckets > 0` / row presence and the native `streamingId` realtime path (GlobalEventEmitter `onData` before `onEnd`). |
 | **Realtime on native** | Depends on `streamingId` + GlobalEventEmitter chunks staying open, not a single buffered body. |
 | **Local UI ready** | `waitForReady()` opens SQLite; it does **not** wait for `connect()` / first checkpoint. |
 | **Demo tokens** | The examples stack mints a static HS256 JWT. Not PowerSync Cloud / JWKS production auth. |

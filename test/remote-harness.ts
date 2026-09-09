@@ -1,6 +1,11 @@
 import type { PowerSyncBackendConnector, PowerSyncLogger } from "@powersync/common";
 
 import type { NativeModulesHost, NativePowerSyncModule } from "../src/adapter/native.ts";
+import type { NativeSyncHttpModule } from "../src/sync/transport/http-types.ts";
+import { createFakeEmitter, withFakeLynxHost, type FakeLynxHostState } from "./fake-lynx-host.ts";
+
+export { createFakeEmitter, withFakeLynxHost };
+export type { FakeLynxHostState };
 
 export const silentLogger: PowerSyncLogger = {
   log() {},
@@ -37,8 +42,8 @@ function sqlNoops(): NativePowerSyncModule {
 }
 
 export function nativeWithHttp(
-  extra: Pick<NativePowerSyncModule, "httpFetch" | "httpFetchAbort">,
-): NativePowerSyncModule {
+  extra: Partial<NativeSyncHttpModule> = {},
+): NativePowerSyncModule & Partial<NativeSyncHttpModule> {
   return { ...sqlNoops(), ...extra };
 }
 

@@ -1,6 +1,9 @@
 /**
  * Lynx's iOS polyfill list does not include AbortController. Install one when missing.
  * Node and Lynx-for-Web already provide the global; this is a no-op there.
+ *
+ * Call `installAbortControllerPolyfill()` from the LynxHost module so install
+ * order does not depend on which Client file is imported first.
  */
 type AbortListener = (event: { type: "abort" }) => void;
 
@@ -64,18 +67,23 @@ class AbortControllerPolyfill {
   }
 }
 
-if (
-  typeof globalThis.AbortController === "undefined" ||
-  typeof globalThis.AbortSignal === "undefined"
-) {
-  Object.defineProperty(globalThis, "AbortSignal", {
-    value: AbortSignalPolyfill,
-    configurable: true,
-    writable: true,
-  });
-  Object.defineProperty(globalThis, "AbortController", {
-    value: AbortControllerPolyfill,
-    configurable: true,
-    writable: true,
-  });
+/** Idempotent. Safe to call from LynxHost and from leftover side-effect imports. */
+export function installAbortControllerPolyfill(): void {
+  if (
+    typeof globalThis.AbortController === "undefined" ||
+    typeof globalThis.AbortSignal === "undefined"
+  ) {
+    Object.defineProperty(globalThis, "AbortSignal", {
+      value: AbortSignalPolyfill,
+      configurable: true,
+      writable: true,
+    });
+    Object.defineProperty(globalThis, "AbortController", {
+      value: AbortControllerPolyfill,
+      configurable: true,
+      writable: true,
+    });
+  }
 }
+
+installAbortControllerPolyfill();

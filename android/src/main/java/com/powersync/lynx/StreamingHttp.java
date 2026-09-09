@@ -20,12 +20,14 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * Unlike {@link IdleCompleteHttp}, this does <strong>not</strong> close after a short idle window —
  * PowerSync keepalive (~20s) and later checkpoints stay on the same session.
  *
- * <p>Read timeout is long (120s) so keepalive gaps do not abort; stock {@code ResponseBody.bytes()}
- * is never called.
+ * <p>Read timeout is {@code PS_SYNC_HTTP_STREAM_READ_TIMEOUT_MS} (120s) so keepalive gaps do not
+ * abort. Terminal GlobalEventEmitter sequence ({@code onData*} → {@code onError?} → {@code onEnd})
+ * is assembled by {@link NativeSyncHttp}, not this reader.
  */
 final class StreamingHttp {
+  /** Keep in lockstep with {@code PS_SYNC_HTTP_CONNECT_TIMEOUT_MS}. */
   static final long CONNECT_TIMEOUT_MS = 30_000L;
-  /** Longer than PowerSync protocol keepalive (~20s). */
+  /** Keep in lockstep with {@code PS_SYNC_HTTP_STREAM_READ_TIMEOUT_MS}. */
   static final long STREAM_READ_TIMEOUT_MS = 120_000L;
 
   interface Listener {
