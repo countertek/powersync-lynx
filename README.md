@@ -2,7 +2,7 @@
 
 ![powersync-lynx — PowerSync for Lynx apps](docs/assets/powersync-lynx-readme-hero.png)
 
-**Official PowerSync JavaScript inside Lynx apps.** One Autolink package, one `PowerSyncDatabase` surface, local SQLite plus sync on web, iOS, and Android.
+**PowerSync JavaScript inside Lynx apps.** One Autolink package, one `PowerSyncDatabase` surface, local SQLite plus sync on web, iOS, and Android.
 
 **[Spec](https://github.com/countertek/powersync-lynx/blob/main/docs/spec.md)** · **[Examples](https://github.com/countertek/powersync-lynx/tree/main/examples)** · **[Glossary](https://github.com/countertek/powersync-lynx/blob/main/CONTEXT.md)**
 
