@@ -9,8 +9,8 @@ interface StreamEmitter {
 }
 
 const earlyEvents = new Map<string, unknown[]>();
-/** Names with an attached reader — skip early-capture so emit/trigger cannot leak. */
-const liveStreamNames = new Set<string>();
+/** Per-emitter names with an attached reader — skip early-capture so emit/trigger cannot leak. */
+const liveStreamNames = new WeakMap<object, Set<string>>();
 /** Bound unread onData/onError/onEnd before a reader attaches (first-load race). */
 const MAX_EARLY_EVENTS_PER_STREAM = 256;
 const hookedEmitters = new WeakSet<object>();
@@ -46,8 +46,21 @@ function isStreamEvent(payload: unknown): boolean {
   return event === "onData" || event === "onEnd" || event === "onError";
 }
 
-function rememberEarly(name: string, payload: unknown): void {
-  if (liveStreamNames.has(name) || !isStreamEvent(payload)) {
+function liveNames(emitter: object): Set<string> {
+  let names = liveStreamNames.get(emitter);
+  if (names == null) {
+    names = new Set();
+    liveStreamNames.set(emitter, names);
+  }
+  return names;
+}
+
+function rememberEarly(emitter: object, name: string, payload: unknown): void {
+  if (
+    liveStreamNames.get(emitter)?.has(name) ||
+    streamHandlers.get(emitter)?.has(name) ||
+    !isStreamEvent(payload)
+  ) {
     return;
   }
   const pending = earlyEvents.get(name);
@@ -61,8 +74,8 @@ function rememberEarly(name: string, payload: unknown): void {
   pending.push(payload);
 }
 
-function releaseStream(name: string): void {
-  liveStreamNames.delete(name);
+function releaseStream(emitter: object, name: string): void {
+  liveStreamNames.get(emitter)?.delete(name);
   earlyEvents.delete(name);
 }
 
@@ -95,7 +108,7 @@ function slotListener(emitter: object, name: string): (payload: unknown) => void
     if (handler != null) {
       handler(payload);
     } else {
-      rememberEarly(name, payload);
+      rememberEarly(emitter, name, payload);
     }
     const extras = foreignListeners.get(emitter)?.get(name);
     if (extras != null) {
@@ -201,11 +214,11 @@ function hookEmitter(emitter: StreamEmitter): void {
     ensureSlot(emitter, name);
   };
   emitter.emit = (name, data) => {
-    rememberEarly(name, data);
+    rememberEarly(emitter, name, data);
     return origEmit?.(name, data);
   };
   emitter.trigger = (name, params) => {
-    rememberEarly(name, params);
+    rememberEarly(emitter, name, params);
     return origTrigger?.(name, params);
   };
   preSlotNativeStreams(emitter);
@@ -229,7 +242,7 @@ function attachStreamHandler(
     handlers = new Map();
     streamHandlers.set(emitter, handlers);
   }
-  liveStreamNames.add(eventName);
+  liveNames(emitter).add(eventName);
   handlers.set(eventName, onEvent);
   ensureSlot(emitter, eventName);
   drainEarly(eventName, onEvent);
@@ -265,15 +278,10 @@ function createStreamingReader(
     released = true;
     for (const emitter of emitters) {
       const handlers = streamHandlers.get(emitter);
-      if (handlers == null) {
-        continue;
-      }
       for (const name of eventNames) {
-        handlers.delete(name);
+        handlers?.delete(name);
+        releaseStream(emitter, name);
       }
-    }
-    for (const name of eventNames) {
-      releaseStream(name);
     }
   };
   const abortAttached = (): void => {
