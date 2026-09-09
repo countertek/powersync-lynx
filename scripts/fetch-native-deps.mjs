@@ -24,6 +24,8 @@ const CORE_ASSETS = {
     'd2403446c5b2d0550eb99cb195db01798ef78a740ba4f462cd0b887e0ce4bd8a',
   'powersync_aarch64.dll':
     '19afce715bf63b4f590fb2c00d18c3681b818cd6eee5a35284bd3a804f090b20',
+  'libpowersync_x64.linux.so':
+    'a6de0c79151ad6243ca18633f0df10bed32b692095fdf0f01ebdac6eb01d2edf',
 };
 
 async function sha256File(filePath) {
@@ -123,6 +125,10 @@ async function main() {
   await ensureCoreAsset(
     'powersync_x64.dll',
     path.join(ROOT, 'dist', 'windows', 'x64'),
+  );
+  await ensureCoreAsset(
+    'libpowersync_x64.linux.so',
+    path.join(ROOT, 'dist', 'linux', 'x64'),
   );
 }
 

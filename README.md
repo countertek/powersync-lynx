@@ -126,6 +126,8 @@ pnpm typecheck
 make test          # Native Module (see Makefile for iOS / Android targets)
 ```
 
+Requires **Node >= 22.18** (`.nvmrc` / `package.json` `engines`) and pnpm 12 (`packageManager` is `pnpm@12.3.4`).
+
 Normative Client behavior: [docs/spec.md](https://github.com/countertek/powersync-lynx/blob/main/docs/spec.md). Ubiquitous language: [CONTEXT.md](https://github.com/countertek/powersync-lynx/blob/main/CONTEXT.md). ADRs: [docs/adr/](https://github.com/countertek/powersync-lynx/tree/main/docs/adr).
 
 ## 🔗 Links

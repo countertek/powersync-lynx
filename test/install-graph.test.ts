@@ -28,6 +28,12 @@ function collectPackageNames(node, names = new Set()) {
   return names;
 }
 
+test("android consumer-rules.pro keeps Autolink provider and Native Module", () => {
+  const rules = readFileSync(path.join(root, "android/consumer-rules.pro"), "utf8");
+  assert.match(rules, /com\.powersync\.lynx\.LynxLibraryProviderImpl/);
+  assert.match(rules, /com\.powersync\.lynx\.NativePowerSyncModule/);
+});
+
 test("package.json keeps @powersync/web as an optional peer only", () => {
   const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
   assert.equal(pkg.packageManager, "pnpm@12.3.4");
