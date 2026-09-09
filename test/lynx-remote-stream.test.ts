@@ -901,6 +901,179 @@ test("identifier fetchStream keeps incremental NDJSON when Response has no strea
   }
 });
 
+test("identifier fetchStream keeps incremental NDJSON when Response.body is an empty stream", async () => {
+  const listeners = new Map<string, (payload: unknown) => void>();
+  const previousLynx = (globalThis as { lynx?: unknown }).lynx;
+  const previousFetch = globalThis.fetch;
+  (globalThis as { lynx?: unknown }).lynx = {
+    getJSModule(name: string) {
+      if (name !== "GlobalEventEmitter") {
+        return undefined;
+      }
+      return {
+        addListener(eventName: string, fn: (payload: unknown) => void) {
+          listeners.set(eventName, fn);
+        },
+      };
+    },
+  };
+  globalThis.fetch = ((_url, init) => {
+    const extension = (init as { lynxExtension?: { useStreaming?: boolean } } | undefined)?.lynxExtension;
+    if (extension?.useStreaming !== true) {
+      return new Promise(() => {});
+    }
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      headers: { get: () => "application/x-ndjson" },
+      body: {
+        getReader() {
+          return {
+            async read() {
+              return { done: true, value: undefined };
+            },
+            cancel() {
+              return Promise.resolve();
+            },
+            releaseLock() {},
+          };
+        },
+      },
+    } as Response);
+  }) as typeof fetch;
+  try {
+    const remote = new LynxRemote(
+      { fetchCredentials: async () => ({ endpoint: "http://127.0.0.1:8080", token: "tok" }) },
+      { log() {} },
+    );
+    const stream = await remote.fetchStream({
+      path: "/sync/stream",
+      data: {},
+      abortSignal: new AbortController().signal,
+    });
+    queueMicrotask(() => {
+      listeners.get("LynxFetchModuleStreamingEvent0")?.({ event: "onData", data: NDJSON_LINE });
+      listeners.get("LynxFetchModuleStreamingEvent0")?.({ event: "onEnd" });
+    });
+    const first = await Promise.race([
+      stream.next(),
+      new Promise<{ done: true; value: undefined }>((resolve) => {
+        setTimeout(() => resolve({ done: true, value: undefined }), 80);
+      }),
+    ]);
+    assert.equal(
+      first.done,
+      false,
+      "incremental checkpoint must not be dropped when identifier fetch returns an empty standard body",
+    );
+    assert.deepEqual(JSON.parse(String(first.value)), { checkpoint: { last_op_id: "1" } });
+  } finally {
+    (globalThis as { lynx?: unknown }).lynx = previousLynx;
+    globalThis.fetch = previousFetch;
+  }
+});
+
+function gzipAsBinaryString(bytes: Uint8Array): string {
+  let text = "";
+  for (const byte of bytes) {
+    text += String.fromCharCode(byte);
+  }
+  return text;
+}
+
+test("identifier write-checkpoint json() parses when touching body would yield undefined", async () => {
+  const previousFetch = globalThis.fetch;
+  const previousInfo = (globalThis as { SystemInfo?: { platform?: string } }).SystemInfo;
+  (globalThis as { SystemInfo?: { platform?: string } }).SystemInfo = { platform: "iOS" };
+  globalThis.fetch = (() => {
+    let bodyTouched = false;
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      headers: { get: () => "application/json" },
+      get body() {
+        bodyTouched = true;
+        return {
+          getReader() {
+            return {
+              async read() {
+                return { done: true, value: undefined };
+              },
+              cancel() {
+                return Promise.resolve();
+              },
+              releaseLock() {},
+            };
+          },
+        };
+      },
+      async text() {
+        if (bodyTouched) {
+          return "undefined";
+        }
+        return WRITE_CHECKPOINT_JSON;
+      },
+      async json() {
+        return JSON.parse(bodyTouched ? "undefined" : WRITE_CHECKPOINT_JSON);
+      },
+    } as Response);
+  }) as typeof fetch;
+  try {
+    const remote = new LynxRemote(
+      { fetchCredentials: async () => ({ endpoint: "http://127.0.0.1:8080", token: "tok" }) },
+      { log() {} },
+    );
+    const decoded = await remote.fetchAndDecodeJson({
+      path: "/write-checkpoint2.json?client_id=1",
+    });
+    assert.deepEqual(decoded, { data: { write_checkpoint: "12" } });
+  } finally {
+    globalThis.fetch = previousFetch;
+    (globalThis as { SystemInfo?: { platform?: string } }).SystemInfo = previousInfo;
+  }
+});
+
+test("Android write-checkpoint json() parses gzip delivered as a binary string", async () => {
+  const previousLynx = (globalThis as { lynx?: unknown }).lynx;
+  const previousModules = globalThis.NativeModules;
+  const previousInfo = (globalThis as { SystemInfo?: { platform?: string } }).SystemInfo;
+  (globalThis as { SystemInfo?: { platform?: string } }).SystemInfo = { platform: "Android" };
+  (globalThis as { lynx?: unknown }).lynx = {
+    getJSModule() {
+      return { addListener() {} };
+    },
+  };
+  globalThis.NativeModules = {
+    LynxFetchModule: {
+      fetch(_request: { headers?: Record<string, string> }, resolve: (response: unknown) => void) {
+        queueMicrotask(() => {
+          resolve({
+            status: 200,
+            statusText: "OK",
+            body: gzipAsBinaryString(WRITE_CHECKPOINT_GZIP),
+          });
+        });
+      },
+    },
+  } as typeof globalThis.NativeModules;
+  try {
+    const remote = new LynxRemote(
+      { fetchCredentials: async () => ({ endpoint: "http://127.0.0.1:8080", token: "tok" }) },
+      { log() {} },
+    );
+    const decoded = await remote.fetchAndDecodeJson({
+      path: "/write-checkpoint2.json?client_id=1",
+    });
+    assert.deepEqual(decoded, { data: { write_checkpoint: "12" } });
+  } finally {
+    (globalThis as { lynx?: unknown }).lynx = previousLynx;
+    globalThis.NativeModules = previousModules;
+    (globalThis as { SystemInfo?: { platform?: string } }).SystemInfo = previousInfo;
+  }
+});
+
 test("Android LynxFetchModule JSON fetch exposes json() for checkpoint-request", async () => {
   const previousLynx = (globalThis as { lynx?: unknown }).lynx;
   const previousModules = globalThis.NativeModules;

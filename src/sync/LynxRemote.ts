@@ -150,6 +150,14 @@ function encodeUtf8(text: string): ArrayBuffer {
   return copyToArrayBuffer(bytes);
 }
 
+function latin1Bytes(text: string): Uint8Array {
+  const bytes = new Uint8Array(text.length);
+  for (let i = 0; i < text.length; i++) {
+    bytes[i] = text.charCodeAt(i) & 0xff;
+  }
+  return bytes;
+}
+
 function toUint8(data: unknown): Uint8Array {
   if (data instanceof Uint8Array) {
     return data;
@@ -164,9 +172,26 @@ function toUint8(data: unknown): Uint8Array {
     return new Uint8Array(data as number[]);
   }
   if (typeof data === "string") {
+    const raw = latin1Bytes(data);
+    if (isGzip(raw)) {
+      return raw;
+    }
     return new Uint8Array(encodeUtf8(data));
   }
   return new Uint8Array(0);
+}
+
+function parseJsonText(text: string): unknown {
+  const trimmed = stripBom(text).trim();
+  if (trimmed.length === 0 || trimmed === "undefined") {
+    return { data: {} };
+  }
+  const raw = latin1Bytes(trimmed);
+  if (isGzip(raw)) {
+    const inflated = gunzipSync(raw);
+    return JSON.parse(stripBom(decodeUtf8(copyToArrayBuffer(inflated))).trim());
+  }
+  return JSON.parse(trimmed);
 }
 
 function headerMap(headers: HeadersInit | undefined): Record<string, string> {
@@ -319,7 +344,10 @@ class LynxFetchResponse {
     if (isParsedJsonValue(this.rawBody)) {
       return this.rawBody;
     }
-    return JSON.parse(stripBom(await this.text()).trim());
+    if (typeof this.rawBody === "string") {
+      return parseJsonText(this.rawBody);
+    }
+    return parseJsonText(await this.text());
   }
 }
 
@@ -728,14 +756,48 @@ function stabilizeStreamingResponse(response: Response, capturedBody?: Response[
     },
     body: captured,
     text: () => response.text(),
-    json: () => {
-      const withJson = response as Response & { json?: () => Promise<unknown> };
-      if (typeof withJson.json === "function") {
-        return withJson.json();
-      }
-      return response.text().then((text) => JSON.parse(text) as unknown);
-    },
+    json: () => decodeIdentifierJson(response),
   } as Response;
+}
+
+/**
+ * JSON GETs must not read Response.body first. Lynx's one-shot body getter
+ * consumes the payload; later json()/text() then see undefined.
+ */
+function stabilizeJsonResponse(response: Response): Response {
+  const headers = response.headers;
+  return {
+    ok: response.ok,
+    status: response.status,
+    statusText: response.statusText,
+    headers: {
+      get: (name: string) => (headers == null ? null : headers.get(name)),
+    },
+    text: () => response.text(),
+    json: () => decodeIdentifierJson(response),
+  } as Response;
+}
+
+async function decodeIdentifierJson(response: Response): Promise<unknown> {
+  const withJson = response as Response & { json?: () => Promise<unknown> };
+  if (typeof withJson.json === "function") {
+    try {
+      const value = await withJson.json();
+      if (isParsedJsonValue(value)) {
+        return value;
+      }
+      if (typeof value === "string") {
+        return parseJsonText(value);
+      }
+    } catch {
+      // Lynx json() throws on the string undefined or gzip magic.
+    }
+  }
+  const withText = response as Response & { text?: () => Promise<string> };
+  if (typeof withText.text === "function") {
+    return parseJsonText(await withText.text());
+  }
+  return { data: {} };
 }
 
 function eventStreamingResponse(response: Response, streamingId?: string): Response {
@@ -773,6 +835,11 @@ async function identifierStreamingResponse(response: Response): Promise<Response
     return eventStreamingResponse(response, streamingId);
   }
   if (captured == null || typeof captured.getReader !== "function") {
+    return eventStreamingResponse(response, streamingId);
+  }
+  // Official identifier body is often an empty/non-incremental stub while
+  // native onData still arrives on GlobalEventEmitter.
+  if (lookupEmitter() != null) {
     return eventStreamingResponse(response, streamingId);
   }
   return stabilizeStreamingResponse(response, captured);
@@ -849,7 +916,7 @@ export class LynxRemote extends AbstractRemote {
     const fromGlobal = (globalThis as unknown as { fetch?: typeof fetch }).fetch;
     const response = await (typeof fromGlobal === "function" ? fromGlobal : fetch)(url, init);
     if (!expectStreamingResponse) {
-      return stabilizeStreamingResponse(response);
+      return stabilizeJsonResponse(response);
     }
     return identifierStreamingResponse(response);
   }
