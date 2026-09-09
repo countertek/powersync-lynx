@@ -9,8 +9,9 @@ import {
   setDemoCredentials,
 } from "./connector.ts";
 import { bootDemo } from "./boot.ts";
-import { getDb, waitForDemoReady } from "./database.ts";
+import { getDb, setClientLog, waitForDemoReady } from "./database.ts";
 import type { TodoRow } from "./schema.ts";
+import { createSessionSyncTracker, applyLocalReadySyncState } from "./session-sync.ts";
 import { deviceId, errorMessage, hostLabel, newId, nowIso, rowArray } from "./util.ts";
 
 import "./App.css";
@@ -74,6 +75,9 @@ export function App() {
   const [draft, setDraft] = useState("");
   const [draftField, setDraftField] = useState(0);
   const [syncLabel, setSyncLabel] = useState("offline");
+  const [hasSyncedLabel, setHasSyncedLabel] = useState("no");
+  const [lastSyncedText, setLastSyncedText] = useState("never");
+  const [firstSyncDone, setFirstSyncDone] = useState(false);
   const [wantSync, setWantSync] = useState(true);
   const [logOpen, setLogOpen] = useState(true);
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -86,12 +90,24 @@ export function App() {
 
   useEffect(() => {
     setConnectorLog(log);
-    return () => setConnectorLog(() => {});
+    setClientLog(log);
+    return () => {
+      setConnectorLog(() => {});
+      setClientLog(() => {});
+    };
   }, [log]);
 
   useEffect(() => {
     let cancelled = false;
     let stopStatus = () => {};
+
+    const tracker = createSessionSyncTracker({
+      log,
+      setSyncLabel,
+      setHasSyncedLabel,
+      setLastSyncedText,
+      setFirstSyncDone,
+    });
 
     bootDemo({
       waitForReady: waitForDemoReady,
@@ -101,33 +117,15 @@ export function App() {
       onLocalReady: () => {
         stopStatus = getDb().registerListener({
           statusChanged(status) {
-            const connected = status.connected === true;
-            const uploading = status.dataFlowStatus?.uploading === true;
-            const downloading = status.dataFlowStatus?.downloading === true;
-            if (status.connecting === true) {
-              setSyncLabel("connecting");
-            } else {
-              setSyncLabel(connected ? "connected" : "offline");
-            }
-            if (connected) {
-              log("connected");
-            }
-            if (uploading) {
-              log("upload in progress");
-            }
-            if (downloading) {
-              log("download in progress");
-            }
-            const downloadError = status.dataFlowStatus?.downloadError;
-            const uploadError = status.dataFlowStatus?.uploadError;
-            if (downloadError != null) {
-              log(`sync error: ${errorMessage(downloadError)}`);
-            }
-            if (uploadError != null) {
-              log(`upload error: ${errorMessage(uploadError)}`);
-            }
+            tracker.statusChanged(status);
           },
         });
+        applyLocalReadySyncState(
+          tracker,
+          getDb().currentStatus,
+          () => getDb().waitForFirstSync(),
+          () => cancelled,
+        );
         setReady(true);
       },
       log,
@@ -261,96 +259,107 @@ export function App() {
   return (
     <page style={{ width: "100%", height: "100%", backgroundColor: "#050910" }}>
       <scroll-view className="Page" scroll-y>
-      <view className="Hero">
-        <text className="Eyebrow">PowerSync on Lynx</text>
-        <text className="Title">TODO</text>
-        <text className="Sub">
-          One screen. Add, complete, delete, filter. Device {device} on {platform}.
-        </text>
-      </view>
+        <view className="Hero">
+          <text className="Eyebrow">PowerSync on Lynx</text>
+          <text className="Title">TODO</text>
+          <text className="Sub">
+            One screen. Add, complete, delete, filter. Device {device} on {platform}.
+          </text>
+        </view>
 
-      <view className="Row">
-        <view className="Pill">
-          <text className="PillLabel">DB {ready ? "ready" : "opening"}</text>
-        </view>
-        <view className="Pill">
-          <text className="PillLabel">sync {syncLabel}</text>
-        </view>
-        <view className="Pill">
-          <text className="PillLabel">device {device}</text>
-        </view>
-      </view>
-      <view
-        className="LinkWrap"
-        style={{ backgroundColor: "#0c1422", padding: 12 }}
-        bindtap={wantSync ? goOffline : goOnline}
-      >
-        <text className="Link">{wantSync ? "Go offline" : "Reconnect"}</text>
-      </view>
-
-      <view className="Card">
-        <text className="CardTitle">Todos</text>
-        <view className="Composer">
-          <input
-            key={draftField}
-            className="Field"
-            placeholder="What needs doing?"
-            default-value=""
-            bindinput={(e: LynxInputEvent) => setDraft(e.detail.value)}
-          />
-          <view className="Btn" bindtap={addTodo}>
-            <text className="BtnLabel">Add</text>
-          </view>
-        </view>
         <view className="Row">
-          <view
-            className={filter === "all" ? "Btn" : "Btn Btn--ghost"}
-            bindtap={() => setFilter("all")}
-          >
-            <text className="BtnLabel">All</text>
+          <view className="Pill">
+            <text className="PillLabel">DB {ready ? "ready" : "opening"}</text>
           </view>
-          <view
-            className={filter === "active" ? "Btn" : "Btn Btn--ghost"}
-            bindtap={() => setFilter("active")}
-          >
-            <text className="BtnLabel">Active</text>
+          <view className="Pill">
+            <text className="PillLabel">sync {syncLabel}</text>
           </view>
-          <view
-            className={filter === "done" ? "Btn" : "Btn Btn--ghost"}
-            bindtap={() => setFilter("done")}
-          >
-            <text className="BtnLabel">Done</text>
+          <view className="Pill">
+            <text className="PillLabel">hasSynced {hasSyncedLabel}</text>
+          </view>
+          <view className="Pill">
+            <text className="PillLabel">lastSynced {lastSyncedText}</text>
+          </view>
+          <view className="Pill">
+            <text className="PillLabel">
+              {firstSyncDone ? "first sync done" : "awaiting first sync"}
+            </text>
+          </view>
+          <view className="Pill">
+            <text className="PillLabel">device {device}</text>
           </view>
         </view>
-        {visible.map((todo) => (
-          <view key={todo.id} className="Item">
-            <view className="ItemMain" bindtap={() => toggleTodo(todo)}>
-              <text className={todo.completed ? "ItemTitle ItemTitle--done" : "ItemTitle"}>
-                {todo.completed ? "[x] " : "[ ] "}
-                {todo.description}
-              </text>
-            </view>
-            <view className="Btn Btn--ghost" bindtap={() => deleteTodo(todo)}>
-              <text className="BtnLabel">Delete</text>
-            </view>
-          </view>
-        ))}
-      </view>
+        <view
+          className="LinkWrap"
+          style={{ backgroundColor: "#0c1422", padding: 12 }}
+          bindtap={wantSync ? goOffline : goOnline}
+        >
+          <text className="Link">{wantSync ? "Go offline" : "Reconnect"}</text>
+        </view>
 
-      <view className="Card">
-        <view className="LogHead" bindtap={() => setLogOpen((open) => !open)}>
-          <text className="CardTitle">Sync log {logOpen ? "v" : ">"}</text>
-          <text className="CardHint">{logs.length} events</text>
-        </view>
-        {logOpen
-          ? logs.map((entry) => (
-              <view key={entry.id} className="LogRow">
-                <text className="LogAt">{entry.at}</text>
-                <text className="LogMsg">{entry.message}</text>
+        <view className="Card">
+          <text className="CardTitle">Todos</text>
+          <view className="Composer">
+            <input
+              key={draftField}
+              className="Field"
+              placeholder="What needs doing?"
+              default-value=""
+              bindinput={(e: LynxInputEvent) => setDraft(e.detail.value)}
+            />
+            <view className="Btn" bindtap={addTodo}>
+              <text className="BtnLabel">Add</text>
+            </view>
+          </view>
+          <view className="Row">
+            <view
+              className={filter === "all" ? "Btn" : "Btn Btn--ghost"}
+              bindtap={() => setFilter("all")}
+            >
+              <text className="BtnLabel">All</text>
+            </view>
+            <view
+              className={filter === "active" ? "Btn" : "Btn Btn--ghost"}
+              bindtap={() => setFilter("active")}
+            >
+              <text className="BtnLabel">Active</text>
+            </view>
+            <view
+              className={filter === "done" ? "Btn" : "Btn Btn--ghost"}
+              bindtap={() => setFilter("done")}
+            >
+              <text className="BtnLabel">Done</text>
+            </view>
+          </view>
+          {visible.map((todo) => (
+            <view key={todo.id} className="Item">
+              <view className="ItemMain" bindtap={() => toggleTodo(todo)}>
+                <text className={todo.completed ? "ItemTitle ItemTitle--done" : "ItemTitle"}>
+                  {todo.completed ? "[x] " : "[ ] "}
+                  {todo.description}
+                </text>
               </view>
-            ))
-          : null}
-      </view>
+              <view className="Btn Btn--ghost" bindtap={() => deleteTodo(todo)}>
+                <text className="BtnLabel">Delete</text>
+              </view>
+            </view>
+          ))}
+        </view>
+
+        <view className="Card">
+          <view className="LogHead" bindtap={() => setLogOpen((open) => !open)}>
+            <text className="CardTitle">Sync log {logOpen ? "v" : ">"}</text>
+            <text className="CardHint">{logs.length} events</text>
+          </view>
+          {logOpen
+            ? logs.map((entry) => (
+                <view key={entry.id} className="LogRow">
+                  <text className="LogAt">{entry.at}</text>
+                  <text className="LogMsg">{entry.message}</text>
+                </view>
+              ))
+            : null}
+        </view>
       </scroll-view>
     </page>
   );

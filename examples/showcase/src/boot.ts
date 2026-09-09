@@ -28,6 +28,7 @@ export interface DemoBootHooks {
   setCredentials: (creds: DemoBootCredentials) => void;
   connect: () => Promise<void>;
   onLocalReady: () => void;
+  onConnectSettled?: () => void;
   log: (message: string) => void;
   isCancelled: () => boolean;
   connectLabel: string;
@@ -60,6 +61,7 @@ export async function bootDemo(hooks: DemoBootHooks): Promise<void> {
       return;
     }
     hooks.log(`connect: ${hooks.connectLabel}`);
+    hooks.onConnectSettled?.();
   } catch (err) {
     hooks.log(
       `connect skipped: ${errorMessage(err)}. Start the sync profile (examples/README.md). Writes still queue locally.`,

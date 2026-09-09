@@ -121,6 +121,8 @@ await sub.waitForFirstSync();
 
 `currentStatus`, `db.waitForFirstSync()`, `subscription.waitForFirstSync()`, `registerListener({ statusChanged })`, `waitForStatus`.
 
+`waitForReady()` is local SQLite open. `waitForFirstSync()` is `hasSynced === true` (persisted in `powersync_offline_sync_status` across launches). `waitForStatus(s => s.connected)` is this session’s socket. Do not treat persisted `hasSynced` / `lastSyncedAt` as proof this session downloaded.
+
 ### Type sketch
 
 Shapes match `@powersync/common` 2.2 / official 2.x. Copy official names; do not invent Lynx aliases.
@@ -263,6 +265,8 @@ Apache-2.0 core. Entry `sqlite3_powersync_init`. SQLite **3.44+**, **never** App
 | Windows | bundled SQLite with `ENABLE_LOAD_EXTENSION` | GitHub loadable `powersync_{x64,x86,aarch64}.dll` + `loadExtension` |
 
 JS never calls `loadExtension`.
+
+Android Autolink consumers compile `android/` with **NDK** + **CMake** (`externalNativeBuild` → JNI `ps_sql`) and `-DANDROID_STL=c++_shared`. `android/build.gradle` runs `node scripts/fetch-native-deps.mjs --sqlite` on `preBuild`. Gradle-without-Node on consumer CI is a later packaging concern (issue 39 M2); it is not a Client API change.
 
 Host binders (iOS ObjC, Android JNI, desktop N-API) call this shared `ps_sql` engine. Wire-type differences that stay in the binder, not the engine:
 
