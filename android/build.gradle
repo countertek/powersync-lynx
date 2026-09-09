@@ -10,6 +10,8 @@ buildscript {
 
 apply plugin: "com.android.library"
 
+def repoRoot = file("..")
+
 android {
   namespace "com.powersync.lynx"
   compileSdkVersion 35
@@ -18,6 +20,15 @@ android {
     minSdkVersion 24
     targetSdkVersion 35
     consumerProguardFiles "consumer-rules.pro"
+    ndk {
+      abiFilters "armeabi-v7a", "arm64-v8a", "x86", "x86_64"
+    }
+    externalNativeBuild {
+      cmake {
+        arguments "-DPOWERSYNC_LYNX_ROOT=${repoRoot.absolutePath}",
+            "-DANDROID_STL=c++_shared"
+      }
+    }
   }
 
   compileOptions {
@@ -30,6 +41,12 @@ android {
       java.srcDirs = ["src/main/java"]
     }
   }
+
+  externalNativeBuild {
+    cmake {
+      path "src/main/cpp/CMakeLists.txt"
+    }
+  }
 }
 
 repositories {
@@ -37,8 +54,23 @@ repositories {
   mavenCentral()
 }
 
+tasks.register("fetchSqliteAmalgamation", Exec) {
+  workingDir repoRoot
+  commandLine "node", "scripts/fetch-native-deps.mjs", "--sqlite"
+  inputs.file("${repoRoot}/scripts/fetch-native-deps.mjs")
+  outputs.files(
+      "${repoRoot}/third_party/sqlite/sqlite3.c",
+      "${repoRoot}/third_party/sqlite/sqlite3.h")
+}
+
+afterEvaluate {
+  tasks.matching { it.name == "preBuild" || it.name.startsWith("configureCMake") }.configureEach {
+    dependsOn("fetchSqliteAmalgamation")
+  }
+}
+
 dependencies {
   implementation "com.powersync:powersync-sqlite-core:0.5.3"
-  implementation "androidx.sqlite:sqlite-bundled:2.6.2"
+  implementation "androidx.annotation:annotation:1.9.1"
   compileOnly "org.lynxsdk.lynx:lynx:4.0.1"
 }

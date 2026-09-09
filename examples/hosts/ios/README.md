@@ -89,12 +89,12 @@ Stock Lynx fetch on iOS does not deliver PowerSync’s live NDJSON body to PrimJ
 **Current path:** `LynxRemote` picks the `native-http` `SyncStreamTransport`, which calls Native Module HTTP (`httpFetch` on the Autolink lookup; implementation in `NativeSyncHttp`) the same way as Android.
 
 1. **Callback (one-shot):** status + `streamingId`, empty body.
-2. **Chunks:** `NSURLSession` data delegate keeps the connection open and posts UTF-8 `onData*` → `onError?` → `onEnd` via `LynxView.sendGlobalEvent` (or `initWithParam` event sender).
+2. **Chunks:** `NSURLSession` data delegate keeps the connection open and posts UTF-8 `onData*` → `onError?` → `onEnd` via the **host-provided** event sender (`LynxView.sendGlobalEvent`).
 3. **JS:** incremental ReadableStream apply — not ~2.5s idle-complete batching.
 
-Presence-only gate — do not require `typeof httpFetch === "function"`. Idle-complete remains a fallback when no event sender / LynxView is reachable.
+Presence-only gate — do not require `typeof httpFetch === "function"`. Idle-complete remains the fallback when **no event sender is registered**.
 
-The showcase `ViewController` calls `[NativePowerSyncModule setSharedStreamEventSender:lynxView]` after creating the view so `sendGlobalEvent` is available (Autolink does not pass the view as `initWithParam`).
+The showcase `ViewController` **must** call `[NativePowerSyncModule setSharedStreamEventSender:lynxView]` after creating the view. Autolink constructs `NativePowerSyncModule` without a `LynxView` `initWithParam`. The library does not walk `UIWindow`s looking for a `LynxView`.
 
 Confirm the module exports `httpFetch` and `httpFetchAbort` in `methodLookup`.
 

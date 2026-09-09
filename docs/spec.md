@@ -175,7 +175,7 @@ Default `connect` `connectionMethod`: **HTTP** (`BasePowerSyncDatabase` default)
 
 | Host | Streaming download | Connector JSON (`fetchCredentials` / `uploadData`) |
 |---|---|---|
-| iOS / Android | Native Module HTTP (`httpFetch` + `streamingId` / GlobalEventEmitter). Idle-complete UTF-8 body is fallback when no event sender is reachable. Stock Lynx fetch is not the live NDJSON path. | Ordinary JSON `fetch` (host HTTP Service). Does not need streaming. |
+| iOS / Android | Native Module HTTP (`httpFetch` + `streamingId` / GlobalEventEmitter). Idle-complete UTF-8 body is fallback when no event sender is registered. Stock Lynx fetch is not the live NDJSON path. | Ordinary JSON `fetch` (host HTTP Service). Does not need streaming. |
 | Windows / macOS | Identifier `fetch` (host `LynxHttpService`). Desktop N-API is SQL-only — no Native Module HTTP. Streaming is undocumented and unverified. | Ordinary JSON `fetch`. |
 | Lynx-for-Web | Browser `fetch` in the Lynx bundle (CORS applies). No Native Module HTTP. | Browser `fetch`. |
 
@@ -187,6 +187,8 @@ Mobile hosts still register a Lynx HTTP Service for Connector traffic: iOS `Lynx
 2. Chunks are UTF-8 strings on GlobalEventEmitter. Terminal sequence after headers: **`onData*` → `onError?` → `onEnd`**. JS waits for `onEnd`; `onError` records failure.
 3. `httpFetchAbort(streamingId)` cancels the native request.
 4. Idle-complete (2.5 s quiet window after bytes, UTF-8 `body` / `bodyBase64`, `idleComplete: true`) runs only when streaming cannot be started. It is not the primary realtime path.
+
+iOS GlobalEventEmitter posting uses a **host-provided** sender (`sendGlobalEvent:withParams:`): Autolink `initWithParam:` / `NativeSyncHttp initWithEventSender:`, or `+[NativePowerSyncModule setSharedStreamEventSender:]` (showcase registers the `LynxView`). The library does not walk `UIWindow`s. If no sender is registered, `httpFetch` uses idle-complete. Android posts through `LynxContext.sendGlobalEvent` when the module was constructed with a `LynxContext`; otherwise idle-complete.
 
 Presence-only gate: pick native-http when `httpFetch` is present (not `typeof === "function"`). Desktop SQL modules without `httpFetch` use identifier `fetch`.
 
@@ -257,10 +259,20 @@ Apache-2.0 core. Entry `sqlite3_powersync_init`. SQLite **3.44+**, **never** App
 |---|---|---|
 | iOS | Client-bundled 3.44+ | CocoaPods/SPM XCFramework + `sqlite3_auto_extension` |
 | macOS | same as iOS | same static auto-extension |
-| Android | bundled SQLite | Maven AAR `com.powersync:powersync-sqlite-core` → `libpowersync.so` + `loadExtension(..., "sqlite3_powersync_init")` |
+| Android | Client-bundled 3.44+ (same amalgamation as iOS/desktop, JNI `ps_sql`) | Maven AAR `com.powersync:powersync-sqlite-core` → `libpowersync.so` + `loadExtension(..., "sqlite3_powersync_init")` |
 | Windows | bundled SQLite with `ENABLE_LOAD_EXTENSION` | GitHub loadable `powersync_{x64,x86,aarch64}.dll` + `loadExtension` |
 
 JS never calls `loadExtension`.
+
+Host binders (iOS ObjC, Android JNI, desktop N-API) call this shared `ps_sql` engine. Wire-type differences that stay in the binder, not the engine:
+
+| Host | INTEGER beyond `Number.MAX_SAFE_INTEGER` | Default file path when `dbLocation` is omitted |
+|---|---|---|
+| iOS | tagged `{ __psBig: true, v: decimal }` | Documents directory |
+| Android | Lynx `Long` | `Context.getDatabasePath` |
+| Desktop N-API | N-API `BigInt` | filename as given |
+
+Lynx `ReadableArray` / `NS*` / N-API bind parsing stays in each binder. The JS Adapter already accepts Lynx BigInt, tagged `{ __psBig, v }`, and N-API BigInt via `decodeCell`.
 
 ### Registration
 

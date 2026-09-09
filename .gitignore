@@ -11,6 +11,7 @@ android/build/
 android/.cxx/
 android/.gradle/
 android/host/build/
+android/host/.cxx/
 android/host/.gradle/
 android/local.properties
 android/host/local.properties

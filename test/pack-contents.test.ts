@@ -89,6 +89,21 @@ test("packed tarball ships iOS build inputs and omits host/build residue", async
       "Android Native Module HTTP lives in NativeSyncHttp.java",
     );
     assert.equal(
+      has("android/src/main/java/com/powersync/lynx/PsSqlEngine.java"),
+      true,
+      "Android SQL JNI binder Java seam must ship",
+    );
+    assert.equal(
+      has("android/src/main/cpp/ps_sql_jni.cc"),
+      true,
+      "Android SQL JNI binder must ship",
+    );
+    assert.equal(
+      has("android/src/main/cpp/CMakeLists.txt"),
+      true,
+      "Android NDK CMake for ps_sql must ship",
+    );
+    assert.equal(
       has("shared/sync_http_policy.h"),
       true,
       "idle-complete / streaming timeouts live in shared/sync_http_policy.h",
