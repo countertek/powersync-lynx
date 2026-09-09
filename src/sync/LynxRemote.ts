@@ -7,7 +7,6 @@ import type {
   WebSocketSyncStreamPlatform,
 } from "@powersync/shared-internals/websockets";
 import { createLynxTextDecoder } from "./text-decoder.ts";
-import { enterEarlyCapture } from "./transport/events.ts";
 import {
   pickSyncStreamTransport,
   syncStreamRequestFromFetch,
@@ -37,9 +36,6 @@ export class LynxRemote extends AbstractRemote {
 
   async fetch(options: FetchOptions): Promise<Response> {
     const request = syncStreamRequestFromFetch(options);
-    if (request.expectStreamingResponse) {
-      enterEarlyCapture();
-    }
     const transport = pickSyncStreamTransport(request);
     if (request.expectStreamingResponse) {
       this.logger.log({

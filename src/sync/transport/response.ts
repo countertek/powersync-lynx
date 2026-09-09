@@ -1,55 +1,28 @@
-import { isFunction } from "../../type-guards.ts";
+import { isFunction, isString } from "../../type-guards.ts";
 import { copyToArrayBuffer } from "../../values.ts";
 import { gunzipSync, isGzip } from "../gunzip.ts";
-import {
-  copyHeaderRecord,
-  decodeBase64,
-  decodeUtf8,
-  isParsedJsonValue,
-  parseJsonText,
-  toUint8,
-} from "./bytes.ts";
+import { copyHeaderRecord, decodeUtf8, isParsedJsonValue, parseJsonText } from "./bytes.ts";
 import { lookupEmitter, streamingReader, streamingReaderFallback } from "./events.ts";
-import type { LynxFetchSuccessPayload, NativeHttpFetchEnvelope } from "./http-types.ts";
 
 /**
- * One decode shape for native HTTP and LynxFetchModule. Streaming vs
- * idle-complete is top-level (`streamingId` / `idleComplete` / `body` /
- * `bodyBase64`); LynxFetchModule `lynxExtension.streamingId` is mapped in.
+ * One internal Response constructor. Adapters interpret their own wire shape
+ * and pass either buffered bytes or a GlobalEventEmitter streamingId.
+ *
+ * `streamingFallback` is the LynxFetchModule / host nameless-slot path (T2).
  */
-export interface WireFetchSuccess {
-  url?: string;
-  body?: ArrayBuffer | Uint8Array | string;
-  headers?: Record<string, string>;
+export type SyncStreamResponseInit = {
   status?: number;
   statusText?: string;
-  streamingId?: string;
-  idleComplete?: boolean;
-  bodyBase64?: string;
-}
+  headers?: Record<string, string>;
+} & (
+  | { bytes: Uint8Array }
+  | { streamingId: string }
+  | { streamingFallback: true }
+);
 
-function wireStreamingId(result: WireFetchSuccess): string | undefined {
-  if (result.streamingId != null && result.streamingId.length > 0) {
-    return result.streamingId;
-  }
-  return undefined;
-}
-
-/** UTF-8 `body` first; `bodyBase64` is the idle-complete backup encoding. */
-function bodyFromFetchSuccess(result: WireFetchSuccess): Uint8Array {
-  const direct = toUint8(result.body);
-  if (direct.byteLength > 0) {
-    return direct;
-  }
-  const b64 = result.bodyBase64;
-  if (typeof b64 === "string" && b64.length > 0) {
-    return decodeBase64(b64);
-  }
-  return direct;
-}
-
-export function readerFromChunks(chunks: Uint8Array[]): ReadableStreamDefaultReader<Uint8Array> {
+function readerFromChunks(chunks: Uint8Array[]): ReadableStreamDefaultReader<Uint8Array> {
   let i = 0;
+  // SAFETY: chunk reader implements the ReadableStreamDefaultReader methods AbstractRemote calls.
   return {
     read() {
       if (i < chunks.length) {
@@ -68,39 +41,36 @@ export function readerFromChunks(chunks: Uint8Array[]): ReadableStreamDefaultRea
   } as ReadableStreamDefaultReader<Uint8Array>;
 }
 
-class LynxFetchResponse {
+function readerForInit(init: SyncStreamResponseInit): ReadableStreamDefaultReader<Uint8Array> {
+  if ("streamingId" in init && init.streamingId.length > 0) {
+    return streamingReader(init.streamingId);
+  }
+  if ("bytes" in init) {
+    if (init.bytes.byteLength > 0) {
+      return readerFromChunks([init.bytes]);
+    }
+    return readerFromChunks([]);
+  }
+  if (lookupEmitter() != null) {
+    return streamingReaderFallback();
+  }
+  return readerFromChunks([]);
+}
+
+class SyncStreamBodyResponse {
   ok: boolean;
   status: number;
   statusText: string;
   headers: { get: (name: string) => string | null };
   body: { getReader: () => ReadableStreamDefaultReader<Uint8Array> };
-  private rawBody: unknown;
-  constructor(result: WireFetchSuccess, streamingFallback = false) {
-    const status = Number(result.status ?? 0);
-    const streamingId = wireStreamingId(result);
-    const idleComplete = result.idleComplete === true;
-    const bodyBytes = bodyFromFetchSuccess(result);
-    let reader: ReadableStreamDefaultReader<Uint8Array>;
-    if (
-      streamingId != null &&
-      streamingId.length > 0 &&
-      bodyBytes.byteLength === 0 &&
-      !idleComplete
-    ) {
-      reader = streamingReader(streamingId);
-    } else if (bodyBytes.byteLength > 0) {
-      // Idle-complete / buffered body wins over nameless GlobalEventEmitter fallback.
-      reader = readerFromChunks([bodyBytes]);
-    } else if (streamingFallback) {
-      reader = streamingReaderFallback();
-    } else {
-      reader = readerFromChunks([]);
-    }
-    this.rawBody = bodyBytes.byteLength > 0 ? bodyBytes : result.body;
+
+  constructor(init: SyncStreamResponseInit) {
+    const status = Number(init.status ?? 0);
+    const reader = readerForInit(init);
     this.ok = status >= 200 && status < 300;
     this.status = status;
-    this.statusText = String(result.statusText ?? "");
-    const headers = copyHeaderRecord(result.headers);
+    this.statusText = String(init.statusText ?? "");
+    const headers = copyHeaderRecord(init.headers);
     this.headers = {
       get: (name: string) => headers[String(name).toLowerCase()] ?? null,
     };
@@ -108,6 +78,7 @@ class LynxFetchResponse {
       getReader: () => reader,
     };
   }
+
   async text(): Promise<string> {
     const parts: Uint8Array[] = [];
     const reader = this.body.getReader();
@@ -133,81 +104,19 @@ class LynxFetchResponse {
     const decoded = isGzip(joined) ? gunzipSync(joined) : joined;
     return decodeUtf8(copyToArrayBuffer(decoded));
   }
-  async json(): Promise<unknown> {
-    if (isParsedJsonValue(this.rawBody)) {
-      return this.rawBody;
-    }
-    if (typeof this.rawBody === "string") {
-      return parseJsonText(this.rawBody);
-    }
+
+  async json() {
     return parseJsonText(await this.text());
   }
 }
 
-function unwrapHostObject(result: unknown): object {
-  if (
-    Array.isArray(result) &&
-    result.length > 0 &&
-    result[0] != null &&
-    typeof result[0] === "object"
-  ) {
-    return result[0];
-  }
-  return (result ?? {}) as object;
-}
-
-export function unwrapFetchSuccess(result: unknown): WireFetchSuccess {
-  return unwrapHostObject(result) as WireFetchSuccess;
-}
-
-export function moduleResponse(result: WireFetchSuccess, streamingFallback = false): Response {
-  return new LynxFetchResponse(result, streamingFallback) as unknown as Response;
-}
-
-export function fromLynxFetchSuccess(result: unknown): WireFetchSuccess {
-  const payload = unwrapHostObject(result) as LynxFetchSuccessPayload;
-  const streamingId = payload.lynxExtension?.streamingId;
-  const wire: WireFetchSuccess = {
-    url: payload.url,
-    body: payload.body,
-    headers: payload.headers,
-    status: payload.status,
-    statusText: payload.statusText,
-  };
-  if (streamingId != null && streamingId.length > 0) {
-    wire.streamingId = streamingId;
-  }
-  return wire;
-}
-
-/** Native `httpFetch` envelope → one WireFetchSuccess (no lynxExtension re-encode). */
-export function fromNativeHttpEnvelope(result: NativeHttpFetchEnvelope): WireFetchSuccess {
-  const status = Number(result.status ?? 0);
-  const contentType =
-    typeof result.contentType === "string" && result.contentType.length > 0
-      ? result.contentType
-      : "application/x-ndjson";
-  const streamingId =
-    typeof result.streamingId === "string" && result.streamingId.length > 0
-      ? result.streamingId
-      : undefined;
-  const bodyText = typeof result.body === "string" ? result.body : "";
-  const wire: WireFetchSuccess = {
-    status,
-    statusText: String(result.statusText ?? ""),
-    headers: { "content-type": contentType },
-    body: streamingId != null ? "" : bodyText,
-  };
-  if (streamingId != null) {
-    wire.streamingId = streamingId;
-    wire.idleComplete = false;
-    return wire;
-  }
-  wire.idleComplete = result.idleComplete === true || bodyText.length > 0;
-  if (typeof result.bodyBase64 === "string" && result.bodyBase64.length > 0) {
-    wire.bodyBase64 = result.bodyBase64;
-  }
-  return wire;
+/**
+ * Finished `/sync/stream` Response from adapter-owned bytes or streamingId.
+ */
+export function syncStreamResponse(init: SyncStreamResponseInit): Response {
+  // SAFETY: SyncStreamBodyResponse implements the Response fields AbstractRemote
+  // reads (ok, status, statusText, headers, body, text, json).
+  return new SyncStreamBodyResponse(init) as Response;
 }
 
 /**
@@ -220,6 +129,7 @@ export function stabilizeStreamingResponse(
 ): Response {
   const captured = capturedBody === undefined ? response.body : capturedBody;
   const headers = response.headers;
+  // SAFETY: Host fetch bodies are one-shot; this wrapper is the Response AbstractRemote reads.
   return {
     ok: response.ok,
     status: response.status,
@@ -239,6 +149,7 @@ export function stabilizeStreamingResponse(
  */
 export function stabilizeJsonResponse(response: Response): Response {
   const headers = response.headers;
+  // SAFETY: JSON GETs must not consume Response.body; this wrapper is the Response AbstractRemote reads.
   return {
     ok: response.ok,
     status: response.status,
@@ -251,72 +162,33 @@ export function stabilizeJsonResponse(response: Response): Response {
   } as Response;
 }
 
-async function decodeIdentifierJson(response: Response): Promise<unknown> {
-  const withJson = response as Response & { json?: () => Promise<unknown> };
-  if (typeof withJson.json === "function") {
+interface IdentifierJsonObject {
+  readonly [key: string]: IdentifierJsonObject | string | number | boolean | null | undefined;
+}
+
+interface IdentifierJsonMethods {
+  json?: () => Promise<IdentifierJsonObject | string>;
+  text?: () => Promise<string>;
+}
+
+async function decodeIdentifierJson(response: Response) {
+  // SAFETY: identifier fetch may expose json()/text() beyond the DOM Response typedef.
+  const extra = response as Response & IdentifierJsonMethods;
+  if (isFunction(extra.json)) {
     try {
-      const value = await withJson.json();
+      const value = await extra.json();
       if (isParsedJsonValue(value)) {
         return value;
       }
-      if (typeof value === "string") {
+      if (isString(value)) {
         return parseJsonText(value);
       }
     } catch {
       // Lynx json() throws on the string undefined or gzip magic.
     }
   }
-  const withText = response as Response & { text?: () => Promise<string> };
-  if (typeof withText.text === "function") {
-    return parseJsonText(await withText.text());
+  if (isFunction(extra.text)) {
+    return parseJsonText(await extra.text());
   }
   return { data: {} };
-}
-
-export function eventStreamingResponse(response: Response, streamingId?: string): Response {
-  const headers = { "content-type": response.headers?.get("content-type") ?? "" };
-  if (streamingId != null && streamingId.length > 0) {
-    return moduleResponse({
-      status: response.status,
-      statusText: response.statusText,
-      headers,
-      streamingId,
-    });
-  }
-  if (lookupEmitter() != null) {
-    return moduleResponse(
-      {
-        status: response.status,
-        statusText: response.statusText,
-        headers,
-      },
-      true,
-    );
-  }
-  return stabilizeStreamingResponse(response, {
-    getReader: () => readerFromChunks([]),
-  } as Response["body"]);
-}
-
-export async function identifierStreamingResponse(response: Response): Promise<Response> {
-  const streamingId = (response as Response & { lynxExtension?: { streamingId?: string } })
-    .lynxExtension?.streamingId;
-  // Native httpFetch / LynxFetchModule: chunks arrive on GlobalEventEmitter keyed
-  // by streamingId. Prefer that even when a stub body getter exists.
-  if (streamingId != null && streamingId.length > 0) {
-    return eventStreamingResponse(response, streamingId);
-  }
-  let captured: Response["body"];
-  try {
-    captured = response.body;
-  } catch {
-    return eventStreamingResponse(response);
-  }
-  if (captured != null && isFunction(captured.getReader)) {
-    // Lynx-for-Web / desktop: identifier fetch body is the live NDJSON stream.
-    // lynx-bg always has GlobalEventEmitter; native onData never arrives there
-    // for host-fetch. Dropping the body made A↔B download apply zero ops.
-    return stabilizeStreamingResponse(response, captured);
-  }
-  return eventStreamingResponse(response);
 }

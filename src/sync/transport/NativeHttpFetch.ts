@@ -1,12 +1,13 @@
 import { getLynxHost } from "../../host.ts";
-import { isString } from "../../type-guards.ts";
+import { isNonNullObject, isString } from "../../type-guards.ts";
 import type {
   NativeHttpFetchEnvelope,
   NativeHttpFetchRequest,
   NativeSyncHttpModule,
 } from "./http-types.ts";
+import { decodeBase64, toUint8 } from "./bytes.ts";
 import { enterEarlyCapture } from "./events.ts";
-import { fromNativeHttpEnvelope, moduleResponse, unwrapFetchSuccess } from "./response.ts";
+import { syncStreamResponse } from "./response.ts";
 import type { SyncStreamRequest, SyncStreamTransport } from "./SyncStreamTransport.ts";
 
 export type {
@@ -38,6 +39,53 @@ export function lookupNativeSyncHttp(): NativeSyncHttpModule | undefined {
 
 export function nativeHttpFetchAvailable(): boolean {
   return lookupNativeSyncHttp() != null;
+}
+
+function unwrapNativeEnvelope(envelope: NativeHttpFetchEnvelope): NativeHttpFetchEnvelope {
+  if (!Array.isArray(envelope) || envelope.length === 0) {
+    return envelope;
+  }
+  const first = envelope[0];
+  if (!isNonNullObject(first)) {
+    return {};
+  }
+  // SAFETY: PrimJS may wrap the httpFetch callback argument in a one-element array.
+  return first as NativeHttpFetchEnvelope;
+}
+
+function contentTypeFromEnvelope(result: NativeHttpFetchEnvelope): string {
+  if (isString(result.contentType) && result.contentType.length > 0) {
+    return result.contentType;
+  }
+  return "application/x-ndjson";
+}
+
+/** Native `httpFetch` envelope → finished Response. This adapter owns the wire shape. */
+export function responseFromNativeHttpEnvelope(result: NativeHttpFetchEnvelope) {
+  const status = Number(result.status ?? 0);
+  const statusText = String(result.statusText ?? "");
+  const headers = { "content-type": contentTypeFromEnvelope(result) };
+  const streamingId =
+    isString(result.streamingId) && result.streamingId.length > 0 ? result.streamingId : undefined;
+  if (streamingId != null) {
+    return syncStreamResponse({
+      status,
+      statusText,
+      headers,
+      streamingId,
+    });
+  }
+  const bodyText = isString(result.body) ? result.body : "";
+  let bytes = toUint8(bodyText);
+  if (bytes.byteLength === 0 && isString(result.bodyBase64) && result.bodyBase64.length > 0) {
+    bytes = decodeBase64(result.bodyBase64);
+  }
+  return syncStreamResponse({
+    status,
+    statusText,
+    headers,
+    bytes,
+  });
 }
 
 function fetchViaNativeHttp(request: SyncStreamRequest): Promise<Response> {
@@ -82,8 +130,7 @@ function fetchViaNativeHttp(request: SyncStreamRequest): Promise<Response> {
     // methods may not be JS Function objects.
     httpFetch(payload, (envelope: NativeHttpFetchEnvelope) => {
       try {
-        // SAFETY: Native Callback hands NativeHttpFetchEnvelope; unwrap only peels a PrimJS array wrap.
-        const result = unwrapFetchSuccess(envelope) as NativeHttpFetchEnvelope;
+        const result = unwrapNativeEnvelope(envelope);
         if (result.ok === false) {
           reject(new Error(result.message ?? "Native Module HTTP httpFetch failed"));
           return;
@@ -98,7 +145,7 @@ function fetchViaNativeHttp(request: SyncStreamRequest): Promise<Response> {
             abortNative();
           }
         }
-        resolve(moduleResponse(fromNativeHttpEnvelope(result), false));
+        resolve(responseFromNativeHttpEnvelope(result));
       } catch (err) {
         reject(err);
       }

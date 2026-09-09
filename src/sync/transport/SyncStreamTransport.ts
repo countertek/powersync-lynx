@@ -1,6 +1,6 @@
 import type { FetchOptions } from "@powersync/shared-internals";
 import { isString } from "../../type-guards.ts";
-import { headerMap } from "./bytes.ts";
+import { headerMap, preferNdjsonAccept } from "./bytes.ts";
 import { hostFetchTransport } from "./HostFetch.ts";
 import { lynxFetchModuleAvailable, lynxFetchModuleTransport } from "./LynxFetchModule.ts";
 import { nativeHttpFetchAvailable, nativeHttpFetchTransport } from "./NativeHttpFetch.ts";
@@ -29,7 +29,7 @@ export function syncStreamRequestFromFetch(options: FetchOptions): SyncStreamReq
   const request: SyncStreamRequest = {
     url: String(options.resource),
     method: String(options.request.method ?? "GET"),
-    headers: headerMap(options.request.headers),
+    headers: preferNdjsonAccept(headerMap(options.request.headers)),
     expectStreamingResponse: options.expectStreamingResponse,
   };
   const body = options.request.body;

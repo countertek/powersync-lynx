@@ -1,6 +1,6 @@
 import { getLynxHost } from "../../host.ts";
 import type { LynxTextCodecHelper } from "../../globals.ts";
-import { isNumber, isString } from "../../type-guards.ts";
+import { isFunction, isNonNullObject, isNumber, isString } from "../../type-guards.ts";
 import { copyToArrayBuffer } from "../../values.ts";
 import { gunzipSync, isGzip } from "../gunzip.ts";
 
@@ -96,11 +96,34 @@ export function latin1Bytes(text: string): Uint8Array {
   return bytes;
 }
 
+/** PrimJS / host body shapes coerced to bytes at adapter boundaries. */
+export interface HostByteBag {
+  readonly buffer?: ArrayBuffer | ArrayBufferView;
+  readonly byteLength?: number;
+  readonly byteOffset?: number;
+  readonly length?: number;
+  readonly BYTES_PER_ELEMENT?: number;
+  readonly data?: ArrayBuffer | ArrayBufferView | string | readonly number[];
+}
+
+export type HostByteSource =
+  | ArrayBuffer
+  | ArrayBufferView
+  | string
+  | readonly number[]
+  | HostByteBag
+  | null
+  | undefined;
+
+interface IndexedHostBytes extends HostByteBag {
+  readonly [index: number]: number;
+}
+
 /**
  * Coerce PrimJS / native wire bodies to bytes. Hosts may hand ArrayBuffers from
  * another realm, number arrays, or latin1 strings of gzip magic.
  */
-export function toUint8(data: unknown): Uint8Array {
+export function toUint8(data: HostByteSource): Uint8Array {
   if (data == null) {
     return new Uint8Array(0);
   }
@@ -110,12 +133,11 @@ export function toUint8(data: unknown): Uint8Array {
   if (data instanceof ArrayBuffer) {
     return new Uint8Array(data);
   }
-  if (typeof ArrayBuffer !== "undefined" && ArrayBuffer.isView(data as ArrayBufferView)) {
-    const view = data as ArrayBufferView;
-    return new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
+  if (typeof ArrayBuffer !== "undefined" && ArrayBuffer.isView(data)) {
+    return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
   }
   if (Array.isArray(data)) {
-    return new Uint8Array(data as number[]);
+    return new Uint8Array(data);
   }
   if (isString(data)) {
     const raw = latin1Bytes(data);
@@ -124,74 +146,73 @@ export function toUint8(data: unknown): Uint8Array {
     }
     return new Uint8Array(encodeUtf8(data));
   }
-  if (typeof data === "object") {
-    const tag = Object.prototype.toString.call(data);
-    // PrimJS may hand ArrayBuffers from another realm — instanceof fails.
-    if (tag === "[object ArrayBuffer]") {
-      try {
-        return new Uint8Array(data as ArrayBuffer);
-      } catch {
-        // fall through
-      }
+  if (!isNonNullObject(data)) {
+    return new Uint8Array(0);
+  }
+  const tag = Object.prototype.toString.call(data);
+  // PrimJS may hand ArrayBuffers from another realm — instanceof fails.
+  if (tag === "[object ArrayBuffer]") {
+    try {
+      // SAFETY: toString tag is ArrayBuffer when instanceof failed across realms.
+      return new Uint8Array(data as ArrayBuffer);
+    } catch {
+      // fall through
     }
-    if (tag === "[object Uint8Array]" || tag === "[object Uint8ClampedArray]") {
-      try {
-        const view = data as ArrayBufferView;
-        const copy = new Uint8Array(view.byteLength);
-        copy.set(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
-        return copy;
-      } catch {
-        // fall through
-      }
+  }
+  if (tag === "[object Uint8Array]" || tag === "[object Uint8ClampedArray]") {
+    try {
+      // SAFETY: toString tag is a typed array when instanceof failed across realms.
+      const view = data as ArrayBufferView;
+      const copy = new Uint8Array(view.byteLength);
+      copy.set(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
+      return copy;
+    } catch {
+      // fall through
     }
-    const rec = data as {
-      buffer?: unknown;
-      byteLength?: unknown;
-      byteOffset?: unknown;
-      length?: unknown;
-      BYTES_PER_ELEMENT?: unknown;
-      data?: unknown;
-    };
-    if (rec.buffer != null && isNumber(rec.byteLength)) {
-      try {
-        const offset = isNumber(rec.byteOffset) ? rec.byteOffset : 0;
-        const length = Number(rec.byteLength);
-        const base = toUint8(rec.buffer);
-        if (base.byteLength > 0) {
-          return base.subarray(offset, offset + length);
-        }
-      } catch {
-        // fall through
+  }
+  const rec = data;
+  if (rec.buffer != null && isNumber(rec.byteLength)) {
+    try {
+      const offset = isNumber(rec.byteOffset) ? rec.byteOffset : 0;
+      const length = Number(rec.byteLength);
+      const base = toUint8(rec.buffer);
+      if (base.byteLength > 0) {
+        return base.subarray(offset, offset + length);
       }
+    } catch {
+      // fall through
     }
-    if (isNumber(rec.byteLength) && rec.byteLength > 0 && rec.BYTES_PER_ELEMENT == null) {
-      try {
-        return new Uint8Array(data as ArrayBuffer);
-      } catch {
-        // fall through
-      }
+  }
+  if (isNumber(rec.byteLength) && rec.byteLength > 0 && rec.BYTES_PER_ELEMENT == null) {
+    try {
+      // SAFETY: host bag with byteLength and no BYTES_PER_ELEMENT is a raw ArrayBuffer.
+      return new Uint8Array(data as ArrayBuffer);
+    } catch {
+      // fall through
     }
-    if (isNumber(rec.length) && rec.length > 0) {
-      const len = Number(rec.length);
-      const out = new Uint8Array(len);
-      let numeric = true;
-      for (let i = 0; i < len; i++) {
-        const value = (data as Record<string, unknown>)[String(i)];
-        if (!isNumber(value)) {
-          numeric = false;
-          break;
-        }
-        out[i] = value & 0xff;
+  }
+  if (isNumber(rec.length) && rec.length > 0) {
+    const len = Number(rec.length);
+    const out = new Uint8Array(len);
+    let numeric = true;
+    // SAFETY: PrimJS may hand array-like host objects with numeric keys.
+    const indexed = rec as IndexedHostBytes;
+    for (let i = 0; i < len; i++) {
+      const value = indexed[i];
+      if (!isNumber(value)) {
+        numeric = false;
+        break;
       }
-      if (numeric) {
-        return out;
-      }
+      out[i] = value & 0xff;
     }
-    if (rec.data != null && rec.data !== data) {
-      const nested = toUint8(rec.data);
-      if (nested.byteLength > 0) {
-        return nested;
-      }
+    if (numeric) {
+      return out;
+    }
+  }
+  if (rec.data != null && rec.data !== data) {
+    const nested = toUint8(rec.data);
+    if (nested.byteLength > 0) {
+      return nested;
     }
   }
   return new Uint8Array(0);
@@ -199,15 +220,21 @@ export function toUint8(data: unknown): Uint8Array {
 
 const BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
+interface BufferGlobal {
+  Buffer?: {
+    from(value: string, encoding: string): Uint8Array;
+  };
+}
+
 export function decodeBase64(text: string): Uint8Array {
   if (text.length === 0) {
     return new Uint8Array(0);
   }
-  if (typeof atob === "function") {
+  if (typeof atob !== "undefined" && isFunction(atob)) {
     return latin1Bytes(atob(text));
   }
-  const Buf = (globalThis as { Buffer?: { from: (value: string, encoding: string) => Uint8Array } })
-    .Buffer;
+  // SAFETY: Node test runtime may expose Buffer on globalThis.
+  const Buf = (globalThis as BufferGlobal).Buffer;
   if (Buf != null) {
     return new Uint8Array(Buf.from(text, "base64"));
   }
@@ -294,9 +321,14 @@ export function preferNdjsonAccept(headers: Record<string, string>): Record<stri
   return headers;
 }
 
+interface HeaderFields {
+  readonly [name: string]: string | undefined;
+}
+
+/** Copy header pairs only. NDJSON Accept policy is {@link preferNdjsonAccept}. */
 export function headerMap(headers: HeadersInit | undefined): Record<string, string> {
   const out: Record<string, string> = {};
-  if (headers == null || typeof headers !== "object") {
+  if (headers == null) {
     return out;
   }
   if (Array.isArray(headers)) {
@@ -305,30 +337,27 @@ export function headerMap(headers: HeadersInit | undefined): Record<string, stri
         out[String(pair[0])] = String(pair[1]);
       }
     }
-    return preferNdjsonAccept(out);
+    return out;
   }
-  const rec = headers as Record<string, unknown>;
-  for (const key in rec) {
-    if (!Object.prototype.hasOwnProperty.call(rec, key)) {
-      continue;
-    }
+  // SAFETY: remaining HeadersInit after the array branch is a string header record.
+  const rec = headers as HeaderFields;
+  for (const key of Object.keys(rec)) {
     const value = rec[key];
     if (value != null) {
       out[key] = String(value);
     }
   }
-  return preferNdjsonAccept(out);
+  return out;
 }
 
-export function copyHeaderRecord(headers: unknown): Record<string, string> {
+export function copyHeaderRecord(headers: HeaderFields | undefined): Record<string, string> {
   const lower: Record<string, string> = {};
-  if (headers == null || typeof headers !== "object") {
+  if (headers == null) {
     return lower;
   }
-  const rec = headers as Record<string, unknown>;
-  for (const key of Object.keys(rec)) {
-    const value = rec[key];
-    if (value == null || typeof value === "object") {
+  for (const key of Object.keys(headers)) {
+    const value = headers[key];
+    if (value == null) {
       continue;
     }
     lower[key.toLowerCase()] = String(value);
