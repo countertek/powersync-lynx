@@ -2,11 +2,7 @@ import type { PowerSyncBackendConnector, PowerSyncLogger } from "@powersync/comm
 
 import type { NativeModulesHost, NativePowerSyncModule } from "../src/adapter/native.ts";
 import type { NativeSyncHttpModule } from "../src/sync/transport/http-types.ts";
-import {
-  createFakeEmitter,
-  withFakeLynxHost,
-  type FakeLynxHostState,
-} from "./fake-lynx-host.ts";
+import { createFakeEmitter, withFakeLynxHost, type FakeLynxHostState } from "./fake-lynx-host.ts";
 
 export { createFakeEmitter, withFakeLynxHost };
 export type { FakeLynxHostState };
@@ -46,7 +42,7 @@ function sqlNoops(): NativePowerSyncModule {
 }
 
 export function nativeWithHttp(
-  extra: Pick<NativeSyncHttpModule, "httpFetch"> & Partial<NativeSyncHttpModule>,
+  extra: Partial<NativeSyncHttpModule> = {},
 ): NativePowerSyncModule & Partial<NativeSyncHttpModule> {
   return { ...sqlNoops(), ...extra };
 }
