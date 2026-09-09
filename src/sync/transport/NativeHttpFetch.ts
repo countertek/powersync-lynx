@@ -1,5 +1,4 @@
 import { getLynxHost } from "../../host.ts";
-import type { NativePowerSyncModule } from "../../adapter/native.ts";
 import { isString } from "../../type-guards.ts";
 import type {
   NativeHttpFetchEnvelope,
@@ -26,11 +25,15 @@ export function lookupNativeSyncHttp(): NativeSyncHttpModule | undefined {
   if (sql == null) {
     return undefined;
   }
-  const http = sql as NativePowerSyncModule & Partial<NativeSyncHttpModule>;
-  if (http.httpFetch == null) {
+  const httpFetch = sql.httpFetch;
+  if (httpFetch == null) {
     return undefined;
   }
-  return http;
+  const module: NativeSyncHttpModule = { httpFetch };
+  if (sql.httpFetchAbort != null) {
+    module.httpFetchAbort = sql.httpFetchAbort;
+  }
+  return module;
 }
 
 export function nativeHttpFetchAvailable(): boolean {

@@ -58,9 +58,7 @@ function fetchViaLynxModule(request: SyncStreamRequest): Promise<Response> {
       payload,
       (result) => {
         try {
-          resolve(
-            moduleResponse(fromLynxFetchSuccess(result), request.expectStreamingResponse),
-          );
+          resolve(moduleResponse(fromLynxFetchSuccess(result), request.expectStreamingResponse));
         } catch (err) {
           reject(err);
         }
