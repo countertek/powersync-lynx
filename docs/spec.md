@@ -6,7 +6,7 @@ The **Client** is official PowerSync JavaScript on Lynx: one Autolink npm, one J
 
 Placeholder npm name: `powersync-lynx`. License: Apache-2.0. Lynx **4.0+**. The real npm scope is a later publish decision, not this spec.
 
-Glossary: [`CONTEXT.md`](../CONTEXT.md). Why the Native Module, Host helper, and native sync HTTP look this way: [ADR 0001](adr/0001-native-module-is-async-sql-rpc.md), [ADR 0002](adr/0002-host-helper-is-wasqlite-sql-rpc.md), [ADR 0003](adr/0003-native-module-http-is-streaming-fallback.md).
+Glossary: [`CONTEXT.md`](../CONTEXT.md). Why the Native Module, Host helper, and native sync HTTP look this way: [ADR 0001](adr/0001-native-module-is-async-sql-rpc.md), [ADR 0002](adr/0002-host-helper-is-wasqlite-sql-rpc.md), [ADR 0003](adr/0003-native-module-http-is-streaming-fallback.md), [ADR 0004](adr/0004-lynx-fetch-module-is-json-only.md).
 
 ---
 
@@ -177,7 +177,7 @@ Default `connect` `connectionMethod`: **HTTP** (`BasePowerSyncDatabase` default)
 
 | Host | Streaming download | Connector JSON (`fetchCredentials` / `uploadData`) |
 |---|---|---|
-| iOS / Android | Native Module HTTP (`httpFetch` + `streamingId` / GlobalEventEmitter). Idle-complete UTF-8 body is fallback when no event sender is registered. Stock Lynx fetch is not the live NDJSON path. | Ordinary JSON `fetch` (host HTTP Service). Does not need streaming. |
+| iOS / Android | Native Module HTTP (`httpFetch` + `streamingId` / GlobalEventEmitter). Idle-complete UTF-8 body is fallback when no event sender is registered. Stock Lynx fetch is not the live NDJSON path. `LynxFetchModule` is never a stream transport ([ADR 0004](adr/0004-lynx-fetch-module-is-json-only.md)). | Ordinary JSON `fetch` (host HTTP Service). Android write-checkpoint / JSON GETs use `LynxFetchModule`. |
 | Windows / macOS | Identifier `fetch` (host `LynxHttpService`). Desktop N-API is SQL-only — no Native Module HTTP. Streaming is undocumented and unverified. | Ordinary JSON `fetch`. |
 | Lynx-for-Web | Browser `fetch` in the Lynx bundle (CORS applies). No Native Module HTTP. | Browser `fetch`. |
 
@@ -192,7 +192,7 @@ Mobile hosts still register a Lynx HTTP Service for Connector traffic: iOS `Lynx
 
 iOS GlobalEventEmitter posting uses a **host-provided** sender (`sendGlobalEvent:withParams:`): Autolink `initWithParam:` / `NativeSyncHttp initWithEventSender:`, or `+[NativePowerSyncModule setSharedStreamEventSender:]` (showcase registers the `LynxView`). The library does not walk `UIWindow`s. If no sender is registered, `httpFetch` uses idle-complete. Android posts through `LynxContext.sendGlobalEvent` when the module was constructed with a `LynxContext`; otherwise idle-complete.
 
-Presence-only gate: pick native-http when `httpFetch` is present (not `typeof === "function"`). Desktop SQL modules without `httpFetch` use identifier `fetch`.
+Presence-only gate: pick native-http when `httpFetch` is present (not `typeof === "function"`). Desktop SQL modules without `httpFetch` use identifier `fetch`. Android `LynxFetchModule` is JSON-only ([ADR 0004](adr/0004-lynx-fetch-module-is-json-only.md)); it is never picked for `/sync/stream`.
 
 ---
 

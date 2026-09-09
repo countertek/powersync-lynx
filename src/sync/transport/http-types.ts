@@ -60,6 +60,10 @@ export interface LynxFetchSuccessPayload {
 }
 
 export interface LynxFetchModule {
+  /**
+   * Android JSON HTTP (write-checkpoint). Not a `/sync/stream` transport
+   * (ADR-0004). Success `lynxExtension.streamingId` is ignored.
+   */
   fetch(
     request: LynxFetchRequest,
     resolve: (response: LynxFetchSuccessPayload) => void,

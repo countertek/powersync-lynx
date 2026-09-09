@@ -2,19 +2,17 @@ import { isFunction, isString } from "../../type-guards.ts";
 import { copyToArrayBuffer } from "../../values.ts";
 import { gunzipSync, isGzip } from "../gunzip.ts";
 import { copyHeaderRecord, decodeUtf8, isParsedJsonValue, parseJsonText } from "./bytes.ts";
-import { lookupEmitter, streamingReader, streamingReaderFallback } from "./events.ts";
+import { streamingReader } from "./events.ts";
 
 /**
  * One internal Response constructor. Adapters interpret their own wire shape
  * and pass either buffered bytes or a GlobalEventEmitter streamingId.
- *
- * `streamingFallback` is the LynxFetchModule / host nameless-slot path (T2).
  */
 export type SyncStreamResponseInit = {
   status?: number;
   statusText?: string;
   headers?: Record<string, string>;
-} & ({ bytes: Uint8Array } | { streamingId: string } | { streamingFallback: true });
+} & ({ bytes: Uint8Array } | { streamingId: string });
 
 function readerFromChunks(chunks: Uint8Array[]): ReadableStreamDefaultReader<Uint8Array> {
   let i = 0;
@@ -38,17 +36,14 @@ function readerFromChunks(chunks: Uint8Array[]): ReadableStreamDefaultReader<Uin
 }
 
 function readerForInit(init: SyncStreamResponseInit): ReadableStreamDefaultReader<Uint8Array> {
-  if ("streamingId" in init && init.streamingId.length > 0) {
-    return streamingReader(init.streamingId);
-  }
-  if ("bytes" in init) {
-    if (init.bytes.byteLength > 0) {
-      return readerFromChunks([init.bytes]);
+  if ("streamingId" in init) {
+    if (init.streamingId.length > 0) {
+      return streamingReader(init.streamingId);
     }
     return readerFromChunks([]);
   }
-  if (lookupEmitter() != null) {
-    return streamingReaderFallback();
+  if (init.bytes.byteLength > 0) {
+    return readerFromChunks([init.bytes]);
   }
   return readerFromChunks([]);
 }

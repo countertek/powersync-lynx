@@ -54,7 +54,27 @@ test("pickSyncStreamTransport prefers native-http when NativePowerSyncModule is 
   );
 });
 
-test("pickSyncStreamTransport uses lynx-fetch-module on Android without httpFetch", async () => {
+test("pickSyncStreamTransport skips lynx-fetch-module for streaming even on Android", async () => {
+  await withFakeLynxHost(
+    {
+      platform: "Android",
+      nativeModules: {
+        LynxFetchModule: {
+          fetch() {
+            throw new Error("LynxFetchModule must not be picked for streaming");
+          },
+        },
+      },
+      fetchImpl: async () => new Response(null, { status: 200 }),
+    },
+    async () => {
+      const picked = pickSyncStreamTransport(streamingRequest());
+      assert.equal(picked.name, "host-fetch");
+    },
+  );
+});
+
+test("pickSyncStreamTransport uses lynx-fetch-module for Android JSON without httpFetch", async () => {
   await withFakeLynxHost(
     {
       platform: "Android",
@@ -67,7 +87,13 @@ test("pickSyncStreamTransport uses lynx-fetch-module on Android without httpFetc
       },
     },
     async () => {
-      const picked = pickSyncStreamTransport(streamingRequest());
+      const picked = pickSyncStreamTransport(
+        syncStreamRequestFromFetch({
+          resource: "http://127.0.0.1:8080/write-checkpoint2.json?client_id=1",
+          request: { method: "GET" },
+          expectStreamingResponse: false,
+        }),
+      );
       assert.equal(picked.name, "lynx-fetch-module");
     },
   );
@@ -244,37 +270,25 @@ test("NativeHttpFetch owns the httpFetch envelope and returns a finished Respons
   );
 });
 
-test("LynxFetchModule owns lynxExtension.streamingId and returns a finished Response", async () => {
-  await withFakeLynxHost(
-    {
-      emitter: { addListener() {} },
-    },
-    async () => {
-      const streamed = responseFromLynxFetchSuccess(
-        {
-          status: 200,
-          statusText: "OK",
-          headers: { "content-type": "application/x-ndjson" },
-          lynxExtension: { streamingId: "stream-owned" },
-        },
-        true,
-      );
-      assert.equal(streamed.ok, true);
-      assert.equal(streamed.status, 200);
-      assert.equal(streamed.headers.get("content-type"), "application/x-ndjson");
-      assert.equal(streamed.body != null, true);
+test("LynxFetchModule maps a finished JSON Response and ignores lynxExtension.streamingId", async () => {
+  const ignoredStream = responseFromLynxFetchSuccess({
+    status: 200,
+    statusText: "OK",
+    headers: { "content-type": "application/json" },
+    lynxExtension: { streamingId: "must-not-subscribe" },
+  });
+  assert.equal(ignoredStream.ok, true);
+  assert.equal(ignoredStream.status, 200);
+  assert.equal(ignoredStream.headers.get("content-type"), "application/json");
+  const empty = await ignoredStream.body!.getReader().read();
+  assert.equal(empty.done, true);
 
-      const buffered = responseFromLynxFetchSuccess(
-        {
-          status: 200,
-          body: '{"ok":1}\n',
-        },
-        true,
-      );
-      const first = await buffered.body!.getReader().read();
-      assert.equal(new TextDecoder().decode(first.value), '{"ok":1}\n');
-    },
-  );
+  const buffered = responseFromLynxFetchSuccess({
+    status: 200,
+    body: '{"ok":1}\n',
+  });
+  const first = await buffered.body!.getReader().read();
+  assert.equal(new TextDecoder().decode(first.value), '{"ok":1}\n');
 });
 
 test("HostFetch returns a finished Response from the Fetch body without sniffing lynxExtension", async () => {
