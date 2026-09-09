@@ -1,3 +1,4 @@
+import { isFunction } from "../../type-guards.ts";
 import { copyToArrayBuffer } from "../../values.ts";
 import { gunzipSync, isGzip } from "../gunzip.ts";
 import {
@@ -300,19 +301,22 @@ export function eventStreamingResponse(response: Response, streamingId?: string)
 export async function identifierStreamingResponse(response: Response): Promise<Response> {
   const streamingId = (response as Response & { lynxExtension?: { streamingId?: string } })
     .lynxExtension?.streamingId;
+  // Native httpFetch / LynxFetchModule: chunks arrive on GlobalEventEmitter keyed
+  // by streamingId. Prefer that even when a stub body getter exists.
+  if (streamingId != null && streamingId.length > 0) {
+    return eventStreamingResponse(response, streamingId);
+  }
   let captured: Response["body"];
   try {
     captured = response.body;
   } catch {
-    return eventStreamingResponse(response, streamingId);
+    return eventStreamingResponse(response);
   }
-  if (captured == null || typeof captured.getReader !== "function") {
-    return eventStreamingResponse(response, streamingId);
+  if (captured != null && isFunction(captured.getReader)) {
+    // Lynx-for-Web / desktop: identifier fetch body is the live NDJSON stream.
+    // lynx-bg always has GlobalEventEmitter; native onData never arrives there
+    // for host-fetch. Dropping the body made A↔B download apply zero ops.
+    return stabilizeStreamingResponse(response, captured);
   }
-  // Official identifier body is often an empty/non-incremental stub while
-  // native onData still arrives on GlobalEventEmitter.
-  if (lookupEmitter() != null) {
-    return eventStreamingResponse(response, streamingId);
-  }
-  return stabilizeStreamingResponse(response, captured);
+  return eventStreamingResponse(response);
 }

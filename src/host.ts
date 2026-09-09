@@ -8,7 +8,7 @@ import type {
   LynxSystemInfo,
   LynxTextCodecHelper,
 } from "./globals.ts";
-import { isString } from "./type-guards.ts";
+import { isNonNullObject, isString } from "./type-guards.ts";
 
 installAbortControllerPolyfill();
 
@@ -112,6 +112,27 @@ function tableHasModules(host: NativeModulesHost | undefined): host is NativeMod
   return host != null && (host.NativePowerSyncModule != null || host.LynxFetchModule != null);
 }
 
+/**
+ * Lynx's published `NativeModules` type (rspeedy / `@lynx-js/types`) does not
+ * overlap {@link NativeModulesHost} — assigning it directly is TS2559. Probe
+ * the PrimJS bag as `unknown` and read our fields at runtime.
+ */
+function asNativeModulesTable(value: unknown): NativeModulesHost | undefined {
+  if (!isNonNullObject(value)) {
+    return undefined;
+  }
+  // SAFETY: PrimJS NativeModules is a host bag; Lynx's type has no shared keys.
+  return value as NativeModulesHost;
+}
+
+function readBareNativeModules(): unknown {
+  try {
+    return NativeModules as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
 function nativeModuleField<K extends "NativePowerSyncModule" | "LynxFetchModule">(
   table: NativeModulesHost | undefined,
   field: K,
@@ -201,12 +222,14 @@ export class PrimJSLynxHost implements LynxHost {
   }
 
   fetchImpl(): HostFetch | undefined {
-    if (isHostFetch(globalThis.fetch)) {
-      return globalThis.fetch;
+    const fromGlobal = globalThis.fetch as unknown;
+    if (isHostFetch(fromGlobal)) {
+      return fromGlobal;
     }
     try {
-      if (isHostFetch(fetch)) {
-        return fetch;
+      const fromBinding = fetch as unknown;
+      if (isHostFetch(fromBinding)) {
+        return fromBinding;
       }
     } catch {
       return undefined;
@@ -215,19 +238,16 @@ export class PrimJSLynxHost implements LynxHost {
   }
 
   private lookupNativeModulesTable(): NativeModulesHost | undefined {
-    const fromGlobalThis = globalThis.NativeModules;
+    const fromGlobalThis = asNativeModulesTable(globalThis.NativeModules as unknown);
     if (tableHasModules(fromGlobalThis)) {
       return fromGlobalThis;
     }
-    try {
-      if (tableHasModules(NativeModules)) {
-        return NativeModules;
-      }
-      if (NativeModules != null) {
-        return NativeModules;
-      }
-    } catch {
-      // NativeModules may be an unbound identifier outside Lynx.
+    const fromBinding = asNativeModulesTable(readBareNativeModules());
+    if (tableHasModules(fromBinding)) {
+      return fromBinding;
+    }
+    if (fromBinding != null) {
+      return fromBinding;
     }
     const fromEval = evalBinding<NativeModulesHost>(
       "typeof NativeModules === 'undefined' ? undefined : NativeModules",
@@ -239,17 +259,19 @@ export class PrimJSLynxHost implements LynxHost {
   }
 
   private lookupNativePowerSyncModule(): NativePowerSyncModule | undefined {
-    const fromGlobalThis = nativeModuleField(globalThis.NativeModules, "NativePowerSyncModule");
+    const fromGlobalThis = nativeModuleField(
+      asNativeModulesTable(globalThis.NativeModules as unknown),
+      "NativePowerSyncModule",
+    );
     if (fromGlobalThis != null) {
       return fromGlobalThis;
     }
-    try {
-      const fromBinding = nativeModuleField(NativeModules, "NativePowerSyncModule");
-      if (fromBinding != null) {
-        return fromBinding;
-      }
-    } catch {
-      // NativeModules may be an unbound identifier outside Lynx.
+    const fromBinding = nativeModuleField(
+      asNativeModulesTable(readBareNativeModules()),
+      "NativePowerSyncModule",
+    );
+    if (fromBinding != null) {
+      return fromBinding;
     }
     const table = evalBinding<NativeModulesHost>(
       "typeof NativeModules === 'undefined' ? undefined : NativeModules",
@@ -258,17 +280,19 @@ export class PrimJSLynxHost implements LynxHost {
   }
 
   private lookupLynxFetchModule(): LynxFetchModule | undefined {
-    const fromGlobalThis = nativeModuleField(globalThis.NativeModules, "LynxFetchModule");
+    const fromGlobalThis = nativeModuleField(
+      asNativeModulesTable(globalThis.NativeModules as unknown),
+      "LynxFetchModule",
+    );
     if (fromGlobalThis != null) {
       return fromGlobalThis;
     }
-    try {
-      const fromBinding = nativeModuleField(NativeModules, "LynxFetchModule");
-      if (fromBinding != null) {
-        return fromBinding;
-      }
-    } catch {
-      // NativeModules may be an unbound identifier outside Lynx.
+    const fromBinding = nativeModuleField(
+      asNativeModulesTable(readBareNativeModules()),
+      "LynxFetchModule",
+    );
+    if (fromBinding != null) {
+      return fromBinding;
     }
     const table = evalBinding<NativeModulesHost>(
       "typeof NativeModules === 'undefined' ? undefined : NativeModules",

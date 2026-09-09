@@ -29,6 +29,8 @@ async function fetchViaHost(request: SyncStreamRequest): Promise<Response> {
   if (!request.expectStreamingResponse) {
     return stabilizeJsonResponse(response);
   }
+  // Keep a usable Fetch body. Do not reroute to GlobalEventEmitter just because
+  // lynx-bg has one — that is the native streamingId path, not host-fetch.
   return identifierStreamingResponse(response);
 }
 
