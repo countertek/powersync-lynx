@@ -86,10 +86,10 @@ ATS is `NSAllowsLocalNetworking` only (not `NSAllowsArbitraryLoads`).
 
 Stock Lynx fetch on iOS does not deliver PowerSync’s live NDJSON body to PrimJS (`ps_buckets=0` on the identifier/`LynxFetchModule` path).
 
-**Current path:** `LynxRemote` picks the `native-http` `SyncStreamTransport`, which calls `NativePowerSyncModule.httpFetch` for streaming downloads on iOS the same way as Android.
+**Current path:** `LynxRemote` picks the `native-http` `SyncStreamTransport`, which calls Native Module HTTP (`httpFetch` on the Autolink lookup; implementation in `NativeSyncHttp`) the same way as Android.
 
 1. **Callback (one-shot):** status + `streamingId`, empty body.
-2. **Chunks:** `NSURLSession` data delegate keeps the connection open and posts UTF-8 `onData` / `onEnd` via `LynxView.sendGlobalEvent` (or `initWithParam` event sender).
+2. **Chunks:** `NSURLSession` data delegate keeps the connection open and posts UTF-8 `onData*` → `onError?` → `onEnd` via `LynxView.sendGlobalEvent` (or `initWithParam` event sender).
 3. **JS:** incremental ReadableStream apply — not ~2.5s idle-complete batching.
 
 Presence-only gate — do not require `typeof httpFetch === "function"`. Idle-complete remains a fallback when no event sender / LynxView is reachable.

@@ -81,7 +81,7 @@ import { attach } from "powersync-lynx/web-host";
 Stock Lynx fetch cannot reliably deliver live `/sync/stream` NDJSON on device. Native hosts use **`NativePowerSyncModule.httpFetch`**:
 
 1. One-shot callback returns status + `streamingId` (empty body).
-2. Chunks arrive as UTF-8 strings on **`GlobalEventEmitter`** (`onData` / `onEnd` / `onError`).
+2. Chunks arrive as UTF-8 strings on **`GlobalEventEmitter`**. Terminal sequence: `onData*` → `onError?` → `onEnd`.
 3. `LynxRemote` rebuilds a ReadableStream so PowerSync applies NDJSON incrementally.
 
 Idle-complete / `raw-body` remains a fallback when no event sender is available. Rebuild showcase + host after pulling streaming changes. Details: [iOS host](https://github.com/countertek/powersync-lynx/blob/main/examples/hosts/ios/README.md), [Android host](https://github.com/countertek/powersync-lynx/blob/main/examples/hosts/android/README.md).

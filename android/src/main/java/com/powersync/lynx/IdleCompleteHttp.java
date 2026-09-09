@@ -16,12 +16,17 @@ import java.util.Map;
 /**
  * Idle-complete HTTP for PowerSync {@code /sync/stream}.
  *
- * <p>Reads until EOF or a short idle read timeout after bytes have arrived, so a live NDJSON
- * stream can finish after the first checkpoint without waiting for connection close.
+ * <p>Fallback when no GlobalEventEmitter sender is reachable. Reads until EOF or a short idle
+ * read timeout after bytes have arrived. Timeouts match {@code shared/sync_http_policy.h}
+ * ({@code PS_SYNC_HTTP_IDLE_COMPLETE_MS} / {@code PS_SYNC_HTTP_CONNECT_TIMEOUT_MS}).
  */
 final class IdleCompleteHttp {
+  /** Keep in lockstep with {@code PS_SYNC_HTTP_IDLE_COMPLETE_MS}. */
   static final long IDLE_READ_TIMEOUT_MS = 2_500L;
+  /** Keep in lockstep with {@code PS_SYNC_HTTP_CONNECT_TIMEOUT_MS}. */
   static final long CONNECT_TIMEOUT_MS = 30_000L;
+  /** Keep in lockstep with {@code PS_SYNC_HTTP_BUFFERED_READ_TIMEOUT_MS}. */
+  static final long BUFFERED_READ_TIMEOUT_MS = 30_000L;
 
   private IdleCompleteHttp() {}
 
@@ -46,7 +51,7 @@ final class IdleCompleteHttp {
     HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
     conn.setInstanceFollowRedirects(true);
     conn.setConnectTimeout((int) CONNECT_TIMEOUT_MS);
-    conn.setReadTimeout(idle ? (int) IDLE_READ_TIMEOUT_MS : 30_000);
+    conn.setReadTimeout(idle ? (int) IDLE_READ_TIMEOUT_MS : (int) BUFFERED_READ_TIMEOUT_MS);
     conn.setRequestMethod(httpMethod);
     conn.setUseCaches(false);
     if (headers != null) {
@@ -81,7 +86,7 @@ final class IdleCompleteHttp {
   }
 
   static boolean isSyncStreamUrl(String url) {
-    return url != null && url.contains("/sync/stream");
+    return url != null && url.toLowerCase(Locale.US).contains("/sync/stream");
   }
 
   static boolean looksLikeLongLived(Map<String, String> headers) {

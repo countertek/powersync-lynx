@@ -45,6 +45,7 @@ export function syncStreamRequestFromFetch(options: FetchOptions): SyncStreamReq
 
 /**
  * Native httpFetch is primary for streaming (streamingId realtime path).
+ * Desktop N-API has no httpFetch — pick falls through to host-fetch.
  * LynxFetchModule is the Android fallback. Identifier fetch is Lynx-for-Web /
  * iOS JSON / desktop.
  */

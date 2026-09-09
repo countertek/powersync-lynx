@@ -1,14 +1,16 @@
 import { getLynxHost, hostIsAndroid } from "../../host.ts";
-import type { LynxFetchRequest } from "../../adapter/native.ts";
 import { encodeUtf8 } from "./bytes.ts";
-import { moduleResponse, unwrapFetchSuccess } from "./response.ts";
+import type { LynxFetchModule, LynxFetchRequest } from "./http-types.ts";
+import { fromLynxFetchSuccess, moduleResponse } from "./response.ts";
 import type { SyncStreamRequest, SyncStreamTransport } from "./SyncStreamTransport.ts";
+
+export type { LynxFetchModule, LynxFetchRequest, LynxFetchSuccessPayload } from "./http-types.ts";
 
 interface LynxStreamingFlags {
   enableFetchAPIStandardStreaming?: boolean;
 }
 
-function lynxFetchModule() {
+function lynxFetchModule(): LynxFetchModule | undefined {
   return getLynxHost().nativeModules()?.LynxFetchModule;
 }
 
@@ -17,11 +19,9 @@ export function lynxFetchModuleAvailable(): boolean {
 }
 
 /**
- * Android showcase: ShowcaseLynxHttpService idle-completes non-streaming
- * `/sync/stream` and stashes NDJSON as powersyncIdleBodyBase64. Requesting
- * standard streaming here previously yielded streamingId:null + empty body
- * while JS waited on nameless GlobalEventEmitter fallback — ps_buckets
- * stayed 0. Force the buffered handoff on Android.
+ * Android LynxFetchModule: do not request standard streaming for
+ * `/sync/stream`. That previously yielded streamingId:null + empty body
+ * while JS waited on nameless GlobalEventEmitter fallback.
  *
  * Do NOT set useStreaming: that selects Lynx's deprecated CRLF chunked parser,
  * which mis-parses PowerSync NDJSON (LF-only).
@@ -58,7 +58,9 @@ function fetchViaLynxModule(request: SyncStreamRequest): Promise<Response> {
       payload,
       (result) => {
         try {
-          resolve(moduleResponse(unwrapFetchSuccess(result), request.expectStreamingResponse));
+          resolve(
+            moduleResponse(fromLynxFetchSuccess(result), request.expectStreamingResponse),
+          );
         } catch (err) {
           reject(err);
         }
@@ -70,7 +72,7 @@ function fetchViaLynxModule(request: SyncStreamRequest): Promise<Response> {
   });
 }
 
-/** Fallback when NativePowerSyncModule.httpFetch is absent (Android LynxFetchModule). */
+/** Fallback when Native Module HTTP is absent (Android LynxFetchModule). */
 export const lynxFetchModuleTransport: SyncStreamTransport = {
   name: "lynx-fetch-module",
   fetch: fetchViaLynxModule,

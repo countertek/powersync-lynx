@@ -47,8 +47,8 @@ Read this before treating a green web preview as "sync works".
 | Local UI ready without waiting for `connect()` | **Unit tested** (`test/demo-boot.test.ts`). iOS Simulator relaunch shows **DB ready** and the composer while `/sync/stream` is still handshake/erroring. Watch starts from local ready, not from first checkpoint |
 | Two-window money shot (A writes, B sees it via PowerSync) | **Not verified this checkout.** iOS `ios-t2` opened **DB ready** / sometimes **sync connected**, but `ps_data__todos` stayed 0 and the log repeated `errorStreamingMalformedResponse`. Web two-window procedure still documented below |
 | Offline / reconnect beat (queue writes, reconnect, watch them sync) | In-app **Go offline / Reconnect** is `disconnect()` / `connect()`, not an OS network drop. **Not re-tapped** this checkout |
-| Live `/sync/stream` download on Android | **`NativePowerSyncModule.httpFetch`** idle-completes `/sync/stream` and returns NDJSON as a UTF-8 string (LynxFetchModule drops large bodies). Rebuild showcase + APK. Prove with a server-created todo on device and `ps_buckets > 0`. |
-| Live `/sync/stream` download on iOS | **Same `httpFetch` path as Android** (iOS `NativePowerSyncModule` + `streamingId` realtime, idle-complete fallback). Rebuild showcase + `pod install` + xcodebuild. Expect `ps_buckets > 0`. See [`hosts/ios/README.md`](hosts/ios/README.md). |
+| Live `/sync/stream` download on Android | **Native Module HTTP** (`httpFetch` + `streamingId` realtime; idle-complete fallback). Rebuild showcase + APK. Prove with a server-created todo on device and `ps_buckets > 0`. |
+| Live `/sync/stream` download on iOS | **Same Native Module HTTP path as Android**. Rebuild showcase + `pod install` + xcodebuild. Expect `ps_buckets > 0`. See [`hosts/ios/README.md`](hosts/ios/README.md). |
 | `disconnect()` cancelling a live native stream | Same ReactLynx control. **Not tapped** this checkout |
 | Physical iOS / Android Autolink host run | **Documented**. Simulator / emulator is what this checkout exercises |
 | Windows / macOS Autolink host run | **Not verified**. Desktop remains recipe-only |

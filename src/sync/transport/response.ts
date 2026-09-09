@@ -1,4 +1,3 @@
-import type { LynxFetchSuccessPayload } from "../../adapter/native.ts";
 import { copyToArrayBuffer } from "../../values.ts";
 import { gunzipSync, isGzip } from "../gunzip.ts";
 import {
@@ -10,28 +9,38 @@ import {
   toUint8,
 } from "./bytes.ts";
 import { lookupEmitter, streamingReader, streamingReaderFallback } from "./events.ts";
+import type { LynxFetchSuccessPayload, NativeHttpFetchEnvelope } from "./http-types.ts";
 
+/**
+ * One decode shape for native HTTP and LynxFetchModule. Streaming vs
+ * idle-complete is top-level (`streamingId` / `idleComplete` / `body` /
+ * `bodyBase64`); LynxFetchModule `lynxExtension.streamingId` is mapped in.
+ */
 export interface WireFetchSuccess {
   url?: string;
   body?: ArrayBuffer | Uint8Array | string;
   headers?: Record<string, string>;
   status?: number;
   statusText?: string;
-  lynxExtension?: {
-    streamingId?: string;
-    enableFetchAPIStandardStreaming?: boolean;
-    powersyncIdleComplete?: boolean;
-    powersyncIdleBodyBase64?: string;
-  };
+  streamingId?: string;
+  idleComplete?: boolean;
+  bodyBase64?: string;
 }
 
-/** Prefer direct body bytes; fall back to ShowcaseLynxHttpService idle-complete base64. */
+function wireStreamingId(result: WireFetchSuccess): string | undefined {
+  if (result.streamingId != null && result.streamingId.length > 0) {
+    return result.streamingId;
+  }
+  return undefined;
+}
+
+/** UTF-8 `body` first; `bodyBase64` is the idle-complete backup encoding. */
 function bodyFromFetchSuccess(result: WireFetchSuccess): Uint8Array {
   const direct = toUint8(result.body);
   if (direct.byteLength > 0) {
     return direct;
   }
-  const b64 = result.lynxExtension?.powersyncIdleBodyBase64;
+  const b64 = result.bodyBase64;
   if (typeof b64 === "string" && b64.length > 0) {
     return decodeBase64(b64);
   }
@@ -67,8 +76,8 @@ class LynxFetchResponse {
   private rawBody: unknown;
   constructor(result: WireFetchSuccess, streamingFallback = false) {
     const status = Number(result.status ?? 0);
-    const streamingId = result.lynxExtension?.streamingId;
-    const idleComplete = result.lynxExtension?.powersyncIdleComplete === true;
+    const streamingId = wireStreamingId(result);
+    const idleComplete = result.idleComplete === true;
     const bodyBytes = bodyFromFetchSuccess(result);
     let reader: ReadableStreamDefaultReader<Uint8Array>;
     if (
@@ -80,8 +89,6 @@ class LynxFetchResponse {
       reader = streamingReader(streamingId);
     } else if (bodyBytes.byteLength > 0) {
       // Idle-complete / buffered body wins over nameless GlobalEventEmitter fallback.
-      // Native may return ~19KB while JS sees streamingId:null — applying raw bytes is required
-      // for ps_buckets > 0.
       reader = readerFromChunks([bodyBytes]);
     } else if (streamingFallback) {
       reader = streamingReaderFallback();
@@ -136,24 +143,70 @@ class LynxFetchResponse {
   }
 }
 
-export function unwrapFetchSuccess(result: unknown): WireFetchSuccess {
+function unwrapHostObject(result: unknown): object {
   if (
     Array.isArray(result) &&
     result.length > 0 &&
     result[0] != null &&
     typeof result[0] === "object"
   ) {
-    return result[0] as WireFetchSuccess;
+    return result[0];
   }
-  return (result ?? {}) as WireFetchSuccess;
+  return (result ?? {}) as object;
+}
+
+export function unwrapFetchSuccess(result: unknown): WireFetchSuccess {
+  return unwrapHostObject(result) as WireFetchSuccess;
 }
 
 export function moduleResponse(result: WireFetchSuccess, streamingFallback = false): Response {
   return new LynxFetchResponse(result, streamingFallback) as unknown as Response;
 }
 
-export function fromLynxFetchSuccess(result: LynxFetchSuccessPayload): WireFetchSuccess {
-  return result;
+export function fromLynxFetchSuccess(result: unknown): WireFetchSuccess {
+  const payload = unwrapHostObject(result) as LynxFetchSuccessPayload;
+  const streamingId = payload.lynxExtension?.streamingId;
+  const wire: WireFetchSuccess = {
+    url: payload.url,
+    body: payload.body,
+    headers: payload.headers,
+    status: payload.status,
+    statusText: payload.statusText,
+  };
+  if (streamingId != null && streamingId.length > 0) {
+    wire.streamingId = streamingId;
+  }
+  return wire;
+}
+
+/** Native `httpFetch` envelope → one WireFetchSuccess (no lynxExtension re-encode). */
+export function fromNativeHttpEnvelope(result: NativeHttpFetchEnvelope): WireFetchSuccess {
+  const status = Number(result.status ?? 0);
+  const contentType =
+    typeof result.contentType === "string" && result.contentType.length > 0
+      ? result.contentType
+      : "application/x-ndjson";
+  const streamingId =
+    typeof result.streamingId === "string" && result.streamingId.length > 0
+      ? result.streamingId
+      : undefined;
+  const bodyText = typeof result.body === "string" ? result.body : "";
+  const wire: WireFetchSuccess = {
+    status,
+    statusText: String(result.statusText ?? ""),
+    headers: { "content-type": contentType },
+    body: streamingId != null ? "" : bodyText,
+  };
+  if (streamingId != null) {
+    wire.streamingId = streamingId;
+    wire.idleComplete = false;
+    return wire;
+  }
+  wire.idleComplete = result.idleComplete === true || bodyText.length > 0;
+  if (typeof result.bodyBase64 === "string" && result.bodyBase64.length > 0) {
+    wire.bodyBase64 = result.bodyBase64;
+  }
+  return wire;
 }
 
 /**
@@ -226,7 +279,7 @@ export function eventStreamingResponse(response: Response, streamingId?: string)
       status: response.status,
       statusText: response.statusText,
       headers,
-      lynxExtension: { streamingId },
+      streamingId,
     });
   }
   if (lookupEmitter() != null) {

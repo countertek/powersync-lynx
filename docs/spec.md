@@ -6,7 +6,7 @@ The **Client** is official PowerSync JavaScript on Lynx: one Autolink npm, one J
 
 Placeholder npm name: `powersync-lynx`. License: Apache-2.0. Lynx **4.0+**. The real npm scope is a later publish decision, not this spec.
 
-Glossary: [`CONTEXT.md`](../CONTEXT.md). Why the Native Module and Host helper look this way: [ADR 0001](adr/0001-native-module-is-async-sql-rpc.md), [ADR 0002](adr/0002-host-helper-is-wasqlite-sql-rpc.md).
+Glossary: [`CONTEXT.md`](../CONTEXT.md). Why the Native Module, Host helper, and native sync HTTP look this way: [ADR 0001](adr/0001-native-module-is-async-sql-rpc.md), [ADR 0002](adr/0002-host-helper-is-wasqlite-sql-rpc.md), [ADR 0003](adr/0003-native-module-http-is-streaming-fallback.md).
 
 ---
 
@@ -167,28 +167,28 @@ Lynx’s iOS polyfill list does **not** include `AbortController` or `TextDecode
 
 `fetch`, timers, and `NativeModules` are background-thread only. Native Module methods must return immediately so `/sync/stream` and overlapping reads can proceed.
 
-### Sync transport (not the Native Module)
+### Sync transport
 
 Default `connect` `connectionMethod`: **HTTP** (`BasePowerSyncDatabase` default). Do not default `WEB_SOCKET` — there is no documented Lynx application `WebSocket`.
 
-| Host | Fetch | Extra requirement |
+`/sync/stream` is selected in JS by `SyncStreamTransport` ([ADR 0003](adr/0003-native-module-http-is-streaming-fallback.md)):
+
+| Host | Streaming download | Connector JSON (`fetchCredentials` / `uploadData`) |
 |---|---|---|
-| iOS / Android | Lynx `fetch` (host HTTP Service) | Install the HTTP Service as described below and set PageConfig `enableFetchAPIStandardStreaming = true` (LynxSDK 3.7+). This enables the experimental standard streaming path; incremental delivery remains unverified. |
-| Windows / macOS | Lynx `fetch` (host HTTP Service) | Host implements and registers `LynxHttpService`. Desktop streaming is undocumented and unverified; the integration guide's HTTP Service example is a stub. The Android/iOS PageConfig flag does not apply. |
-| Lynx-for-Web | Browser `fetch` in the Lynx bundle (CORS applies) | No `enableFetchAPIStandardStreaming`. Same-origin / CORS as any browser app. |
+| iOS / Android | Native Module HTTP (`httpFetch` + `streamingId` / GlobalEventEmitter). Idle-complete UTF-8 body is fallback when no event sender is reachable. Stock Lynx fetch is not the live NDJSON path. | Ordinary JSON `fetch` (host HTTP Service). Does not need streaming. |
+| Windows / macOS | Identifier `fetch` (host `LynxHttpService`). Desktop N-API is SQL-only — no Native Module HTTP. Streaming is undocumented and unverified. | Ordinary JSON `fetch`. |
+| Lynx-for-Web | Browser `fetch` in the Lynx bundle (CORS applies). No Native Module HTTP. | Browser `fetch`. |
 
-Mobile hosts must supply the HTTP Service: iOS includes the `LynxService` CocoaPod with its `Http` subspec; Android includes `org.lynxsdk.lynx:lynx-service-http` and registers `LynxHttpService` with `LynxServiceCenter`. Native Module Autolink does not replace this requirement. Without the service, neither sync download nor Connector fetches work.
+Mobile hosts still register a Lynx HTTP Service for Connector traffic: iOS `LynxService` `Http` subspec; Android `org.lynxsdk.lynx:lynx-service-http` + `LynxServiceCenter`. Native Module Autolink does not replace that.
 
-Connector `fetchCredentials` / `uploadData` are ordinary JSON `fetch` in app JS. They do not need streaming.
+**Native Module HTTP** (iOS/Android Autolink, same lookup name as SQL RPC, separate sub-interface):
 
-Implementation must verify both behaviors on each supported host before claiming working sync transport:
+1. One-shot callback returns HTTP status + `streamingId` with an empty body (Lynx Callback is one-shot).
+2. Chunks are UTF-8 strings on GlobalEventEmitter. Terminal sequence after headers: **`onData*` → `onError?` → `onEnd`**. JS waits for `onEnd`; `onError` records failure.
+3. `httpFetchAbort(streamingId)` cancels the native request.
+4. Idle-complete (2.5 s quiet window after bytes, UTF-8 `body` / `bodyBase64`, `idleComplete: true`) runs only when streaming cannot be started. It is not the primary realtime path.
 
-- **Incremental delivery:** `res.body.getReader()` yields chunks while the HTTP response remains open, rather than buffering until it ends. Service registration and the mobile streaming flag are configuration prerequisites, not proof.
-- **Cancellation:** `disconnect()` cancels a live `/sync/stream` request, not merely the JS signal state. Native fetch support for `RequestInit.signal` remains unverified; supplying the Client's `AbortController` polyfill does not establish that fetch honors it.
-
-These are verification obligations, not capabilities proven by this spec. A failed check must be reported as a host compatibility blocker; it does not authorize changing the locked transport or adding native HTTP.
-
-Native HTTP for `/sync/stream` is a later flag if a host cannot stream. It is not this spec.
+Presence-only gate: pick native-http when `httpFetch` is present (not `typeof === "function"`). Desktop SQL modules without `httpFetch` use identifier `fetch`.
 
 ---
 
@@ -234,7 +234,7 @@ Last argument is a `function` callback that receives the envelope. The Native Mo
 
 Native `open` opens SQLite **and** loads `powersync-sqlite-core` (entry `sqlite3_powersync_init`).
 
-There is no Native Module HTTP, no `/sync/stream`, no `readLock`/`writeLock`, no `onTablesUpdated` callback.
+SQL RPC has no `/sync/stream`, no `readLock`/`writeLock`, no `onTablesUpdated` callback. Native Module HTTP (`httpFetch` / `httpFetchAbort`) is a separate sub-interface on the iOS/Android Autolink class — see [Sync transport](#sync-transport) and [ADR 0003](adr/0003-native-module-http-is-streaming-fallback.md). Desktop N-API does not implement it.
 
 ### Connections (official RN)
 
@@ -541,7 +541,7 @@ PowerSync all-SDK floors; Lynx 4.0 does not raise them.
 - nijika-os PMS domain (Stay, Folio, Organization)
 - Encryption / SQLCipher
 - PowerSync Service / Open Edition ops (that is the consumer app)
-- Native HTTP `/sync/stream` (later flag if a host cannot stream)
+- Desktop Native Module HTTP (N-API stays SQL-only; identifier `fetch` is the desktop stream path)
 - User-supplied SQLite extensions
 - Experimental WASQLite `InMemoryWriteAheadLogPool` / COOP / COEP
 
@@ -551,4 +551,4 @@ PowerSync all-SDK floors; Lynx 4.0 does not raise them.
 
 This file is the source of truth. Wayfinder ticket history under `.scratch/lynx-powersync-client-spec/` is not a second spec.
 
-Research notes under [`docs/research/`](research/) are facts that fed the locks; they are not normative. The two ADRs record *why* the Native Module and Host helper split this way.
+Research notes under [`docs/research/`](research/) are facts that fed the locks; they are not normative. ADRs 0001–0003 record *why* SQL RPC, the Host helper, and native sync HTTP split this way.

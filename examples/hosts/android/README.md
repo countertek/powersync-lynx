@@ -75,7 +75,7 @@ builds have no cleartext.
 | Empty `<input>` | `xelement` + `xelement-input` 4.0.0 missing. |
 | Download hangs / `ps_buckets=0` after server 200 | Use `NativePowerSyncModule.httpFetch` path (rebuild showcase + APK). Confirm `streamingId` + GlobalEventEmitter `onData` (not idle-complete-only). Stock LynxFetchModule alone cannot deliver live NDJSON. |
 
-## `/sync/stream` download fix (`ShowcaseLynxHttpService`)
+## `/sync/stream` download path
 
 Stock Lynx 4.0.1 `LynxHttpService` on the **non-streaming** path calls `ResponseBody.bytes()` (see `LynxHttpService.kt` ~line 60). PowerSync keeps the chunked NDJSON connection open after `checkpoint_complete`, so OkHttp’s default read timeout surfaces as:
 
@@ -87,21 +87,17 @@ java.net.SocketTimeoutException: timeout
 
 JS never receives body bytes / `streamingId` / `onData` → SQLite stays at `ps_buckets=0` even though the service returned ~19KB of ops.
 
-### `/sync/stream` download path (Android)
+### Native Module HTTP (primary)
 
-LynxFetchModule drops large `byte[]` response bodies and `customInfo`→`lynxExtension` on PrimJS, so idle-complete via `ShowcaseLynxHttpService` alone never reached PowerSync (`ps_buckets=0`).
-
-**Current path:** `LynxRemote` picks the `native-http` `SyncStreamTransport`, which calls `NativePowerSyncModule.httpFetch` for Android streaming downloads.
+**Current path:** `LynxRemote` picks the `native-http` `SyncStreamTransport`, which calls Native Module HTTP (`httpFetch` on the Autolink `NativePowerSyncModule` lookup; implementation in `NativeSyncHttp`).
 
 1. **Callback (one-shot):** returns HTTP status + `streamingId` with an empty body (Lynx Callback can only fire once — [lynx#1972](https://github.com/lynx-family/lynx/issues/1972)).
-2. **Chunks:** native keeps the chunked `/sync/stream` connection open (120s read timeout) and posts UTF-8 string `onData` / `onEnd` / `onError` via `LynxContext.sendGlobalEvent(streamingId, …)`.
+2. **Chunks:** native keeps the chunked `/sync/stream` connection open (120s read timeout) and posts UTF-8 string `onData*` → `onError?` → `onEnd` via `LynxContext.sendGlobalEvent(streamingId, …)`.
 3. **JS:** `NativeHttpFetch` builds a ReadableStream from those GlobalEventEmitter events and PowerSync applies NDJSON incrementally — same shape as web `fetch` streaming, not idle-complete batching.
 
-Why not LynxFetchModule / stock LynxHttpService? Stock non-streaming path hangs on `ResponseBody.bytes()` for live PowerSync streams; LynxFetchModule also drops large `byte[]` bodies on PrimJS. Our path never buffers the full body and never uses `byte[]` for chunks (UTF-8 strings only).
+Idle-complete UTF-8 `body` / `bodyBase64` is fallback when `LynxContext` is unavailable. `ShowcaseLynxHttpService` is Connector / JSON `fetch` only — it does not idle-complete `/sync/stream`.
 
-`ShowcaseLynxHttpService` remains registered for Connector / `demoFetch` / other LynxFetchModule traffic. Idle-complete remains a fallback when `LynxContext` is unavailable (plain Context unit tests).
-
-Proof of the realtime path: `NativePowerSyncModule.httpFetch` returns a `NativePowerSyncHttpStream*` `streamingId`, and GlobalEventEmitter `onData` fires before `onEnd` (not idle-complete `raw-body`). PowerSync logger debug: `powersync-lynx /sync/stream via native-http`.
+Proof of the realtime path: `httpFetch` returns a `NativePowerSyncHttpStream*` `streamingId`, and GlobalEventEmitter `onData` fires before `onEnd` (not idle-complete `raw-body`). PowerSync logger debug: `powersync-lynx /sync/stream via native-http`.
 
 ### Rebuild after this change
 
