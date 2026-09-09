@@ -1,6 +1,6 @@
 <div align="center" markdown>
 
-![powersync-lynx](https://socialify.git.ci/countertek/powersync-lynx/image?description=1&font=Inter&forks=1&issues=1&language=1&name=1&owner=1&pattern=Transparent&pulls=1&stargazers=1&theme=Auto)
+![powersync-lynx — PowerSync for Lynx apps](docs/assets/powersync-lynx-readme-hero.png)
 
 **Official PowerSync JavaScript inside Lynx apps.** One Autolink package, one `PowerSyncDatabase` surface, local SQLite plus sync on web, iOS, and Android.
 
