@@ -7,6 +7,7 @@ import type {
   WebSocketSyncStreamPlatform,
 } from "@powersync/shared-internals/websockets";
 import { copyToArrayBuffer } from "../values.ts";
+import { gunzipSync, isGzip } from "./gunzip.ts";
 
 let websockets: WebSocketSupport | undefined;
 
@@ -265,13 +266,18 @@ class LynxFetchResponse {
   headers: { get: (name: string) => string | null };
   body: { getReader: () => ReadableStreamDefaultReader<Uint8Array> };
   private rawBody: unknown;
-  constructor(result: LynxFetchSuccess) {
+  constructor(result: LynxFetchSuccess, streamingFallback = false) {
     const status = Number(result.status ?? 0);
     const streamingId = result.lynxExtension?.streamingId;
+    const bodyBytes = result.body == null ? new Uint8Array(0) : toUint8(result.body);
     const reader =
       streamingId != null && streamingId.length > 0
         ? streamingReader(streamingId)
-        : readerFromChunks(result.body == null ? [] : [toUint8(result.body)]);
+        : bodyBytes.byteLength > 0
+          ? readerFromChunks([bodyBytes])
+          : streamingFallback
+            ? streamingReaderFallback()
+            : readerFromChunks([]);
     this.rawBody = result.body;
     this.ok = status >= 200 && status < 300;
     this.status = status;
@@ -306,7 +312,8 @@ class LynxFetchResponse {
       joined.set(part, offset);
       offset += part.byteLength;
     }
-    return decodeUtf8(copyToArrayBuffer(joined));
+    const decoded = isGzip(joined) ? gunzipSync(joined) : joined;
+    return decodeUtf8(copyToArrayBuffer(decoded));
   }
   async json(): Promise<unknown> {
     if (isParsedJsonValue(this.rawBody)) {
@@ -453,7 +460,7 @@ function lynxHost(): { getJSModule?: (name: string) => StreamEmitter } | undefin
   }
 }
 
-function lookupEmitter(): StreamEmitter | undefined {
+function lookupEmitters(): StreamEmitter[] {
   const host = lynxHost() as
     | {
         getJSModule?: (name: string) => StreamEmitter;
@@ -461,14 +468,21 @@ function lookupEmitter(): StreamEmitter | undefined {
         GlobalEventEmitter?: StreamEmitter;
       }
     | undefined;
-  const fromApp = host?.getApp?.()?.GlobalEventEmitter;
-  if (fromApp != null) {
-    return fromApp;
-  }
-  if (host?.GlobalEventEmitter != null) {
-    return host.GlobalEventEmitter;
-  }
-  return host?.getJSModule?.("GlobalEventEmitter");
+  const found: StreamEmitter[] = [];
+  const add = (emitter: StreamEmitter | undefined): void => {
+    if (emitter != null && !found.includes(emitter)) {
+      found.push(emitter);
+    }
+  };
+  // Native sendGlobalEvent posts to the JS module; Lynx fetch may use getApp().
+  add(host?.getJSModule?.("GlobalEventEmitter"));
+  add(host?.getApp?.()?.GlobalEventEmitter);
+  add(host?.GlobalEventEmitter);
+  return found;
+}
+
+function lookupEmitter(): StreamEmitter | undefined {
+  return lookupEmitters()[0];
 }
 
 function hookEventsMap(emitter: StreamEmitter): void {
@@ -542,23 +556,44 @@ function wrapLynxGetJSModule(): void {
 
 function enterEarlyCapture(): void {
   wrapLynxGetJSModule();
-  const emitter = lookupEmitter();
-  if (emitter != null) {
+  for (const emitter of lookupEmitters()) {
     hookEmitter(emitter);
   }
 }
 
-function streamingReader(eventName: string): ReadableStreamDefaultReader<Uint8Array> {
+function attachStreamHandler(
+  emitter: StreamEmitter,
+  eventName: string,
+  onEvent: (payload: unknown) => void,
+): void {
+  let handlers = streamHandlers.get(emitter);
+  if (handlers == null) {
+    handlers = new Map();
+    streamHandlers.set(emitter, handlers);
+  }
+  handlers.set(eventName, onEvent);
+  ensureSlot(emitter, eventName);
+  drainEarly(eventName, onEvent);
+}
+
+function nativeStreamNames(): string[] {
+  const names: string[] = [];
+  for (let i = 0; i < NATIVE_STREAM_SLOTS; i++) {
+    names.push(`${NATIVE_STREAM_PREFIX}${i}`);
+  }
+  return names;
+}
+
+function createStreamingReader(eventNames: string[]): ReadableStreamDefaultReader<Uint8Array> {
   const queue: Uint8Array[] = [];
   let finished = false;
   let failure: Error | undefined;
   let wake: (() => void) | undefined;
   wrapLynxGetJSModule();
-  const emitter = lookupEmitter();
-  if (emitter == null) {
+  const emitters = lookupEmitters();
+  if (emitters.length === 0) {
     throw new Error("GlobalEventEmitter is not registered");
   }
-  hookEmitter(emitter);
   const onEvent = (payload: unknown) => {
     const eventPayload = unwrapStreamPayload(payload);
     const event =
@@ -583,14 +618,14 @@ function streamingReader(eventName: string): ReadableStreamDefaultReader<Uint8Ar
     }
     wake?.();
   };
-  let handlers = streamHandlers.get(emitter);
-  if (handlers == null) {
-    handlers = new Map();
-    streamHandlers.set(emitter, handlers);
+  const attached: Array<{ emitter: StreamEmitter; eventName: string }> = [];
+  for (const emitter of emitters) {
+    hookEmitter(emitter);
+    for (const eventName of eventNames) {
+      attachStreamHandler(emitter, eventName, onEvent);
+      attached.push({ emitter, eventName });
+    }
   }
-  handlers.set(eventName, onEvent);
-  ensureSlot(emitter, eventName);
-  drainEarly(eventName, onEvent);
   return {
     async read() {
       for (;;) {
@@ -610,12 +645,24 @@ function streamingReader(eventName: string): ReadableStreamDefaultReader<Uint8Ar
     },
     cancel() {
       finished = true;
+      for (const item of attached) {
+        streamHandlers.get(item.emitter)?.delete(item.eventName);
+      }
       wake?.();
       return Promise.resolve();
     },
     releaseLock() {},
     closed: Promise.resolve(undefined),
   } as ReadableStreamDefaultReader<Uint8Array>;
+}
+
+function streamingReader(eventName: string): ReadableStreamDefaultReader<Uint8Array> {
+  return createStreamingReader([eventName]);
+}
+
+/** Native streaming always posts to LynxFetchModuleStreamingEventN and resolves an empty body. */
+function streamingReaderFallback(): ReadableStreamDefaultReader<Uint8Array> {
+  return createStreamingReader(nativeStreamNames());
 }
 
 function unwrapFetchSuccess(result: unknown): LynxFetchSuccess {
@@ -625,8 +672,8 @@ function unwrapFetchSuccess(result: unknown): LynxFetchSuccess {
   return (result ?? {}) as LynxFetchSuccess;
 }
 
-function moduleResponse(result: LynxFetchSuccess): Response {
-  return new LynxFetchResponse(result) as unknown as Response;
+function moduleResponse(result: LynxFetchSuccess, streamingFallback = false): Response {
+  return new LynxFetchResponse(result, streamingFallback) as unknown as Response;
 }
 
 function isLynxAndroid(): boolean {
@@ -669,8 +716,8 @@ function streamingExtension(expectStreamingResponse: boolean): Record<string, bo
  * Lynx streaming Response.body is one-shot. AbstractRemote checks `res.body`
  * then calls `res.body.getReader()`; a second getter throws "body used".
  */
-function stabilizeStreamingResponse(response: Response): Response {
-  const captured = response.body;
+function stabilizeStreamingResponse(response: Response, capturedBody?: Response["body"]): Response {
+  const captured = capturedBody === undefined ? response.body : capturedBody;
   const headers = response.headers;
   return {
     ok: response.ok,
@@ -689,6 +736,46 @@ function stabilizeStreamingResponse(response: Response): Response {
       return response.text().then((text) => JSON.parse(text) as unknown);
     },
   } as Response;
+}
+
+function eventStreamingResponse(response: Response, streamingId?: string): Response {
+  const headers = { "content-type": response.headers?.get("content-type") ?? "" };
+  if (streamingId != null && streamingId.length > 0) {
+    return moduleResponse({
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+      lynxExtension: { streamingId },
+    });
+  }
+  if (lookupEmitter() != null) {
+    return moduleResponse(
+      {
+        status: response.status,
+        statusText: response.statusText,
+        headers,
+      },
+      true,
+    );
+  }
+  return stabilizeStreamingResponse(response, {
+    getReader: () => readerFromChunks([]),
+  } as Response["body"]);
+}
+
+async function identifierStreamingResponse(response: Response): Promise<Response> {
+  const streamingId = (response as Response & { lynxExtension?: { streamingId?: string } }).lynxExtension
+    ?.streamingId;
+  let captured: Response["body"];
+  try {
+    captured = response.body;
+  } catch {
+    return eventStreamingResponse(response, streamingId);
+  }
+  if (captured == null || typeof captured.getReader !== "function") {
+    return eventStreamingResponse(response, streamingId);
+  }
+  return stabilizeStreamingResponse(response, captured);
 }
 
 function fetchViaLynxModule(
@@ -718,7 +805,7 @@ function fetchViaLynxModule(
       payload,
       (result) => {
         try {
-          resolve(moduleResponse(unwrapFetchSuccess(result)));
+          resolve(moduleResponse(unwrapFetchSuccess(result), expectStreamingResponse));
         } catch (err) {
           reject(err);
         }
@@ -761,17 +848,10 @@ export class LynxRemote extends AbstractRemote {
     // PrimJS puts fetch on the identifier, not always on globalThis (iOS).
     const fromGlobal = (globalThis as unknown as { fetch?: typeof fetch }).fetch;
     const response = await (typeof fromGlobal === "function" ? fromGlobal : fetch)(url, init);
-    const streamingId = (response as Response & { lynxExtension?: { streamingId?: string } }).lynxExtension
-      ?.streamingId;
-    if (streamingId != null && streamingId.length > 0) {
-      return moduleResponse({
-        status: response.status,
-        statusText: response.statusText,
-        headers: { "content-type": response.headers?.get("content-type") ?? "" },
-        lynxExtension: { streamingId },
-      });
+    if (!expectStreamingResponse) {
+      return stabilizeStreamingResponse(response);
     }
-    return stabilizeStreamingResponse(response);
+    return identifierStreamingResponse(response);
   }
 
   async loadWebSocketSupport(platform: WebSocketSyncStreamPlatform): Promise<WebSocketSupport> {
