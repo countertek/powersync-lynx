@@ -37,12 +37,17 @@ function beginFirstSyncStreamDiag(url: string, streamingFlags: Record<string, bo
   });
 }
 
-function logFirstSyncStreamPath(path: "chunked" | "raw", streamingId: string | undefined): void {
+function logFirstSyncStreamPath(
+  path: "chunked" | "raw",
+  streamingId: string | undefined,
+  via: "streamingId" | "fallback" | "raw-body" | "identifier-body",
+): void {
   if (firstSyncStreamDiag == null) {
     return;
   }
   console.log(FM_PS_LYNX_003, "native/js stream path", {
     path,
+    via,
     streamingId: streamingId ?? null,
   });
 }
@@ -374,17 +379,17 @@ class LynxFetchResponse {
     const bodyBytes = result.body == null ? new Uint8Array(0) : toUint8(result.body);
     let reader: ReadableStreamDefaultReader<Uint8Array>;
     if (streamingId != null && streamingId.length > 0) {
-      logFirstSyncStreamPath("chunked", streamingId);
+      logFirstSyncStreamPath("chunked", streamingId, "streamingId");
       reader = streamingReader(streamingId);
     } else if (bodyBytes.byteLength > 0) {
-      logFirstSyncStreamPath("raw", undefined);
+      logFirstSyncStreamPath("raw", undefined, "raw-body");
       finishFirstSyncStreamRaw(bodyBytes.byteLength);
       reader = readerFromChunks([bodyBytes]);
     } else if (streamingFallback) {
-      logFirstSyncStreamPath("chunked", undefined);
+      logFirstSyncStreamPath("chunked", undefined, "fallback");
       reader = streamingReaderFallback();
     } else {
-      logFirstSyncStreamPath("raw", undefined);
+      logFirstSyncStreamPath("raw", undefined, "raw-body");
       finishFirstSyncStreamRaw(0);
       reader = readerFromChunks([]);
     }
@@ -931,7 +936,7 @@ async function identifierStreamingResponse(response: Response): Promise<Response
     return eventStreamingResponse(response, streamingId);
   }
   // Identifier Response.body path (no GlobalEventEmitter) — not native onData chunks.
-  logFirstSyncStreamPath("chunked", streamingId);
+  logFirstSyncStreamPath("chunked", streamingId, "identifier-body");
   if (firstSyncStreamDiag != null) {
     console.log(FM_PS_LYNX_003, "stream terminal — onData before onEnd?", {
       terminalEvent: "identifier-body",
