@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import { bootDemo } from "../examples/showcase/src/boot.ts";
 import {
+  applyLocalReadySyncState,
   checkpointAppliedThisSession,
   createSessionSyncTracker,
 } from "../examples/showcase/src/session-sync.ts";
@@ -84,6 +85,7 @@ test("persisted hasSynced plus download-start then error does not log first chec
 
 test("persisted hasSynced with unavailable credentials still records first sync done on local ready", async () => {
   const { logs, labels, tracker } = collectTracker();
+  const persistedAt = new Date("2026-01-15T12:00:00.000Z");
   let connectCalled = false;
   await bootDemo({
     waitForReady: async () => {},
@@ -95,7 +97,13 @@ test("persisted hasSynced with unavailable credentials still records first sync 
       connectCalled = true;
     },
     onLocalReady: () => {
-      tracker.watchFirstSync(
+      applyLocalReadySyncState(
+        tracker,
+        {
+          connected: false,
+          hasSynced: true,
+          lastSyncedAt: persistedAt,
+        },
         async () => {},
         () => false,
       );
@@ -115,4 +123,12 @@ test("persisted hasSynced with unavailable credentials still records first sync 
   assert.match(logs.join("\n"), /no credentials/);
   assert.equal(logs.includes("first sync done"), true);
   assert.equal(labels.firstSyncDone, true);
+  assert.equal(labels.hasSynced, "yes");
+  assert.equal(labels.lastSynced, persistedAt.toISOString());
+  assert.equal(labels.sync, "offline");
+  assert.equal(
+    logs.includes("first checkpoint applied"),
+    false,
+    "seeding persisted currentStatus must not count as this session's checkpoint",
+  );
 });

@@ -11,7 +11,7 @@ import {
 import { bootDemo } from "./boot.ts";
 import { getDb, setClientLog, waitForDemoReady } from "./database.ts";
 import type { TodoRow } from "./schema.ts";
-import { createSessionSyncTracker } from "./session-sync.ts";
+import { createSessionSyncTracker, applyLocalReadySyncState } from "./session-sync.ts";
 import { deviceId, errorMessage, hostLabel, newId, nowIso, rowArray } from "./util.ts";
 
 import "./App.css";
@@ -120,7 +120,9 @@ export function App() {
             tracker.statusChanged(status);
           },
         });
-        tracker.watchFirstSync(
+        applyLocalReadySyncState(
+          tracker,
+          getDb().currentStatus,
           () => getDb().waitForFirstSync(),
           () => cancelled,
         );

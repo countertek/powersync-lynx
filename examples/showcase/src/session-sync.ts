@@ -28,6 +28,17 @@ export interface SessionSyncTracker {
   watchFirstSync(waitForFirstSync: () => Promise<void>, isCancelled: () => boolean): void;
 }
 
+/** Seed badges + checkpoint baseline from currentStatus, then start waitForFirstSync. */
+export function applyLocalReadySyncState(
+  tracker: SessionSyncTracker,
+  currentStatus: SessionSyncStatus,
+  waitForFirstSync: () => Promise<void>,
+  isCancelled: () => boolean,
+): void {
+  tracker.statusChanged(currentStatus);
+  tracker.watchFirstSync(waitForFirstSync, isCancelled);
+}
+
 export function lastSyncedLabel(at: Date | undefined): string {
   if (at == null) {
     return "never";
