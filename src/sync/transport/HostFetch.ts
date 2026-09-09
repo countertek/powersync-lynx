@@ -5,7 +5,6 @@ import {
   stabilizeStreamingResponse,
   syncStreamResponse,
 } from "./response.ts";
-import { streamingExtension } from "./LynxFetchModule.ts";
 import type { SyncStreamRequest, SyncStreamTransport } from "./SyncStreamTransport.ts";
 
 interface LynxRequestInit extends RequestInit {
@@ -14,31 +13,32 @@ interface LynxRequestInit extends RequestInit {
   };
 }
 
-function hostEventFallback(response: Response): Response {
+function emptyStreamResponse(response: Response): Response {
   const contentType = response.headers?.get("content-type") ?? "";
   return syncStreamResponse({
     status: response.status,
     statusText: response.statusText,
     headers: { "content-type": contentType },
-    streamingFallback: true,
+    bytes: new Uint8Array(0),
   });
 }
 
 /**
  * Keep a usable Fetch body. Do not inspect `lynxExtension.streamingId` —
- * that native extension is owned by NativeHttpFetch / LynxFetchModule.
+ * that native extension is owned by NativeHttpFetch. LynxFetchModule is
+ * JSON-only and is never picked for streaming (ADR-0004).
  */
 function hostStreamingResponse(response: Response): Response {
   let captured: Response["body"];
   try {
     captured = response.body;
   } catch {
-    return hostEventFallback(response);
+    return emptyStreamResponse(response);
   }
   if (captured != null && isFunction(captured.getReader)) {
     return stabilizeStreamingResponse(response, captured);
   }
-  return hostEventFallback(response);
+  return emptyStreamResponse(response);
 }
 
 async function fetchViaHost(request: SyncStreamRequest): Promise<Response> {
@@ -53,9 +53,8 @@ async function fetchViaHost(request: SyncStreamRequest): Promise<Response> {
   if (request.body != null) {
     init.body = request.body;
   }
-  const extension = streamingExtension(request.expectStreamingResponse);
-  if (Object.keys(extension).length > 0) {
-    init.lynxExtension = extension;
+  if (request.expectStreamingResponse) {
+    init.lynxExtension = { enableFetchAPIStandardStreaming: true };
   }
   const response = await fetchImpl(request.url, init);
   if (!request.expectStreamingResponse) {

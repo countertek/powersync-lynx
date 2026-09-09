@@ -5,16 +5,9 @@ import { toUint8 } from "./bytes.ts";
 
 interface StreamEmitter extends LynxGlobalEventEmitter {
   addListener(name: string, fn: (payload: LynxStreamEventPayload) => void): void;
-  _events?: EmitterEventsMap;
-}
-
-interface EmitterEventsMap {
-  get(name: string): object | undefined;
 }
 
 const earlyEvents = new Map<string, LynxStreamEventPayload[]>();
-/** Per-emitter names with an attached reader — skip early-capture so emit/trigger cannot leak. */
-const liveStreamNames = new WeakMap<StreamEmitter, Set<string>>();
 /**
  * Cancelled streamingIds. Late native onError/onEnd must not recreate earlyEvents
  * (Android abort is async). Un-retired when a new reader attaches to that name.
@@ -33,15 +26,6 @@ const streamHandlers = new WeakMap<
 >();
 const origAdds = new WeakMap<StreamEmitter, StreamEmitter["addListener"]>();
 const slottedNames = new WeakMap<StreamEmitter, Set<string>>();
-const foreignListeners = new WeakMap<
-  StreamEmitter,
-  Map<string, Array<(payload: LynxStreamEventPayload) => void>>
->();
-const hookedEventMaps = new WeakSet<EmitterEventsMap>();
-
-/** Native LynxFetchModule names streams `LynxFetchModuleStreamingEvent` + AtomicLong. */
-const NATIVE_STREAM_PREFIX = "LynxFetchModuleStreamingEvent";
-const NATIVE_STREAM_SLOTS = 64;
 
 function isStreamEmitter(emitter: LynxGlobalEventEmitter): emitter is StreamEmitter {
   return isFunction(emitter.addListener);
@@ -62,15 +46,6 @@ function unwrapStreamPayload(payload: LynxStreamEventPayload) {
 function isStreamEvent(payload: LynxStreamEventPayload): boolean {
   const event = unwrapStreamPayload(payload).event;
   return event === "onData" || event === "onEnd" || event === "onError";
-}
-
-function liveNames(emitter: StreamEmitter): Set<string> {
-  let names = liveStreamNames.get(emitter);
-  if (names == null) {
-    names = new Set();
-    liveStreamNames.set(emitter, names);
-  }
-  return names;
 }
 
 function overflowTerminal(): LynxStreamEventPayload[] {
@@ -98,7 +73,6 @@ function rememberEarly(
 ): void {
   if (
     retiredStreamNames.has(name) ||
-    liveStreamNames.get(emitter)?.has(name) ||
     streamHandlers.get(emitter)?.has(name) ||
     !isStreamEvent(payload)
   ) {
@@ -118,8 +92,7 @@ function rememberEarly(
   pending.push(payload);
 }
 
-function releaseStream(emitter: StreamEmitter, name: string, retire: boolean): void {
-  liveStreamNames.get(emitter)?.delete(name);
+function releaseStream(name: string, retire: boolean): void {
   earlyEvents.delete(name);
   if (retire) {
     retireStream(name);
@@ -167,12 +140,6 @@ function slotListener(
     } else {
       rememberEarly(emitter, name, payload);
     }
-    const extras = foreignListeners.get(emitter)?.get(name);
-    if (extras != null) {
-      for (const fn of extras) {
-        fn(payload);
-      }
-    }
   };
 }
 
@@ -191,12 +158,6 @@ function ensureSlot(emitter: StreamEmitter, name: string): void {
   }
   names.add(name);
   origAdd(name, slotListener(emitter, name));
-}
-
-function preSlotNativeStreams(emitter: StreamEmitter): void {
-  for (let i = 0; i < NATIVE_STREAM_SLOTS; i++) {
-    ensureSlot(emitter, `${NATIVE_STREAM_PREFIX}${i}`);
-  }
 }
 
 function wrapLynxGetJSModule(): void {
@@ -225,51 +186,14 @@ function lookupEmitters(): StreamEmitter[] {
   return found;
 }
 
-export function lookupEmitter(): StreamEmitter | undefined {
-  return lookupEmitters()[0];
-}
-
-function hookEventsMap(emitter: StreamEmitter): void {
-  const events = emitter._events;
-  if (events == null || !isFunction(events.get) || hookedEventMaps.has(events)) {
-    return;
-  }
-  hookedEventMaps.add(events);
-  const origGet = events.get.bind(events);
-  events.get = (name: string) => {
-    let list = origGet(name);
-    if (list == null || (Array.isArray(list) && list.length === 0)) {
-      ensureSlot(emitter, String(name));
-      list = origGet(name);
-    }
-    return list;
-  };
-}
-
 function hookEmitter(emitter: StreamEmitter): void {
   if (hookedEmitters.has(emitter)) {
-    hookEventsMap(emitter);
     return;
   }
   hookedEmitters.add(emitter);
-  const origAdd = emitter.addListener.bind(emitter);
-  origAdds.set(emitter, origAdd);
+  origAdds.set(emitter, emitter.addListener.bind(emitter));
   const origEmit = isFunction(emitter.emit) ? emitter.emit.bind(emitter) : undefined;
   const origTrigger = isFunction(emitter.trigger) ? emitter.trigger.bind(emitter) : undefined;
-  emitter.addListener = (name, fn) => {
-    let byName = foreignListeners.get(emitter);
-    if (byName == null) {
-      byName = new Map();
-      foreignListeners.set(emitter, byName);
-    }
-    let list = byName.get(name);
-    if (list == null) {
-      list = [];
-      byName.set(name, list);
-    }
-    list.push(fn);
-    ensureSlot(emitter, name);
-  };
   emitter.emit = (name, data) => {
     if (data != null) {
       rememberEarly(emitter, name, data);
@@ -282,8 +206,6 @@ function hookEmitter(emitter: StreamEmitter): void {
     }
     return origTrigger?.(name, params);
   };
-  preSlotNativeStreams(emitter);
-  hookEventsMap(emitter);
 }
 
 export function enterEarlyCapture(): void {
@@ -303,7 +225,6 @@ function bindStreamHandler(
     handlers = new Map();
     streamHandlers.set(emitter, handlers);
   }
-  liveNames(emitter).add(eventName);
   handlers.set(eventName, onEvent);
   ensureSlot(emitter, eventName);
 }
@@ -321,18 +242,7 @@ function handlerStillAttached(
   return false;
 }
 
-function nativeStreamNames(): string[] {
-  const names: string[] = [];
-  for (let i = 0; i < NATIVE_STREAM_SLOTS; i++) {
-    names.push(`${NATIVE_STREAM_PREFIX}${i}`);
-  }
-  return names;
-}
-
-function createStreamingReader(
-  eventNames: string[],
-  abortOnCancel: boolean,
-): ReadableStreamDefaultReader<Uint8Array> {
+function createStreamingReader(eventName: string): ReadableStreamDefaultReader<Uint8Array> {
   const queue: Uint8Array[] = [];
   let finished = false;
   let released = false;
@@ -346,27 +256,23 @@ function createStreamingReader(
   }
   const releaseAttached = (retire: boolean): void => {
     if (retire) {
-      retireNames(eventNames);
+      retireNames([eventName]);
     }
     // Always drop handlers. A buffered onEnd can set released before every
     // emitter is bound; cancel must still strip a later stray attachment.
     for (const emitter of emitters) {
       const handlers = streamHandlers.get(emitter);
-      for (const name of eventNames) {
-        handlers?.delete(name);
-        releaseStream(emitter, name, false);
-      }
+      handlers?.delete(eventName);
+      releaseStream(eventName, false);
     }
     released = true;
   };
   const abortAttached = (): void => {
-    if (!abortOnCancel || nativeAborted) {
+    if (nativeAborted) {
       return;
     }
     nativeAborted = true;
-    for (const name of eventNames) {
-      abortNativeHttp(name);
-    }
+    abortNativeHttp(eventName);
   };
   const onEvent = (payload: LynxStreamEventPayload) => {
     const eventPayload = unwrapStreamPayload(payload);
@@ -389,19 +295,12 @@ function createStreamingReader(
     if (released) {
       break;
     }
-    for (const eventName of eventNames) {
-      bindStreamHandler(emitter, eventName, onEvent);
-    }
+    bindStreamHandler(emitter, eventName, onEvent);
   }
   if (!released) {
-    for (const eventName of eventNames) {
-      drainEarly(eventName, onEvent);
-      if (released) {
-        break;
-      }
-      if (handlerStillAttached(emitters, eventName, onEvent)) {
-        retiredStreamNames.delete(eventName);
-      }
+    drainEarly(eventName, onEvent);
+    if (!released && handlerStillAttached(emitters, eventName, onEvent)) {
+      retiredStreamNames.delete(eventName);
     }
   }
   // SAFETY: stream reader implements the ReadableStreamDefaultReader methods AbstractRemote calls.
@@ -425,7 +324,7 @@ function createStreamingReader(
     cancel() {
       finished = true;
       abortAttached();
-      releaseAttached(abortOnCancel);
+      releaseAttached(true);
       wake?.();
       return Promise.resolve();
     },
@@ -435,10 +334,5 @@ function createStreamingReader(
 }
 
 export function streamingReader(eventName: string): ReadableStreamDefaultReader<Uint8Array> {
-  return createStreamingReader([eventName], true);
-}
-
-/** Native streaming always posts to LynxFetchModuleStreamingEventN and resolves an empty body. */
-export function streamingReaderFallback(): ReadableStreamDefaultReader<Uint8Array> {
-  return createStreamingReader(nativeStreamNames(), false);
+  return createStreamingReader(eventName);
 }
