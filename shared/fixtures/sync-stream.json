@@ -1,0 +1,48 @@
+{
+  "contentType": "application/x-ndjson",
+  "idleCompleteEnvelopeKeys": [
+    "ok",
+    "status",
+    "statusText",
+    "contentType",
+    "body",
+    "bodyBase64",
+    "idleComplete"
+  ],
+  "streamingEnvelopeKeys": [
+    "ok",
+    "status",
+    "statusText",
+    "contentType",
+    "body",
+    "streamingId",
+    "idleComplete"
+  ],
+  "scenarios": [
+    {
+      "id": "checkpoint-ops",
+      "path": "streamingId",
+      "chunks": [
+        "{\"checkpoint\":{\"last_op_id\":\"1\"}}\n",
+        "{\"data\":{\"bucket\":\"a\",\"data\":[{\"op\":\"PUT\",\"object_id\":\"t1\",\"object_type\":\"todos\",\"data\":\"{}\"}]}}\n"
+      ],
+      "events": ["onData", "onData", "onEnd"]
+    },
+    {
+      "id": "error-then-end",
+      "path": "streamingId",
+      "chunks": ["{\"checkpoint\":{\"last_op_id\":\"2\"}}\n"],
+      "error": "stream reset",
+      "events": ["onData", "onError", "onEnd"]
+    },
+    {
+      "id": "idle-complete",
+      "path": "idleComplete",
+      "chunks": [
+        "{\"checkpoint\":{\"last_op_id\":\"1\"}}\n",
+        "{\"data\":{\"bucket\":\"a\",\"data\":[]}}\n"
+      ],
+      "events": []
+    }
+  ]
+}

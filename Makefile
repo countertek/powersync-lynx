@@ -21,7 +21,9 @@ else
   CORE_DYLIB := dist/macos/arm64/libpowersync_aarch64.macos.dylib
 endif
 TEST_BIN := shared/build/ps_sql_test
+FIXTURE_TEST_BIN := shared/build/sync_stream_fixtures_test
 IOS_TEST_BIN := shared/build/ios_module_rpc_test
+FIXTURES_JSON := $(CURDIR)/shared/fixtures/sync-stream.json
 NODE := dist/macos/arm64/powersync-lynx.node
 WIN_NODE := dist/windows/x64/powersync-lynx.node
 ZIG ?= $(shell command -v zig 2>/dev/null)
@@ -65,14 +67,26 @@ $(TEST_BIN): shared/build/ps_sql.o $(SQLITE_DIR)/sqlite3.o shared/tests/ps_sql_t
 	$(CXX) $(CXXFLAGS) $(SQLITE_FLAGS) shared/tests/ps_sql_test.cc \
 		shared/build/ps_sql.o $(SQLITE_DIR)/sqlite3.o $(LDFLAGS) -o $@
 
-test: deps $(TEST_BIN)
-	POWERSYNC_CORE_PATH="$(CURDIR)/$(CORE_DYLIB)" $(TEST_BIN)
+$(FIXTURE_TEST_BIN): shared/tests/sync_stream_fixtures_test.cc \
+		shared/sync_stream_fixtures.h shared/tests/ndjson_http_replay.h \
+		shared/sync_http_policy.h shared/fixtures/sync-stream.json
+	mkdir -p shared/build
+	$(CXX) $(CXXFLAGS) -Ishared/tests \
+		-DPS_SYNC_STREAM_FIXTURES_PATH='"$(FIXTURES_JSON)"' \
+		shared/tests/sync_stream_fixtures_test.cc $(LDFLAGS) -o $@
 
-$(IOS_TEST_BIN): deps ios/tests/ios_module_rpc_test.mm ios/src/NativePowerSyncModule.mm \
+test: deps $(TEST_BIN) $(FIXTURE_TEST_BIN)
+	POWERSYNC_CORE_PATH="$(CURDIR)/$(CORE_DYLIB)" $(TEST_BIN)
+	PS_SYNC_STREAM_FIXTURES_PATH="$(FIXTURES_JSON)" $(FIXTURE_TEST_BIN)
+
+$(IOS_TEST_BIN): deps ios/tests/ios_module_rpc_test.mm ios/tests/ios_sync_http_fixture_test.mm \
+		ios/tests/ios_sync_http_fixtures.h \
+		ios/src/NativePowerSyncModule.mm \
 		ios/src/NativePowerSyncModule.h ios/src/NativeSyncHttp.mm ios/src/NativeSyncHttp.h \
 		ios/src/IdleCompleteHttp.mm ios/src/IdleCompleteHttp.h \
 		ios/src/StreamingHttp.mm ios/src/StreamingHttp.h \
-		shared/sync_http_policy.h \
+		shared/sync_http_policy.h shared/sync_stream_fixtures.h \
+		shared/tests/ndjson_http_replay.h shared/fixtures/sync-stream.json \
 		shared/ps_sql.cc shared/ps_sql.h \
 		$(SQLITE_DIR)/sqlite3.o $(CORE_DYLIB)
 	mkdir -p shared/build/ios-src
@@ -83,9 +97,11 @@ $(IOS_TEST_BIN): deps ios/tests/ios_module_rpc_test.mm ios/src/NativePowerSyncMo
 	cp ios/src/IdleCompleteHttp.h ios/src/IdleCompleteHttp.mm shared/build/ios-src/
 	cp ios/src/StreamingHttp.h ios/src/StreamingHttp.mm shared/build/ios-src/
 	clang++ -std=c++17 -fPIC -O2 -fobjc-arc -fblocks \
-		-Ishared/build/ios-src -Iios/tests/stubs -Ishared -I$(SQLITE_DIR) \
+		-Ishared/build/ios-src -Iios/tests -Iios/tests/stubs -Ishared -Ishared/tests -I$(SQLITE_DIR) \
 		$(SQLITE_FLAGS) -DPS_SQL_LINK_CORE=1 \
-		ios/tests/ios_module_rpc_test.mm shared/build/ios-src/NativePowerSyncModule.mm \
+		-DPS_SYNC_STREAM_FIXTURES_PATH='"$(FIXTURES_JSON)"' \
+		ios/tests/ios_module_rpc_test.mm ios/tests/ios_sync_http_fixture_test.mm \
+		shared/build/ios-src/NativePowerSyncModule.mm \
 		shared/build/ios-src/NativeSyncHttp.mm \
 		shared/build/ios-src/IdleCompleteHttp.mm \
 		shared/build/ios-src/StreamingHttp.mm \

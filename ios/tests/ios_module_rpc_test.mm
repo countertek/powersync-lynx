@@ -1,4 +1,5 @@
 #import "NativePowerSyncModule.h"
+#import "ios_sync_http_fixtures.h"
 
 @interface NativePowerSyncModule (TestVisible)
 + (NSString*)name;
@@ -234,6 +235,8 @@ int main() {
     });
     PrintEnvelope("close", closed);
     expect([closed[@"ok"] boolValue], "close ok");
+
+    g_failures += RunSyncHttpFixtureTests();
 
     if (g_failures != 0) {
       std::fprintf(stderr, "%d iOS module check(s) failed\n", g_failures);
