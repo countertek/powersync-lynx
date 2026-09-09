@@ -1,5 +1,6 @@
 package com.powersync.lynx.showcase;
 
+import android.util.Base64;
 import android.util.Log;
 import androidx.annotation.Keep;
 import androidx.annotation.NonNull;
@@ -50,6 +51,11 @@ public final class ShowcaseLynxHttpService implements ILynxHttpService {
   private static final String TAG = "ShowcaseLynxHttp";
   private static final int CODE_FAILED_INTERNALLY = 499;
   private static final String DEPRECATED_STREAMING_FLAG = "useStreaming";
+
+  /** Stashed on HttpResponse.customInfo for LynxRemote when idle-completing /sync/stream. */
+  static final String IDLE_COMPLETE_FLAG = "powersyncIdleComplete";
+
+  static final String IDLE_BODY_BASE64_KEY = "powersyncIdleBodyBase64";
 
   /**
    * After the first checkpoint_complete, PowerSync often goes quiet until keepalive (~20s) or the
@@ -150,13 +156,29 @@ public final class ShowcaseLynxHttpService implements ILynxHttpService {
 
                   if (delegate == null) {
                     boolean longLived = looksLikeLongLivedStream(url, response);
+                    byte[] bytes;
                     try {
-                      httpResponse.setHttpBody(readUntilIdleOrEof(response.body(), longLived, url));
+                      bytes = readUntilIdleOrEof(response.body(), longLived, url);
                     } catch (IOException readError) {
                       Log.w(TAG, "buffered read failed: " + readError);
                       httpResponse.setStatusCode(CODE_FAILED_INTERNALLY);
                       httpResponse.setStatusText(String.valueOf(readError));
-                      httpResponse.setHttpBody(new byte[0]);
+                      bytes = new byte[0];
+                    }
+                    httpResponse.setHttpBody(bytes);
+                    // PrimJS/LynxFetchModule often drops or mis-types large byte[] bodies on the
+                    // JS side (JS then takes the empty GlobalEventEmitter "fallback" path). Mirror
+                    // the bytes as base64 in customInfo so LynxRemote can apply the checkpoint.
+                    if (bytes.length > 0 && longLived) {
+                      JavaOnlyMap info = httpResponse.getCustomInfo();
+                      if (info == null) {
+                        info = new JavaOnlyMap();
+                        httpResponse.setCustomInfo(info);
+                      }
+                      info.putBoolean(IDLE_COMPLETE_FLAG, true);
+                      info.putString(
+                          IDLE_BODY_BASE64_KEY,
+                          Base64.encodeToString(bytes, Base64.NO_WRAP));
                     }
                     callback.invoke(httpResponse);
                     return;

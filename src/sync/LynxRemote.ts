@@ -205,11 +205,16 @@ function createLynxTextDecoder(): TextDecoder {
 
 interface LynxFetchSuccess {
   url?: string;
-  body?: ArrayBuffer | Uint8Array | string;
+  body?: ArrayBuffer | Uint8Array | string | unknown;
   headers?: Record<string, string>;
   status?: number;
   statusText?: string;
-  lynxExtension?: { streamingId?: string; enableFetchAPIStandardStreaming?: boolean };
+  lynxExtension?: {
+    streamingId?: string;
+    enableFetchAPIStandardStreaming?: boolean;
+    powersyncIdleComplete?: boolean;
+    powersyncIdleBodyBase64?: string;
+  };
 }
 
 interface LynxFetchModule {
@@ -241,14 +246,18 @@ function latin1Bytes(text: string): Uint8Array {
 }
 
 function toUint8(data: unknown): Uint8Array {
+  if (data == null) {
+    return new Uint8Array(0);
+  }
   if (data instanceof Uint8Array) {
     return data;
   }
   if (data instanceof ArrayBuffer) {
     return new Uint8Array(data);
   }
-  if (ArrayBuffer.isView(data)) {
-    return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  if (typeof ArrayBuffer !== "undefined" && ArrayBuffer.isView(data as ArrayBufferView)) {
+    const view = data as ArrayBufferView;
+    return new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
   }
   if (Array.isArray(data)) {
     return new Uint8Array(data as number[]);
@@ -260,7 +269,125 @@ function toUint8(data: unknown): Uint8Array {
     }
     return new Uint8Array(encodeUtf8(data));
   }
+  if (typeof data === "object") {
+    const tag = Object.prototype.toString.call(data);
+    // PrimJS may hand ArrayBuffers from another realm — instanceof fails.
+    if (tag === "[object ArrayBuffer]") {
+      try {
+        return new Uint8Array(data as ArrayBuffer);
+      } catch {
+        // fall through
+      }
+    }
+    if (tag === "[object Uint8Array]" || tag === "[object Uint8ClampedArray]") {
+      try {
+        const view = data as ArrayBufferView;
+        const copy = new Uint8Array(view.byteLength);
+        copy.set(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
+        return copy;
+      } catch {
+        // fall through
+      }
+    }
+    const rec = data as {
+      buffer?: unknown;
+      byteLength?: unknown;
+      byteOffset?: unknown;
+      length?: unknown;
+      BYTES_PER_ELEMENT?: unknown;
+      data?: unknown;
+    };
+    if (rec.buffer != null && typeof rec.byteLength === "number") {
+      try {
+        const offset = typeof rec.byteOffset === "number" ? rec.byteOffset : 0;
+        const length = Number(rec.byteLength);
+        const base = toUint8(rec.buffer);
+        if (base.byteLength > 0) {
+          return base.subarray(offset, offset + length);
+        }
+      } catch {
+        // fall through
+      }
+    }
+    if (typeof rec.byteLength === "number" && rec.byteLength > 0 && rec.BYTES_PER_ELEMENT == null) {
+      try {
+        return new Uint8Array(data as ArrayBuffer);
+      } catch {
+        // fall through
+      }
+    }
+    if (typeof rec.length === "number" && rec.length > 0) {
+      const len = Number(rec.length);
+      const out = new Uint8Array(len);
+      let numeric = true;
+      for (let i = 0; i < len; i++) {
+        const value = (data as Record<string, unknown>)[String(i)];
+        if (typeof value !== "number") {
+          numeric = false;
+          break;
+        }
+        out[i] = value & 0xff;
+      }
+      if (numeric) {
+        return out;
+      }
+    }
+    if (rec.data != null && rec.data !== data) {
+      const nested = toUint8(rec.data);
+      if (nested.byteLength > 0) {
+        return nested;
+      }
+    }
+  }
   return new Uint8Array(0);
+}
+
+const BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+function decodeBase64(text: string): Uint8Array {
+  if (text.length === 0) {
+    return new Uint8Array(0);
+  }
+  if (typeof atob === "function") {
+    return latin1Bytes(atob(text));
+  }
+  const Buf = (globalThis as { Buffer?: { from: (value: string, encoding: string) => Uint8Array } }).Buffer;
+  if (Buf != null) {
+    return new Uint8Array(Buf.from(text, "base64"));
+  }
+  const clean = text.replace(/[^A-Za-z0-9+/]/g, "");
+  const out = new Uint8Array(Math.floor((clean.length * 3) / 4));
+  let outIndex = 0;
+  for (let i = 0; i < clean.length; i += 4) {
+    const a = BASE64_ALPHABET.indexOf(clean[i]!);
+    const b = BASE64_ALPHABET.indexOf(clean[i + 1] ?? "A");
+    const cChar = clean[i + 2];
+    const dChar = clean[i + 3];
+    const c = cChar == null ? 0 : BASE64_ALPHABET.indexOf(cChar);
+    const d = dChar == null ? 0 : BASE64_ALPHABET.indexOf(dChar);
+    const n = (a << 18) | (b << 12) | (c << 6) | d;
+    out[outIndex++] = (n >> 16) & 0xff;
+    if (cChar != null) {
+      out[outIndex++] = (n >> 8) & 0xff;
+    }
+    if (dChar != null) {
+      out[outIndex++] = n & 0xff;
+    }
+  }
+  return out.subarray(0, outIndex);
+}
+
+/** Prefer direct body bytes; fall back to ShowcaseLynxHttpService idle-complete base64. */
+function bodyFromFetchSuccess(result: LynxFetchSuccess): Uint8Array {
+  const direct = toUint8(result.body);
+  if (direct.byteLength > 0) {
+    return direct;
+  }
+  const b64 = result.lynxExtension?.powersyncIdleBodyBase64;
+  if (typeof b64 === "string" && b64.length > 0) {
+    return decodeBase64(b64);
+  }
+  return direct;
 }
 
 function parseJsonText(text: string): unknown {
@@ -376,13 +503,17 @@ class LynxFetchResponse {
   constructor(result: LynxFetchSuccess, streamingFallback = false) {
     const status = Number(result.status ?? 0);
     const streamingId = result.lynxExtension?.streamingId;
-    const bodyBytes = result.body == null ? new Uint8Array(0) : toUint8(result.body);
+    const idleComplete = result.lynxExtension?.powersyncIdleComplete === true;
+    const bodyBytes = bodyFromFetchSuccess(result);
     let reader: ReadableStreamDefaultReader<Uint8Array>;
-    if (streamingId != null && streamingId.length > 0) {
+    if (streamingId != null && streamingId.length > 0 && bodyBytes.byteLength === 0 && !idleComplete) {
       logFirstSyncStreamPath("chunked", streamingId, "streamingId");
       reader = streamingReader(streamingId);
     } else if (bodyBytes.byteLength > 0) {
-      logFirstSyncStreamPath("raw", undefined, "raw-body");
+      // Idle-complete / buffered body wins over nameless GlobalEventEmitter fallback.
+      // Native may return ~19KB while JS sees streamingId:null — applying raw bytes is required
+      // for ps_buckets > 0.
+      logFirstSyncStreamPath("raw", streamingId, "raw-body");
       finishFirstSyncStreamRaw(bodyBytes.byteLength);
       reader = readerFromChunks([bodyBytes]);
     } else if (streamingFallback) {
@@ -393,7 +524,7 @@ class LynxFetchResponse {
       finishFirstSyncStreamRaw(0);
       reader = readerFromChunks([]);
     }
-    this.rawBody = result.body;
+    this.rawBody = bodyBytes.byteLength > 0 ? bodyBytes : result.body;
     this.ok = status >= 200 && status < 300;
     this.status = status;
     this.statusText = String(result.statusText ?? "");
@@ -830,11 +961,15 @@ function streamingExtension(expectStreamingResponse: boolean): Record<string, bo
   if (!expectStreamingResponse) {
     return {};
   }
-  // Standard streaming only. Do NOT set useStreaming: that selects Lynx's deprecated
-  // CRLF chunked parser, which mis-parses PowerSync NDJSON (LF-only) and yields
-  // errorStreamingMalformedResponse / empty onData. Android showcase also registers
-  // ShowcaseLynxHttpService so a non-streaming fallback can idle-complete /sync/stream
-  // instead of hanging on ResponseBody.bytes().
+  // Android showcase: ShowcaseLynxHttpService idle-completes non-streaming /sync/stream and
+  // stashes NDJSON as powersyncIdleBodyBase64. Requesting standard streaming here previously
+  // yielded streamingId:null + empty body while JS waited on nameless GlobalEventEmitter
+  // fallback — ps_buckets stayed 0. Force the buffered handoff on Android.
+  if (isLynxAndroid()) {
+    return {};
+  }
+  // Do NOT set useStreaming: that selects Lynx's deprecated CRLF chunked parser, which
+  // mis-parses PowerSync NDJSON (LF-only) and yields errorStreamingMalformedResponse.
   return { enableFetchAPIStandardStreaming: true };
 }
 

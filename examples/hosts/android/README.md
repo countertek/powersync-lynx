@@ -89,7 +89,8 @@ JS never receives body bytes / `streamingId` / `onData` → SQLite stays at `ps_
 
 This host registers `ShowcaseLynxHttpService` in `ShowcaseApplication` instead of `LynxHttpService.INSTANCE`:
 
-- **Non-streaming `/sync/stream`:** read until EOF **or** a short idle timeout (~2.5s), then return the buffered checkpoint + ops to JS (PowerSync applies buckets; the client reconnects for the next batch).
+- **Non-streaming `/sync/stream`:** read until EOF **or** a short idle timeout (~2.5s), then return the buffered checkpoint + ops. The bytes are also mirrored as `lynxExtension.powersyncIdleBodyBase64` because LynxFetchModule often fails to surface large `byte[]` bodies to JS (which previously selected an empty GlobalEventEmitter **fallback** and left `ps_buckets=0`).
+- **LynxRemote (Android):** does **not** set `enableFetchAPIStandardStreaming` for sync streams; prefers idle-complete / raw body over nameless streaming fallback.
 - **Streaming path:** pipe `byteStream()` into Lynx’s `HttpStreamingDelegate` with a **120s** read timeout so keepalive gaps do not abort the stream.
 
 ### Rebuild after this change
