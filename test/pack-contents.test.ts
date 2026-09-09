@@ -218,10 +218,7 @@ test("iOS podspec compiles shared/ps_sql by path; test-ios uses otool -D", () =>
   const fetchScript = readFileSync(path.join(root, "scripts/fetch-native-deps.mjs"), "utf8");
   assert.match(fetchScript, /removeStaleIosPsSqlCopies/);
   assert.doesNotMatch(fetchScript, /materializeIosSrcCompileInputs/);
-  assert.doesNotMatch(
-    fetchScript,
-    /materializeRegularFile\(path\.join\(ROOT, 'shared', 'ps_sql/,
-  );
+  assert.doesNotMatch(fetchScript, /materializeRegularFile\(path\.join\(ROOT, 'shared', 'ps_sql/);
 
   const makefile = readFileSync(path.join(root, "Makefile"), "utf8");
   assert.match(makefile, /otool -D/, "make test-ios must discover the core dylib id with otool -D");
