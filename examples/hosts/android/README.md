@@ -1,55 +1,147 @@
 # Android native host (Autolink)
 
-This is a drop-in recipe for a Lynx **4.0+** Android host that loads the TODO app
-bundle and Autolinks `powersync-lynx`. It is not a full Android Studio app.
+A Lynx **4.0** Android app that loads the ReactLynx TODO bundle and Autolinks
+`NativePowerSyncModule`. Emulator is the path this repo verifies. Lynx Explorer
+does **not** register the module.
 
-Lynx Explorer does **not** register `NativePowerSyncModule`. There is no
-Explorer/QR run path; see the try-it guide [`examples/README.md`](../../README.md).
+Floors: minSdk **24**, compileSdk 35, Lynx **4.0.1** (PrimJS **4.0.0** — Maven has no `primjs:4.0.1`), Autolink Gradle plugins **4.0.1**.
+
+## Prerequisites
+
+- JDK 17 (`JAVA_HOME`)
+- Android SDK with `platforms;android-35` (or 36) and an ARM64 emulator image
+- pnpm **12**
+- The local compose stack from [`examples/README.md`](../../README.md)
+
+This environment: Java 17, `ANDROID_HOME=$HOME/Library/Android/sdk`, AVD `Pixel_10_Pro` (API 37).
+
+## Install / build / run (emulator)
+
+From the repository root:
+
+```bash
+pnpm --dir examples/showcase install
+pnpm --dir examples/showcase build
+
+pnpm --dir examples/hosts install
+
+cd examples/hosts/android
+./gradlew :app:assembleDebug
+$ANDROID_HOME/emulator/emulator -avd Pixel_10_Pro -no-snapshot-load &
+$ANDROID_HOME/platform-tools/adb wait-for-device
+./gradlew :app:installDebug
+adb shell am start -n com.powersync.lynx.showcase/.MainActivity
+```
+
+The emulator reaches the Mac via **`10.0.2.2`**, not `127.0.0.1`. Defaults in
+`app/src/main/res/values/strings.xml` already use that.
+
+## Server addressing
+
+| Source | Keys |
+|---|---|
+| `strings.xml` (defaults) | `demo_device=android`, `demo_api_url=http://10.0.2.2:8081`, `powersync_url=http://10.0.2.2:8080` |
+| Launch extras | `device`, `demoApiUrl`, `powersyncUrl` |
+
+Two-client (second store on the same emulator, or a second AVD):
+
+```bash
+adb shell am start -n com.powersync.lynx.showcase/.MainActivity --es device android-b
+```
+
+Or emulator + web demo at `http://localhost:4173/?device=web-b`.
+
+Cleartext HTTP is allowed **only in debug** and only for `10.0.2.2`, `127.0.0.1`,
+and `localhost` (`app/src/debug/res/xml/network_security_config.xml`). Release
+builds have no cleartext.
+
+## Physical device
+
+1. Put the Mac's LAN IP in `strings.xml` (`demo_api_url` / `powersync_url`).
+2. Add that IP as a `<domain>` under the debug network-security-config (or the
+   request is blocked as cleartext).
+3. `adb install` / Android Studio. USB debugging required. No signing account
+   is needed for debug APKs.
+
+## Troubleshooting
+
+| Symptom | Check |
+|---|---|
+| Autolink plugin not found | Plugin ids are `org.lynxsdk.lynx.library-settings` / `library-build` **4.0.1** on the Gradle Plugin Portal, not the shorter `org.lynxsdk.library-*` names in older recipes. |
+| `NativePowerSyncModule is not registered` | `pnpm --dir examples/hosts install` so Autolink can see `lynx.lib.json`. Fallback only if the plugin cannot resolve: `LynxEnv.inst().registerModule("NativePowerSyncModule", NativePowerSyncModule.class)`. |
+| Missing bundle | `pnpm --dir examples/showcase build` first (`copyLynxBundle` fails loudly). |
+| Token works, sync does not | Still pointing at `127.0.0.1` from inside the emulator. Use `10.0.2.2`. |
+| `cleartext` / `ERR_CLEARTEXT_NOT_PERMITTED` | Debug network-security-config does not list that host. |
+| Empty `<input>` | `xelement` + `xelement-input` 4.0.0 missing. |
+| Download hangs / `ps_buckets=0` after server 200 | Use `NativePowerSyncModule.httpFetch` path (rebuild showcase + APK). Logcat should show FM-PS-LYNX-003 `streamingId` / `via: "chunked"`. Stock LynxFetchModule alone cannot deliver live NDJSON. |
+
+## `/sync/stream` download fix (`ShowcaseLynxHttpService`)
+
+Stock Lynx 4.0.1 `LynxHttpService` on the **non-streaming** path calls `ResponseBody.bytes()` (see `LynxHttpService.kt` ~line 60). PowerSync keeps the chunked NDJSON connection open after `checkpoint_complete`, so OkHttp’s default read timeout surfaces as:
+
+```text
+java.net.SocketTimeoutException: timeout
+  at okhttp3.ResponseBody.bytes
+  at com.lynx.service.http.LynxHttpService$requestInner$1.onResponse
+```
+
+JS never receives body bytes / `streamingId` / `onData` → SQLite stays at `ps_buckets=0` even though the service returned ~19KB of ops.
+
+### `/sync/stream` download path (Android)
+
+LynxFetchModule drops large `byte[]` response bodies and `customInfo`→`lynxExtension` on PrimJS, so idle-complete via `ShowcaseLynxHttpService` alone never reached PowerSync (`via: "fallback"`, `ps_buckets=0`).
+
+**Current path:** `LynxRemote` calls `NativePowerSyncModule.httpFetch` for Android streaming downloads.
+
+1. **Callback (one-shot):** returns HTTP status + `streamingId` with an empty body (Lynx Callback can only fire once — [lynx#1972](https://github.com/lynx-family/lynx/issues/1972)).
+2. **Chunks:** native keeps the chunked `/sync/stream` connection open (120s read timeout) and posts UTF-8 string `onData` / `onEnd` / `onError` via `LynxContext.sendGlobalEvent(streamingId, …)`.
+3. **JS:** `LynxRemote` builds a ReadableStream from those GlobalEventEmitter events and PowerSync applies NDJSON incrementally — same shape as web `fetch` streaming, not idle-complete batching.
+
+Why not LynxFetchModule / stock LynxHttpService? Stock non-streaming path hangs on `ResponseBody.bytes()` for live PowerSync streams; LynxFetchModule also drops large `byte[]` bodies on PrimJS. Our path never buffers the full body and never uses `byte[]` for chunks (UTF-8 strings only).
+
+`ShowcaseLynxHttpService` remains registered for Connector / `demoFetch` / other LynxFetchModule traffic. Idle-complete remains a fallback when `LynxContext` is unavailable (plain Context unit tests).
+
+Expect FM-PS-LYNX-003 logs: `invoking NativePowerSyncModule.httpFetch`, `native httpFetch incremental stream`, `via: "chunked"` / `streamingId`, and `first onData` before any terminal event.
+
+### Rebuild after this change
+
+```bash
+pnpm --dir examples/showcase install
+pnpm --dir examples/showcase build
+pnpm --dir examples/hosts install
+cd examples/hosts/android
+./gradlew :app:assembleDebug
+adb uninstall com.powersync.lynx.showcase   # clears old DB; force-stop is not enough
+./gradlew :app:installDebug
+adb shell am start -n com.powersync.lynx.showcase/.MainActivity
+```
+
+### Verify downloads (not `hasSynced` alone)
+
+1. Local stack up (`examples/docker-compose.yml`); create a todo via demo-api / web / Postgres.
+2. On the emulator, confirm the todo appears in the list.
+3. Optional SQLite check: `ps_buckets` count **> 0** and todos present after the server checkpoint.
+4. Upload still works: add a todo on device and see it in Postgres / another client.
+
+Expect FM-PS-LYNX-003 `via: "chunked"` with a `NativePowerSyncHttpStream*` `streamingId` (not `fallback` / idle `raw-body`). Cross-device: add a todo on web → it should appear on native promptly while the stream stays open.
+
+Host unit tests (no device): `./gradlew :app:testDebugUnitTest`  
+Adapter tests: `NODE_OPTIONS=--experimental-strip-types pnpm test`
 
 ## What this environment verified
 
-- The ReactLynx **lynx** bundle compiles (`pnpm --dir examples/showcase build`).
-- This Android host was **not** assembled with Gradle against a device/emulator
-  in the examples task. Live `/sync/stream` incremental delivery and
-  `disconnect()` cancellation are **not verified** on Android.
+This checkout, 2026-09-08/09. AVD **Pixel_10_Pro** (API 37, `emulator-5554`), JDK 17, AGP 8.7.2, Gradle 8.11.1, Lynx **4.0.1** (PrimJS **4.0.0**), pnpm **12.3.4**.
 
-Floors: minSdk **24**, compileSdk 35, Lynx **4.0+**.
+| Claim | Result |
+|---|---|
+| Build + install + launch | **Yes.** `./gradlew :app:assembleDebug`, `adb install`, `am start` `com.powersync.lynx.showcase/.MainActivity` |
+| UI paints, local DB ready after relaunch | **Shared bundle fix** (`bootDemo`). This checkout did **not** rebuild/install the APK, so the emulator still needs `./gradlew :app:installDebug` to pick up **DB ready** without waiting for `connect()` |
+| Add / persist / upload | Earlier emulator runs uploaded `round2add` / `ande2e` to Postgres. Those rows are **not** a current UI-ready proof |
+| Upload + another client sees it | **Not re-verified this checkout.** iOS did not download existing Postgres todos |
+| Go offline / Reconnect (stream cancel) | Same ReactLynx control. **Not re-tapped** this checkout |
+| Offline queue | **Not re-tapped** this checkout |
+| Toggle / delete / filter | Toggle/delete hit targets are small (Lynx `bindtap` on row text). Filters paint (All is filled teal). Not used as the money-shot proof |
+| `fetch(url, init)` | **Broken on Android PrimJS** (`Failed to construct 'Request'`). Sync uses `LynxFetchModule`; demo-api POST uses `demoFetch()` in `examples/showcase/src/util.ts` |
+| Physical device | **Not run** |
 
-## Autolink Gradle
-
-`settings.gradle`:
-
-```gradle
-plugins {
-  id 'org.lynxsdk.library-settings'
-}
-```
-
-`app/build.gradle`:
-
-```gradle
-plugins {
-  id 'com.android.application'
-  id 'org.lynxsdk.library-build'
-}
-
-dependencies {
-  implementation 'org.lynxsdk.lynx:lynx:4.0.1'
-  implementation 'org.lynxsdk.lynx:lynx-service-http:4.0.1'
-}
-```
-
-The host app `package.json` must depend on `powersync-lynx` so Autolink can
-find `lynx.lib.json`.
-
-## HTTP Service + streaming flag
-
-Register `LynxHttpService` with `LynxServiceCenter` before creating LynxView.
-Set PageConfig `enableFetchAPIStandardStreaming = true` (LynxSDK 3.7+).
-Service registration is a prerequisite, not proof of incremental delivery.
-`ShowcaseApplication.kt` in this folder registers the HTTP Service before
-`LynxEnv` init; this recipe does not include a LynxView.
-
-## Load the bundle
-
-Point LynxView at `examples/showcase/lynx-dist/main.lynx.bundle`.
+`am force-stop` often leaves the process; `adb uninstall` is the reliable way to load a new bundle (it wipes the local DB).

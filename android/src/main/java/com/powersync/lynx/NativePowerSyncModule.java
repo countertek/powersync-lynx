@@ -5,11 +5,13 @@ import androidx.annotation.Nullable;
 import androidx.sqlite.SQLiteConnection;
 import androidx.sqlite.SQLiteStatement;
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver;
+import com.lynx.jsbridge.Arguments;
 import com.lynx.jsbridge.LynxMethod;
 import com.lynx.jsbridge.LynxModule;
 import com.lynx.jsbridge.LynxNativeModule;
-import com.lynx.react.bridge.Arguments;
 import com.lynx.react.bridge.Callback;
+import com.lynx.react.bridge.JavaOnlyArray;
+import com.lynx.react.bridge.JavaOnlyMap;
 import com.lynx.react.bridge.ReadableArray;
 import com.lynx.react.bridge.ReadableMap;
 import com.lynx.react.bridge.ReadableType;
@@ -19,13 +21,14 @@ import com.lynx.tasm.behavior.LynxContext;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Matcher;
-import java.util.Locale;
 import java.util.regex.Pattern;
 
 /**
@@ -47,9 +50,13 @@ public class NativePowerSyncModule extends LynxModule {
   private static final int OPEN_READWRITE = 0x00000002;
   private static final int OPEN_CREATE = 0x00000004;
 
+  private static final String STREAM_EVENT_PREFIX = "NativePowerSyncHttpStream";
+
   private final ExecutorService executor = Executors.newCachedThreadPool();
   private final Map<String, Conn> dbs = new ConcurrentHashMap<>();
+  private final Map<String, AtomicBoolean> activeStreams = new ConcurrentHashMap<>();
   private final AtomicLong nextId = new AtomicLong(1);
+  private final AtomicLong nextStreamId = new AtomicLong(0);
   private final BundledSQLiteDriver driver;
 
   public NativePowerSyncModule(Context context) {
@@ -87,6 +94,210 @@ public class NativePowerSyncModule extends LynxModule {
   @LynxMethod
   public void executeBatch(String dbId, String sql, ReadableArray params, Callback callback) {
     executor.execute(() -> invoke(callback, executeBatchSync(dbId, sql, params)));
+  }
+
+  /**
+   * HTTP for PowerSync {@code /sync/stream}.
+   *
+   * <p>When {@link LynxContext#sendGlobalEvent} is available (normal Lynx host), opens a live
+   * stream: one Callback with {@code streamingId} + headers, then incremental UTF-8 {@code onData}
+   * / {@code onEnd} / {@code onError} via GlobalEventEmitter (Lynx Callback is one-shot). Chunks are
+   * <strong>strings</strong> — PrimJS drops large {@code byte[]} on this host.
+   *
+   * <p>Falls back to idle-complete one-shot UTF-8 body when GlobalEventEmitter cannot be reached
+   * (plain Context unit tests).
+   */
+  @LynxMethod
+  public void httpFetch(ReadableMap request, Callback callback) {
+    ParsedHttpRequest parsed = parseHttpRequest(request);
+    if (parsed.error != null) {
+      invoke(callback, fail(parsed.error));
+      return;
+    }
+    if (IdleCompleteHttp.isSyncStreamUrl(parsed.url) && lynxContext() != null) {
+      executor.execute(() -> httpFetchStreaming(parsed, callback));
+      return;
+    }
+    executor.execute(() -> invoke(callback, httpFetchIdleComplete(parsed)));
+  }
+
+  /** Cancel a live stream started by {@link #httpFetch}. */
+  @LynxMethod
+  public void httpFetchAbort(String streamId, Callback callback) {
+    AtomicBoolean flag = streamId == null ? null : activeStreams.get(streamId);
+    if (flag != null) {
+      flag.set(true);
+    }
+    WritableMap ok = Arguments.createMap();
+    ok.putBoolean("ok", true);
+    invoke(callback, ok);
+  }
+
+  private void httpFetchStreaming(ParsedHttpRequest parsed, Callback callback) {
+    final String streamId = STREAM_EVENT_PREFIX + nextStreamId.getAndIncrement();
+    final AtomicBoolean cancelled = new AtomicBoolean(false);
+    activeStreams.put(streamId, cancelled);
+    final AtomicBoolean headersSent = new AtomicBoolean(false);
+    try {
+      StreamingHttp.stream(
+          parsed.method,
+          parsed.url,
+          parsed.headers,
+          parsed.bodyBytes,
+          cancelled,
+          new StreamingHttp.Listener() {
+            @Override
+            public void onHeaders(int status, String statusText, String contentType) {
+              if (!headersSent.compareAndSet(false, true)) {
+                return;
+              }
+              WritableMap ok = Arguments.createMap();
+              ok.putBoolean("ok", true);
+              ok.putDouble("status", status);
+              ok.putString("statusText", statusText == null ? "" : statusText);
+              if (contentType != null) {
+                ok.putString("contentType", contentType);
+              }
+              ok.putString("body", "");
+              ok.putString("streamingId", streamId);
+              ok.putBoolean("idleComplete", false);
+              invoke(callback, ok);
+            }
+
+            @Override
+            public void onData(String utf8Chunk) {
+              if (utf8Chunk == null || utf8Chunk.isEmpty()) {
+                return;
+              }
+              sendStreamEvent(streamId, "onData", utf8Chunk, null);
+            }
+
+            @Override
+            public void onEnd() {
+              sendStreamEvent(streamId, "onEnd", null, null);
+              activeStreams.remove(streamId);
+            }
+
+            @Override
+            public void onError(String message) {
+              if (!headersSent.get()) {
+                invoke(callback, fail(message != null ? message : "httpFetch stream failed"));
+              } else {
+                sendStreamEvent(streamId, "onError", null, message);
+              }
+              activeStreams.remove(streamId);
+            }
+          });
+    } catch (Throwable t) {
+      activeStreams.remove(streamId);
+      if (!headersSent.get()) {
+        invoke(callback, fail(t.getMessage() != null ? t.getMessage() : "httpFetch failed"));
+      } else {
+        sendStreamEvent(
+            streamId, "onError", null, t.getMessage() != null ? t.getMessage() : "httpFetch failed");
+        sendStreamEvent(streamId, "onEnd", null, null);
+      }
+    }
+  }
+
+  private WritableMap httpFetchIdleComplete(ParsedHttpRequest parsed) {
+    try {
+      IdleCompleteHttp.Result result =
+          IdleCompleteHttp.fetch(parsed.method, parsed.url, parsed.headers, parsed.bodyBytes);
+      WritableMap ok = Arguments.createMap();
+      ok.putBoolean("ok", true);
+      ok.putDouble("status", result.status);
+      ok.putString("statusText", result.statusText);
+      String contentType = result.headers.get("content-type");
+      if (contentType != null) {
+        ok.putString("contentType", contentType);
+      }
+      String bodyText = IdleCompleteHttp.utf8(result.body);
+      ok.putString("body", bodyText);
+      ok.putString(
+          "bodyBase64",
+          android.util.Base64.encodeToString(result.body, android.util.Base64.NO_WRAP));
+      ok.putBoolean("idleComplete", IdleCompleteHttp.isSyncStreamUrl(parsed.url));
+      return ok;
+    } catch (Throwable t) {
+      return fail(t.getMessage() != null ? t.getMessage() : "httpFetch failed");
+    }
+  }
+
+  private static final class ParsedHttpRequest {
+    final String url;
+    final String method;
+    final Map<String, String> headers;
+    final byte[] bodyBytes;
+    final String error;
+
+    ParsedHttpRequest(
+        String url, String method, Map<String, String> headers, byte[] bodyBytes, String error) {
+      this.url = url;
+      this.method = method;
+      this.headers = headers;
+      this.bodyBytes = bodyBytes;
+      this.error = error;
+    }
+  }
+
+  private ParsedHttpRequest parseHttpRequest(ReadableMap request) {
+    if (request == null || !request.hasKey("url") || request.isNull("url")) {
+      return new ParsedHttpRequest(null, null, null, null, "url is required");
+    }
+    String url = request.getString("url");
+    if (url == null || url.isEmpty()) {
+      return new ParsedHttpRequest(null, null, null, null, "url is required");
+    }
+    String method =
+        request.hasKey("method") && !request.isNull("method") ? request.getString("method") : "GET";
+    Map<String, String> headers = new java.util.LinkedHashMap<>();
+    if (request.hasKey("headers") && !request.isNull("headers")) {
+      ReadableMap headerMap = request.getMap("headers");
+      if (headerMap != null) {
+        for (Map.Entry<String, Object> entry : headerMap.asHashMap().entrySet()) {
+          if (entry.getKey() != null && entry.getValue() != null) {
+            headers.put(entry.getKey(), String.valueOf(entry.getValue()));
+          }
+        }
+      }
+    }
+    byte[] bodyBytes = null;
+    if (request.hasKey("body") && !request.isNull("body")) {
+      ReadableType bodyType = request.getType("body");
+      if (bodyType == ReadableType.String) {
+        bodyBytes = request.getString("body").getBytes(java.nio.charset.StandardCharsets.UTF_8);
+      } else if (bodyType == ReadableType.ByteArray) {
+        bodyBytes = request.getByteArray("body");
+      }
+    }
+    return new ParsedHttpRequest(url, method, headers, bodyBytes, null);
+  }
+
+  private LynxContext lynxContext() {
+    if (mContext instanceof LynxContext) {
+      return (LynxContext) mContext;
+    }
+    return null;
+  }
+
+  private void sendStreamEvent(String streamId, String event, String data, String error) {
+    LynxContext context = lynxContext();
+    if (context == null) {
+      return;
+    }
+    JavaOnlyMap payload = new JavaOnlyMap();
+    payload.putString("event", event);
+    if (data != null) {
+      // UTF-8 string — not byte[] — so PrimJS delivers onData to LynxRemote.
+      payload.putString("data", data);
+    }
+    if (error != null) {
+      payload.putString("error", error);
+    }
+    JavaOnlyArray params = new JavaOnlyArray();
+    params.pushMap(payload);
+    context.sendGlobalEvent(streamId, params);
   }
 
   private WritableMap openSync(ReadableMap options) {

@@ -1,0 +1,7 @@
+# Separate from the library and from examples/showcase so the native Autolink
+# graph does not pull @powersync/web / wa-sqlite.
+allowBuilds:
+  esbuild: true
+autoInstallPeers: false
+onlyBuiltDependencies:
+  - esbuild

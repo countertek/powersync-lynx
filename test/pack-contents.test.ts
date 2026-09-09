@@ -21,7 +21,9 @@ function packedPaths(tarball) {
 test("packed tarball ships iOS build inputs and omits host/build residue", async () => {
   const dest = await mkdtemp(path.join(tmpdir(), "ps-lynx-pack-"));
   try {
-    const packed = execFileSync("pnpm", ["pack", "--pack-destination", dest], {
+    execFileSync("node", ["scripts/fetch-native-deps.mjs", "--sqlite"], { cwd: root, stdio: "pipe" });
+    execFileSync("node", ["scripts/bundle-web-host-factory.mjs"], { cwd: root, stdio: "pipe" });
+    const packed = execFileSync("pnpm", ["pack", "--pack-destination", dest, "--ignore-scripts"], {
       cwd: root,
       encoding: "utf8",
     });
@@ -44,9 +46,76 @@ test("packed tarball ships iOS build inputs and omits host/build residue", async
     assert.equal(has("third_party/sqlite/sqlite3.h"), true, "podspec source_files needs sqlite3.h");
     assert.equal(has("ios/powersync-lynx.podspec"), true);
     assert.equal(
+      files.includes("powersync-lynx.podspec"),
+      false,
+      "published layout is one canonical ios/powersync-lynx.podspec, not a root duplicate",
+    );
+    assert.equal(
+      has("ios/src/ps_sql.cc"),
+      true,
+      "canonical ios/ podspec compiles ps_sql.cc from ios/src (symlink or copy)",
+    );
+    assert.equal(
+      has("ios/src/ps_sql.h"),
+      true,
+      "canonical ios/ podspec compiles ps_sql.h from ios/src (symlink or copy)",
+    );
+    assert.equal(
+      has("ios/src/sqlite3.c"),
+      true,
+      "canonical ios/ podspec compiles sqlite3.c from ios/src (symlink or copy)",
+    );
+    assert.equal(
+      has("ios/src/sqlite3.h"),
+      true,
+      "canonical ios/ podspec compiles sqlite3.h from ios/src (symlink or copy)",
+    );
+    assert.equal(
+      has("ios/src/IdleCompleteHttp.h"),
+      true,
+      "iOS NativePowerSyncModule.httpFetch needs IdleCompleteHttp.h",
+    );
+    assert.equal(
+      has("ios/src/IdleCompleteHttp.mm"),
+      true,
+      "iOS NativePowerSyncModule.httpFetch needs IdleCompleteHttp.mm",
+    );
+    assert.equal(
+      has("ios/src/StreamingHttp.h"),
+      true,
+      "iOS incremental /sync/stream needs StreamingHttp.h",
+    );
+    assert.equal(
+      has("ios/src/StreamingHttp.mm"),
+      true,
+      "iOS incremental /sync/stream needs StreamingHttp.mm",
+    );
+    assert.equal(
+      has("android/src/main/java/com/powersync/lynx/StreamingHttp.java"),
+      true,
+      "Android incremental /sync/stream needs StreamingHttp.java",
+    );
+    assert.equal(
+      has("ios/src/NativePowerSyncModule.mm"),
+      true,
+      "iOS NativePowerSyncModule sources ship for Autolink",
+    );
+    assert.equal(
       has("dist/web-host/factory.js"),
       true,
       "attach factory URL needs the bundled ESM entry",
+    );
+
+    const packedLynxLib = JSON.parse(
+      execFileSync("tar", ["xzf", archive, "-O", "package/lynx.lib.json"], {
+        encoding: "utf8",
+      }),
+    );
+    assert.equal(packedLynxLib.platforms?.ios?.sourceDir, "ios");
+    assert.equal(
+      Object.hasOwn(packedLynxLib.platforms?.ios ?? {}, "podspecPath"),
+      false,
+      "Autolink uses the first .podspec under ios/",
     );
 
     assert.equal(

@@ -7,14 +7,13 @@ Pod::Spec.new do |s|
   s.author       = 'PowerSync'
   s.platform     = :ios, '15.0'
   s.source       = { :path => '.' }
-  s.source_files = 'src/**/*.{h,m,mm}', '../shared/ps_sql.{h,cc}', '../third_party/sqlite/sqlite3.{c,h}'
-  s.exclude_files = '../shared/nativeModule/**/*', '../shared/tests/**/*'
+  s.source_files = 'src/**/*.{h,m,mm,c,cc}'
   s.dependency 'Lynx'
   s.dependency 'powersync-sqlite-core', '0.5.3'
   s.libraries = 'c++'
   s.pod_target_xcconfig = {
     'CLANG_CXX_LANGUAGE_STANDARD' => 'c++17',
-    'HEADER_SEARCH_PATHS' => '"$(PODS_TARGET_SRCROOT)/../shared" "$(PODS_TARGET_SRCROOT)/../third_party/sqlite"',
+    'HEADER_SEARCH_PATHS' => '"$(PODS_TARGET_SRCROOT)/src"',
     'GCC_PREPROCESSOR_DEFINITIONS' => 'PS_SQL_LINK_CORE=1 SQLITE_THREADSAFE=1 SQLITE_ENABLE_FTS5=1 SQLITE_ENABLE_JSON1=1 SQLITE_ENABLE_MATH_FUNCTIONS=1 SQLITE_USE_URI=1 SQLITE_DQS=0 SQLITE_DEFAULT_MEMSTATUS=0 SQLITE_OMIT_DEPRECATED=1 $(inherited)',
     'OTHER_CFLAGS' => '-DSQLITE_THREADSAFE=1'
   }

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="app_name">PowerSync Lynx</string>
+  <string name="demo_device">android</string>
+  <string name="demo_api_url">http://10.0.2.2:8081</string>
+  <string name="powersync_url">http://10.0.2.2:8080</string>
+</resources>

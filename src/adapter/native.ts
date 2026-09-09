@@ -78,9 +78,31 @@ export class NativeModuleError extends Error {
   code?: number;
 }
 
+function asNativeModulesHost(value: unknown): NativeModulesHost | undefined {
+  if (value == null || typeof value !== "object") {
+    return undefined;
+  }
+  return value as NativeModulesHost;
+}
+
+function nativeModulesHost(): NativeModulesHost | undefined {
+  const fromGlobalThis = asNativeModulesHost(globalThis.NativeModules);
+  if (fromGlobalThis?.NativePowerSyncModule != null) {
+    return fromGlobalThis;
+  }
+  try {
+    const fromBinding = asNativeModulesHost(NativeModules);
+    if (fromBinding?.NativePowerSyncModule != null) {
+      return fromBinding;
+    }
+    return fromBinding ?? fromGlobalThis;
+  } catch {
+    return fromGlobalThis;
+  }
+}
+
 function getNativeModule(): NativePowerSyncModule {
-  const modules = globalThis.NativeModules;
-  const native = modules?.NativePowerSyncModule;
+  const native = nativeModulesHost()?.NativePowerSyncModule;
   if (native == null) {
     throw new Error("NativePowerSyncModule is not registered");
   }

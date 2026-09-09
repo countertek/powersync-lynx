@@ -18,7 +18,7 @@ the library. That keeps the library's native install graph free of
 
 | Field | Value |
 |---|---|
-| Dependency | `"powersync-lynx": "file:../.."` |
+| Dependency | `"powersync-lynx": "link:../.."` |
 | Why not `workspace:*` | A shared workspace virtual store would install the optional web peer at the library root |
 | Why not a packed tarball | Same TypeScript entry (`src/*.ts`) the package publishes; `file:` is the local stand-in. Prove the tarball with `pnpm publish-dry-run` |
 | Web extra | The app **directly** depends on `@powersync/web` (optional peer of the Client) and `@lynx-js/web-core` |
@@ -44,11 +44,14 @@ Read this before treating a green web preview as "sync works".
 | Compose profile `sync` (Postgres + PowerSync + demo-api) | **Checked in**. Image pull / container start is **not verified** in every environment. If `journeyapps/powersync-service` cannot be pulled or exits, the app stays a local offline queue |
 | Demo token endpoint | **Static HS256 JWT** minted by `demo-api` with the compose-stack secret. **Not** a JourneyApps / PowerSync Cloud account. **Not** RS256/JWKS from a real IdP |
 | `uploadData` | POSTs CRUD to `demo-api`, which writes Postgres. **Not** a production app backend |
-| Two-window money shot (A writes, B sees it via PowerSync) | **Documented procedure below**. **Not verified** in this checkout against a live PowerSync container |
-| Offline / reconnect beat (queue writes, reconnect, watch them sync) | **Documented**. In-app **Go offline / Reconnect** is `disconnect()` / `connect()`, not an OS network drop. Chrome DevTools "Offline" is the network-drop variant. **Not verified** here against a live service |
-| Live `/sync/stream` incremental delivery on iOS / Android / Windows / macOS | **Not verified** |
-| `disconnect()` cancelling a live native stream | **Not verified** |
-| Physical iOS / Android / Windows / macOS Autolink host run | **Not verified**. Native hosts remain recipe-only |
+| Local UI ready without waiting for `connect()` | **Unit tested** (`test/demo-boot.test.ts`). iOS Simulator relaunch shows **DB ready** and the composer while `/sync/stream` is still handshake/erroring. Watch starts from local ready, not from first checkpoint |
+| Two-window money shot (A writes, B sees it via PowerSync) | **Not verified this checkout.** iOS `ios-t2` opened **DB ready** / sometimes **sync connected**, but `ps_data__todos` stayed 0 and the log repeated `errorStreamingMalformedResponse`. Web two-window procedure still documented below |
+| Offline / reconnect beat (queue writes, reconnect, watch them sync) | In-app **Go offline / Reconnect** is `disconnect()` / `connect()`, not an OS network drop. **Not re-tapped** this checkout |
+| Live `/sync/stream` download on Android | **`NativePowerSyncModule.httpFetch`** idle-completes `/sync/stream` and returns NDJSON as a UTF-8 string (LynxFetchModule drops large bodies). Rebuild showcase + APK. Prove with a server-created todo on device and `ps_buckets > 0`. |
+| Live `/sync/stream` download on iOS | **Same `httpFetch` path as Android** (iOS `NativePowerSyncModule` + idle-complete `NSURLSession`). Rebuild showcase + `pod install` + xcodebuild. Expect FM-PS-LYNX-003 `via: "raw-body"` and `ps_buckets > 0`. See [`hosts/ios/README.md`](hosts/ios/README.md). |
+| `disconnect()` cancelling a live native stream | Same ReactLynx control. **Not tapped** this checkout |
+| Physical iOS / Android Autolink host run | **Documented**. Simulator / emulator is what this checkout exercises |
+| Windows / macOS Autolink host run | **Not verified**. Desktop remains recipe-only |
 | Lynx Explorer | **Will not work** for SQL: Explorer does not register `NativePowerSyncModule` |
 | `pnpm publish` to npmjs | **Workflow checked in** (`.github/workflows/publish.yml`). **Not run** from this task |
 | Publish dry-run to local Verdaccio | **Scripted** (`pnpm publish-dry-run`). Requires compose profile `registry` |
@@ -60,7 +63,9 @@ Do not treat a successful web build as proof of per-platform sync.
 - pnpm **12** (`package.json` `packageManager` is `pnpm@12.3.4`)
 - Node 20.19+ or 22.12+
 - Docker with Compose v2 (profiles)
-- Two browser windows for the money shot
+- Two browser windows for the web money shot
+- iOS Simulator: Xcode 16+, CocoaPods, `gem install cocoapods-lynx-library` — [`hosts/ios/README.md`](hosts/ios/README.md)
+- Android Emulator: JDK 17, Android SDK, an ARM64 AVD — [`hosts/android/README.md`](hosts/android/README.md)
 
 ## 1. Start the local sync stack
 
@@ -154,7 +159,7 @@ docker compose --profile sync --profile registry up --build
 
 ## What you should see in the app
 
-1. **DB ready** after `waitForReady`
+1. **DB ready** after `waitForReady` (does not wait for `connect()` / first sync). Sync may stay connecting/offline; errors stay in the log
 2. Empty list on first load (no local seed — Postgres is the source of truth when the stack is up)
 3. Add / complete-toggle / delete / filter
 4. Collapsible **Sync log**: connect, disconnect, upload/download, CRUD, errors, timestamps
@@ -162,15 +167,34 @@ docker compose --profile sync --profile registry up --build
 
 `uploadData` writes Postgres through `demo-api`. It does not POST to a cloud backend.
 
-## Run: iOS / Android / Windows / macOS
+## Run: iOS / Android
 
-Web is the path to try first. Native hosts are still recipe-only:
+Web is the fastest path. iOS Simulator and Android Emulator are **runnable apps**
+that load the same ReactLynx TODO bundle (`examples/showcase`) via Autolink.
 
 - iOS: [`hosts/ios/README.md`](hosts/ios/README.md)
 - Android: [`hosts/android/README.md`](hosts/android/README.md)
-- Windows / macOS: [`hosts/desktop/README.md`](hosts/desktop/README.md)
+- Windows / macOS: [`hosts/desktop/README.md`](hosts/desktop/README.md) (recipe-only)
 
-**Not verified here:** Xcode / Gradle / Lynxtron launch, live streaming, cancellation.
+Native hosts inject `device`, `demoApiUrl`, and `powersyncUrl` through Lynx
+`globalProps`. The Android emulator default is `http://10.0.2.2:8081` / `:8080`.
+iOS Simulator and web keep `http://127.0.0.1:8081` / `:8080`. Override via
+Info.plist / `strings.xml`, `simctl` argv/env, or `adb` extras — do not hard-code
+a laptop LAN IP.
+
+```bash
+# shared: bundle the ReactLynx app, then Autolink scan roots
+pnpm --dir examples/showcase install
+pnpm --dir examples/showcase build
+pnpm --dir examples/hosts install
+```
+
+Two-client: one native store + `http://localhost:4173/?device=web-b`, or two
+native launches with different `device` values. Filter pills stay local.
+
+**Streaming:** hosts set LynxEnv `enable_fetch_api_standard_streaming` so Fetch uses the standard stream path (LynxSDK 3.7+). That is a prerequisite, not by itself proof of incremental `/sync/stream`.
+
+**Not verified on Windows / macOS Lynxtron.** Desktop remains recipe-only.
 
 ## Lint / format
 
@@ -197,5 +221,5 @@ examples/
   showcase/                 ReactLynx TODO + Lynx-for-Web host
     src/                    Schema, Connector, UI, log drawer
     host/                   attach() page (Vite)
-  hosts/                    Autolink recipes (unverified runs)
+  hosts/                    Autolink iOS + Android apps; desktop still recipe-only
 ```

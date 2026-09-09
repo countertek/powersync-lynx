@@ -1,5 +1,27 @@
+pluginManagement {
+  repositories {
+    google()
+    mavenCentral()
+    gradlePluginPortal()
+  }
+  plugins {
+    id 'com.android.application' version '8.7.2'
+    id 'org.lynxsdk.lynx.library-settings' version '4.0.1'
+    id 'org.lynxsdk.lynx.library-build' version '4.0.1'
+  }
+}
+
 plugins {
-  id 'org.lynxsdk.library-settings'
+  id 'org.lynxsdk.lynx.library-settings'
+}
+
+dependencyResolutionManagement {
+  repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
+  repositories {
+    google()
+    mavenCentral()
+  }
 }
 
 rootProject.name = 'powersync-lynx-showcase'
+include ':app'

@@ -1,7 +1,10 @@
 #import "NativePowerSyncModule.h"
+#import "IdleCompleteHttp.h"
+#import "StreamingHttp.h"
 
 #include "ps_sql.h"
 
+#include <atomic>
 #include <cerrno>
 #include <cmath>
 #include <cstdlib>
@@ -9,6 +12,13 @@
 #include <limits>
 #include <string>
 #include <vector>
+
+#if __has_include(<UIKit/UIKit.h>)
+#import <UIKit/UIKit.h>
+#endif
+#if __has_include(<Lynx/LynxView.h>)
+#import <Lynx/LynxView.h>
+#endif
 
 using ps_sql::BindValue;
 using ps_sql::Cell;
@@ -19,6 +29,8 @@ using ps_sql::Envelope;
 using ps_sql::OpenOptions;
 
 namespace {
+
+std::atomic_long g_stream_counter{0};
 
 Engine& SharedEngine() {
   static Engine* engine = [] {
@@ -211,7 +223,30 @@ void Finish(void (^callback)(id), Envelope envelope) {
 
 }  // namespace
 
+@interface NativePowerSyncModule ()
+@property(nonatomic, strong, nullable) id streamEventSender;
+@property(nonatomic, strong) NSMutableDictionary<NSString *, StreamingHttpSession *> *activeStreams;
+@end
+
 @implementation NativePowerSyncModule
+
+static __weak id g_sharedStreamEventSender = nil;
+
++ (void)setSharedStreamEventSender:(id)sender {
+  g_sharedStreamEventSender = sender;
+}
+
+- (instancetype)init {
+  return [self initWithParam:nil];
+}
+
+- (instancetype)initWithParam:(id)param {
+  if (self = [super init]) {
+    _streamEventSender = param;
+    _activeStreams = [NSMutableDictionary dictionary];
+  }
+  return self;
+}
 
 + (NSString*)name {
   return @"NativePowerSyncModule";
@@ -223,7 +258,182 @@ void Finish(void (^callback)(id), Envelope envelope) {
     @"close" : NSStringFromSelector(@selector(close:callback:)),
     @"execute" : NSStringFromSelector(@selector(execute:sql:params:callback:)),
     @"executeBatch" : NSStringFromSelector(@selector(executeBatch:sql:params:callback:)),
+    @"httpFetch" : NSStringFromSelector(@selector(httpFetch:callback:)),
+    @"httpFetchAbort" : NSStringFromSelector(@selector(httpFetchAbort:callback:)),
   };
+}
+
+- (id)resolveStreamEventSender {
+  if ([self.streamEventSender respondsToSelector:@selector(sendGlobalEvent:withParams:)]) {
+    return self.streamEventSender;
+  }
+  if ([g_sharedStreamEventSender respondsToSelector:@selector(sendGlobalEvent:withParams:)]) {
+    return g_sharedStreamEventSender;
+  }
+#if __has_include(<UIKit/UIKit.h>) && __has_include(<Lynx/LynxView.h>)
+  for (UIWindow *window in UIApplication.sharedApplication.windows) {
+    LynxView *found = [self findLynxViewIn:window];
+    if (found != nil) {
+      return found;
+    }
+  }
+  if (@available(iOS 13.0, *)) {
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+      if (![scene isKindOfClass:[UIWindowScene class]]) {
+        continue;
+      }
+      for (UIWindow *window in ((UIWindowScene *)scene).windows) {
+        LynxView *found = [self findLynxViewIn:window];
+        if (found != nil) {
+          return found;
+        }
+      }
+    }
+  }
+#endif
+  return nil;
+}
+
+#if __has_include(<UIKit/UIKit.h>) && __has_include(<Lynx/LynxView.h>)
+- (LynxView *)findLynxViewIn:(UIView *)view {
+  if ([view isKindOfClass:[LynxView class]]) {
+    return (LynxView *)view;
+  }
+  for (UIView *child in view.subviews) {
+    LynxView *found = [self findLynxViewIn:child];
+    if (found != nil) {
+      return found;
+    }
+  }
+  return nil;
+}
+#endif
+
+- (void)sendStreamEvent:(NSString *)streamId
+                  event:(NSString *)event
+                   data:(NSString *_Nullable)data
+                  error:(NSString *_Nullable)error {
+  id sender = [self resolveStreamEventSender];
+  if (sender == nil) {
+    return;
+  }
+  NSMutableDictionary *payload = [@{@"event" : event} mutableCopy];
+  if (data != nil) {
+    // UTF-8 string — not NSData — so PrimJS delivers onData to LynxRemote.
+    payload[@"data"] = data;
+  }
+  if (error != nil) {
+    payload[@"error"] = error;
+  }
+  [sender sendGlobalEvent:streamId withParams:@[ payload ]];
+}
+
+- (BOOL)urlLooksLikeSyncStream:(NSDictionary *)request {
+  id urlValue = request[@"url"];
+  if (![urlValue isKindOfClass:[NSString class]]) {
+    return NO;
+  }
+  return [[(NSString *)urlValue lowercaseString] containsString:@"/sync/stream"];
+}
+
+- (void)httpFetch:(NSDictionary*)request callback:(void (^)(id))callback {
+  void (^cb)(id) = [callback copy];
+  if (cb == nil) {
+    return;
+  }
+  BOOL syncStream = [self urlLooksLikeSyncStream:request];
+  id sender = syncStream ? [self resolveStreamEventSender] : nil;
+  if (syncStream && sender != nil) {
+    [self httpFetchStreaming:request callback:cb];
+    return;
+  }
+  // Fallback: idle-complete one-shot (no GlobalEventEmitter / unit tests).
+  dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+    NSDictionary* result = IdleCompleteHttpFetch(request);
+    @autoreleasepool {
+      cb(result);
+    }
+  });
+}
+
+- (void)httpFetchStreaming:(NSDictionary *)request callback:(void (^)(id))callback {
+  NSString *streamId =
+      [NSString stringWithFormat:@"NativePowerSyncHttpStream%ld", g_stream_counter.fetch_add(1)];
+  __block BOOL headersSent = NO;
+  __weak NativePowerSyncModule *weakSelf = self;
+  StreamingHttpSession *session = [[StreamingHttpSession alloc]
+      initWithRequest:request
+            onHeaders:^(NSInteger status, NSString *_Nullable contentType) {
+              headersSent = YES;
+              NSMutableDictionary *result = [@{
+                @"ok" : @YES,
+                @"status" : @(status),
+                @"statusText" : @"",
+                @"body" : @"",
+                @"streamingId" : streamId,
+                @"idleComplete" : @NO,
+              } mutableCopy];
+              if (contentType != nil) {
+                result[@"contentType"] = contentType;
+              }
+              @autoreleasepool {
+                callback(result);
+              }
+            }
+               onData:^(NSString *utf8Chunk) {
+                 NativePowerSyncModule *strongSelf = weakSelf;
+                 [strongSelf sendStreamEvent:streamId event:@"onData" data:utf8Chunk error:nil];
+               }
+                onEnd:^{
+                  NativePowerSyncModule *strongSelf = weakSelf;
+                  [strongSelf sendStreamEvent:streamId event:@"onEnd" data:nil error:nil];
+                  @synchronized(strongSelf.activeStreams) {
+                    [strongSelf.activeStreams removeObjectForKey:streamId];
+                  }
+                }
+              onError:^(NSString *message) {
+                NativePowerSyncModule *strongSelf = weakSelf;
+                if (!headersSent) {
+                  @autoreleasepool {
+                    callback(@{
+                      @"ok" : @NO,
+                      @"status" : @(-1),
+                      @"statusText" : @"",
+                      @"message" : message ?: @"httpFetch stream failed",
+                      @"body" : message ?: @"",
+                      @"idleComplete" : @NO,
+                    });
+                  }
+                } else {
+                  [strongSelf sendStreamEvent:streamId
+                                        event:@"onError"
+                                         data:nil
+                                        error:message ?: @"httpFetch stream failed"];
+                  [strongSelf sendStreamEvent:streamId event:@"onEnd" data:nil error:nil];
+                }
+                @synchronized(strongSelf.activeStreams) {
+                  [strongSelf.activeStreams removeObjectForKey:streamId];
+                }
+              }];
+  @synchronized(self.activeStreams) {
+    self.activeStreams[streamId] = session;
+  }
+  [session start];
+}
+
+- (void)httpFetchAbort:(NSString *)streamId callback:(void (^)(id))callback {
+  void (^cb)(id) = [callback copy];
+  StreamingHttpSession *session = nil;
+  @synchronized(self.activeStreams) {
+    session = self.activeStreams[streamId];
+    [self.activeStreams removeObjectForKey:streamId];
+  }
+  [session cancel];
+  if (cb != nil) {
+    @autoreleasepool {
+      cb(@{@"ok" : @YES});
+    }
+  }
 }
 
 - (void)open:(NSDictionary*)options callback:(void (^)(id))callback {

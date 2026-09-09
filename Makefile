@@ -57,16 +57,19 @@ test: deps $(TEST_BIN)
 	POWERSYNC_CORE_PATH="$(CURDIR)/$(CORE_DYLIB)" $(TEST_BIN)
 
 $(IOS_TEST_BIN): deps ios/tests/ios_module_rpc_test.mm ios/src/NativePowerSyncModule.mm \
-		ios/src/NativePowerSyncModule.h shared/ps_sql.cc shared/ps_sql.h \
+		ios/src/NativePowerSyncModule.h ios/src/IdleCompleteHttp.mm ios/src/IdleCompleteHttp.h \
+		shared/ps_sql.cc shared/ps_sql.h \
 		$(SQLITE_DIR)/sqlite3.o $(CORE_DYLIB)
 	mkdir -p shared/build/ios-src
 	sed 's/@LynxNativeModule("[^"]*")//' ios/src/NativePowerSyncModule.h \
 		> shared/build/ios-src/NativePowerSyncModule.h
 	cp ios/src/NativePowerSyncModule.mm shared/build/ios-src/NativePowerSyncModule.mm
+	cp ios/src/IdleCompleteHttp.h ios/src/IdleCompleteHttp.mm shared/build/ios-src/
 	clang++ -std=c++17 -fPIC -O2 -fobjc-arc -fblocks \
 		-Ishared/build/ios-src -Iios/tests/stubs -Ishared -I$(SQLITE_DIR) \
 		$(SQLITE_FLAGS) -DPS_SQL_LINK_CORE=1 \
 		ios/tests/ios_module_rpc_test.mm shared/build/ios-src/NativePowerSyncModule.mm \
+		shared/build/ios-src/IdleCompleteHttp.mm \
 		shared/ps_sql.cc $(SQLITE_DIR)/sqlite3.o \
 		$(CORE_DYLIB) -framework Foundation $(LDFLAGS) \
 		-Wl,-rpath,$(CURDIR)/dist/macos/arm64 \
