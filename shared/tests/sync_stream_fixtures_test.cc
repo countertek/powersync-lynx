@@ -27,6 +27,7 @@ int main() {
   using ps_sync_fixtures::find_scenario;
   using ps_sync_fixtures::has_key;
   using ps_sync_fixtures::http_get_body;
+  using ps_sync_fixtures::http_read_until_close;
   using ps_sync_fixtures::incremental_data_before_end;
   using ps_sync_fixtures::joined_body;
   using ps_sync_fixtures::load_default;
@@ -91,6 +92,21 @@ int main() {
                errored->events[errored->events.size() - 2] == PS_SYNC_HTTP_EVENT_ON_ERROR &&
                errored->events.back() == PS_SYNC_HTTP_EVENT_ON_END,
            "onError is immediately followed by onEnd (B terminal alignment)");
+    NdjsonReplayServer rst_server;
+    ReplayConfig rst;
+    rst.content_type = catalog.content_type;
+    rst.chunks = errored->chunks;
+    rst.rst_after_first_chunk = true;
+    expect(rst_server.start(rst), "error-then-end RST loopback server starts");
+    std::string rst_raw;
+    bool saw_rst = false;
+    expect(http_read_until_close(rst_server.url(), &rst_raw, &saw_rst),
+           "error-then-end POSIX client reads after first chunk");
+    expect(rst_raw.find("HTTP/1.1 200") != std::string::npos,
+           "error-then-end RST delivers HTTP 200 headers");
+    expect(rst_raw.find(errored->chunks.front()) != std::string::npos,
+           "error-then-end RST delivers the first NDJSON chunk before reset");
+    rst_server.stop();
   }
 
   const auto* idle = find_scenario(catalog, "idle-complete");

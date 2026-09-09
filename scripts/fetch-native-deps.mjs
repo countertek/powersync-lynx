@@ -59,6 +59,8 @@ function materializeRegularFile(src, dest) {
 }
 
 function removeStaleIosPsSqlCopies() {
+  // Canonical engine is shared/ps_sql.{cc,h}. CocoaPods compiles it via
+  // ios/src/ps_sql_engine.cc. Leftover copies here would duplicate symbols.
   const iosSrc = path.join(ROOT, 'ios', 'src');
   for (const name of ['ps_sql.cc', 'ps_sql.h']) {
     try {

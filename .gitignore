@@ -1,9 +1,12 @@
 node_modules/
 third_party/
 # Generated iOS Autolink sqlite amalgamation copied by fetch-native-deps.
-# ps_sql is compiled from shared/ — do not recreate copies under ios/src.
+# Canonical engine is shared/ps_sql.{cc,h}; CocoaPods compiles it via
+# ios/src/ps_sql_engine.cc. Do not recreate engine copies under ios/src.
 ios/src/sqlite3.c
 ios/src/sqlite3.h
+ios/src/ps_sql.cc
+ios/src/ps_sql.h
 native-vendor/
 shared/build/
 android/build/

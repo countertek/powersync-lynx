@@ -7,10 +7,13 @@ Pod::Spec.new do |s|
   s.author       = 'PowerSync'
   s.platform     = :ios, '15.0'
   s.source       = { :path => '.' }
-  # Compile the shared engine from its canonical path. Do not copy ps_sql into ios/src.
-  # sqlite amalgamation is still materialized into src/ by fetch-native-deps.
-  s.source_files = 'src/**/*.{h,m,mm,c,cc}', '../shared/ps_sql.{cc,h}'
+  # CocoaPods drops source_files outside PODS_TARGET_SRCROOT (the ios/ dir).
+  # Compile shared/ps_sql.cc via src/ps_sql_engine.cc (include), not ../shared in
+  # this glob. sqlite amalgamation is materialized into src/ by fetch-native-deps.
+  # Keep leftover ios/src/ps_sql.{cc,h} copies out of the target (canonical is shared/).
+  s.source_files = 'src/**/*.{h,m,mm,c,cc}'
   s.exclude_files = 'src/ps_sql.{cc,h}'
+  s.preserve_paths = '../shared/ps_sql.cc', '../shared/ps_sql.h'
   s.dependency 'Lynx'
   s.dependency 'powersync-sqlite-core', '0.5.3'
   s.libraries = 'c++'
