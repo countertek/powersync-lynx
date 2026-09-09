@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { LynxDBAdapter } from "../src/adapter/LynxDBAdapter.ts";
 import {
   blobToArrayBuffer,
-  callNative,
+  nativeSql,
   decodeCell,
   encodeBindParams,
   type BindValueRows,
@@ -213,7 +213,7 @@ test("opens 1 write + 5 read connections per file and never loadExtension", asyn
 
 test("Native Module methods are invoked with a callback and the return value is ignored", async () => {
   installMockNative();
-  const envelope = await callNative("open", { dbFilename: "x.db", readOnly: true });
+  const envelope = await nativeSql.open({ dbFilename: "x.db", readOnly: true });
   assert.equal(envelope.ok, true);
   assert.match(envelope.dbId, /^db-/);
 });
@@ -223,7 +223,7 @@ test("throws a JS Error when the envelope is { ok: false }", async () => {
     execute: () => ({ ok: false, message: "disk I/O error", code: 778 }),
   });
   await assert.rejects(
-    () => callNative("execute", "db-1", "SELECT 1", []),
+    () => nativeSql.execute("db-1", "SELECT 1", []),
     (err) => {
       assert.equal(err instanceof Error, true);
       assert.equal(err.message, "disk I/O error");
@@ -231,6 +231,40 @@ test("throws a JS Error when the envelope is { ok: false }", async () => {
       return true;
     },
   );
+});
+
+test("nativeSql is four typed promise ops over the callback SQL RPC", async () => {
+  const mock = installMockNative();
+  const opened = await nativeSql.open({ dbFilename: "ops.db", readOnly: false });
+  assert.equal(opened.ok, true);
+  assert.match(opened.dbId, /^db-/);
+  assert.equal(mock.opens.length, 1);
+  assert.equal(mock.opens[0].callback, true);
+
+  const executed = await nativeSql.execute(opened.dbId, "SELECT 1", []);
+  assert.equal(executed.ok, true);
+  assert.equal(mock.executes.length, 1);
+  assert.equal(mock.executes[0].callback, true);
+  assert.equal(mock.executes[0].sql, "SELECT 1");
+
+  const batched = await nativeSql.executeBatch(opened.dbId, "INSERT INTO t VALUES (?)", [[1], [2]]);
+  assert.equal(batched.ok, true);
+  assert.equal(batched.rowsAffected, 2);
+  assert.equal(mock.batches.length, 1);
+  assert.equal(mock.batches[0].callback, true);
+
+  const closed = await nativeSql.close(opened.dbId);
+  assert.equal(closed.ok, true);
+  assert.equal(mock.closes.length, 1);
+  assert.equal(mock.closes[0].dbId, opened.dbId);
+  assert.equal(mock.closes[0].callback, true);
+});
+
+test("nativeSql throws when NativePowerSyncModule is not registered", async () => {
+  globalThis.NativeModules = {};
+  await assert.rejects(() => nativeSql.open({ dbFilename: "missing.db", readOnly: true }), {
+    message: "NativePowerSyncModule is not registered",
+  });
 });
 
 test("converts Uint8Array and number[] blobs to ArrayBuffer inbound and ArrayBuffer to Uint8Array outbound", () => {

@@ -2,7 +2,7 @@ import { DBAdapter } from "@powersync/common";
 import type { DBLockOptions, LockContext, QueryResult } from "@powersync/common";
 import { timeoutSignal, Semaphore } from "@powersync/shared-internals";
 import { LynxConnection } from "./LynxConnection.ts";
-import { callNative, type BindValueRows } from "./native.ts";
+import { nativeSql, type BindValueRows, type OpenPayload } from "./native.ts";
 import { DEFAULT_SQLITE_OPTIONS, READ_CONNECTIONS } from "./sqlite-options.ts";
 
 export interface LynxAdapterOpenOptions {
@@ -94,11 +94,11 @@ export class LynxDBAdapter extends DBAdapter {
   }
 
   async openConnection(readOnly: boolean, dbFilename: string): Promise<LynxConnection> {
-    const payload: import("./native.ts").OpenPayload = { dbFilename, readOnly };
+    const payload: OpenPayload = { dbFilename, readOnly };
     if (this.options.dbLocation != null) {
       payload.dbLocation = this.options.dbLocation;
     }
-    const { dbId } = await callNative("open", payload);
+    const { dbId } = await nativeSql.open(payload);
     if (dbId == null) {
       throw new Error("NativePowerSyncModule.open did not return dbId");
     }
