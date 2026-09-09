@@ -223,8 +223,6 @@ void Finish(void (^callback)(id), Envelope envelope) {
 
 }  // namespace
 
-}  // namespace
-
 @interface NativePowerSyncModule ()
 @property(nonatomic, strong, nullable) id streamEventSender;
 @property(nonatomic, strong) NSMutableDictionary<NSString *, StreamingHttpSession *> *activeStreams;
