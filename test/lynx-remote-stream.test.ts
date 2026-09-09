@@ -1265,58 +1265,62 @@ test("identifier fetchStream keeps incremental NDJSON when Response has no strea
   }
 });
 
-test("identifier fetchStream keeps incremental NDJSON when Response.body is an empty stream", async () => {
-  const listeners = new Map<string, (payload: LynxStreamEventPayload) => void>();
-  const previousLynx = globalThis.lynx;
-  const previousFetch = globalThis.fetch;
-  globalThis.lynx = {
-    getJSModule(name: string) {
-      if (name !== "GlobalEventEmitter") {
-        return undefined;
-      }
-      return {
-        addListener(eventName: string, fn: (payload: LynxStreamEventPayload) => void) {
-          listeners.set(eventName, fn);
+test("host-fetch fetchStream applies NDJSON body when GlobalEventEmitter is present", async () => {
+  // Lynx-for-Web: SQL NativePowerSyncModule has no httpFetch; lynx-bg still has
+  // GlobalEventEmitter. Discarding Response.body for that emitter is the A↔B
+  // download regression. Native streamingId remains a separate path (see
+  // "httpFetch incremental streamingId applies onData chunks before onEnd").
+  const { emitter } = createFakeEmitter();
+  await withFakeLynxHost(
+    {
+      emitter,
+      nativeModules: {
+        NativePowerSyncModule: {
+          open(_options, callback) {
+            callback({ ok: true, dbId: "web" });
+          },
+          close(_dbId, callback) {
+            callback({ ok: true });
+          },
+          execute(_dbId, _sql, _params, callback) {
+            callback({ ok: true });
+          },
+          executeBatch(_dbId, _sql, _params, callback) {
+            callback({ ok: true });
+          },
         },
-      };
+      },
+      fetchImpl: async (_url, init) => {
+        if (!lynxStreamingRequested(init)) {
+          return hangResponse();
+        }
+        return identifierResponse({
+          contentType: "application/x-ndjson",
+          mockBody: chunkReader([new TextEncoder().encode(NDJSON_LINE)]),
+        });
+      },
     },
-  };
-  globalThis.fetch = async (_url, init) => {
-    if (!lynxStreamingRequested(init)) {
-      return hangResponse();
-    }
-    return identifierResponse({
-      contentType: "application/x-ndjson",
-      mockBody: chunkReader([]),
-    });
-  };
-  try {
-    const remote = new LynxRemote(demoConnector("http://127.0.0.1:8080"), silentLogger);
-    const stream = await remote.fetchStream({
-      path: "/sync/stream",
-      data: {},
-      abortSignal: new AbortController().signal,
-    });
-    queueMicrotask(() => {
-      listeners.get("LynxFetchModuleStreamingEvent0")?.({ event: "onData", data: NDJSON_LINE });
-      listeners.get("LynxFetchModuleStreamingEvent0")?.({ event: "onEnd" });
-    });
-    const first = await Promise.race([
-      stream.next(),
-      new Promise<{ done: true; value: undefined }>((resolve) => {
-        setTimeout(() => resolve({ done: true, value: undefined }), 80);
-      }),
-    ]);
-    assert.equal(
-      first.done,
-      false,
-      "incremental checkpoint must not be dropped when identifier fetch returns an empty standard body",
-    );
-    assert.deepEqual(JSON.parse(String(first.value)), { checkpoint: { last_op_id: "1" } });
-  } finally {
-    globalThis.lynx = previousLynx;
-    globalThis.fetch = previousFetch;
-  }
+    async () => {
+      const remote = new LynxRemote(demoConnector("http://127.0.0.1:8080"), silentLogger);
+      const stream = await remote.fetchStream({
+        path: "/sync/stream",
+        data: {},
+        abortSignal: new AbortController().signal,
+      });
+      const first = await Promise.race([
+        stream.next(),
+        new Promise<{ done: true; value: undefined }>((resolve) => {
+          setTimeout(() => resolve({ done: true, value: undefined }), 80);
+        }),
+      ]);
+      assert.equal(
+        first.done,
+        false,
+        "Lynx-for-Web host-fetch must apply Response.body, not wait on GlobalEventEmitter",
+      );
+      assert.deepEqual(JSON.parse(String(first.value)), { checkpoint: { last_op_id: "1" } });
+    },
+  );
 });
 
 function gzipAsBinaryString(bytes: Uint8Array): string {

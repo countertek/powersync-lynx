@@ -76,6 +76,35 @@ test("pickSyncStreamTransport uses host-fetch when no native HTTP module is pres
   );
 });
 
+test("pickSyncStreamTransport uses host-fetch for SQL-only web even when an emitter exists", async () => {
+  await withFakeLynxHost(
+    {
+      emitter: { addListener() {} },
+      nativeModules: {
+        NativePowerSyncModule: {
+          open(_options, callback) {
+            callback({ ok: true, dbId: "web" });
+          },
+          close(_dbId, callback) {
+            callback({ ok: true });
+          },
+          execute(_dbId, _sql, _params, callback) {
+            callback({ ok: true });
+          },
+          executeBatch(_dbId, _sql, _params, callback) {
+            callback({ ok: true });
+          },
+        },
+      },
+      fetchImpl: async () => new Response(null, { status: 200 }),
+    },
+    async () => {
+      const picked = pickSyncStreamTransport(streamingRequest());
+      assert.equal(picked.name, "host-fetch");
+    },
+  );
+});
+
 test("pickSyncStreamTransport skips native-http when the SQL module has no httpFetch", async () => {
   await withFakeLynxHost(
     {
