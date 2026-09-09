@@ -737,7 +737,7 @@ function streamingExtension(expectStreamingResponse: boolean): Record<string, bo
   if (!expectStreamingResponse) {
     return {};
   }
-  return { useStreaming: true, enableFetchAPIStandardStreaming: true };
+  return { enableFetchAPIStandardStreaming: true };
 }
 
 /**

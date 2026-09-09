@@ -7,8 +7,9 @@ test("LynxRemote.fetch returns a streaming Response before the body ends", async
   let streamEnded = false;
   const previousFetch = globalThis.fetch;
   globalThis.fetch = ((_url, init) => {
-    const extension = (init as { lynxExtension?: { useStreaming?: boolean } } | undefined)?.lynxExtension;
-    if (extension?.useStreaming !== true) {
+    const extension = (init as { lynxExtension?: { enableFetchAPIStandardStreaming?: boolean } } | undefined)
+      ?.lynxExtension;
+    if (extension?.enableFetchAPIStandardStreaming !== true) {
       return new Promise(() => {});
     }
     return Promise.resolve({
@@ -81,8 +82,9 @@ test("identifier fetch uses Response.lynxExtension.streamingId when body is alre
     },
   };
   globalThis.fetch = ((_url, init) => {
-    const extension = (init as { lynxExtension?: { useStreaming?: boolean } } | undefined)?.lynxExtension;
-    if (extension?.useStreaming !== true) {
+    const extension = (init as { lynxExtension?: { enableFetchAPIStandardStreaming?: boolean } } | undefined)
+      ?.lynxExtension;
+    if (extension?.enableFetchAPIStandardStreaming !== true) {
       return new Promise(() => {});
     }
     return Promise.resolve({
@@ -302,8 +304,9 @@ test("identifier fetchStream keeps NDJSON native delivered before addListener wi
     },
   };
   globalThis.fetch = ((_url, init) => {
-    const extension = (init as { lynxExtension?: { useStreaming?: boolean } } | undefined)?.lynxExtension;
-    if (extension?.useStreaming !== true) {
+    const extension = (init as { lynxExtension?: { enableFetchAPIStandardStreaming?: boolean } } | undefined)
+      ?.lynxExtension;
+    if (extension?.enableFetchAPIStandardStreaming !== true) {
       return new Promise(() => {});
     }
     queueMicrotask(() => {
@@ -370,8 +373,9 @@ test("identifier fetchStream keeps NDJSON that arrived before addListener", asyn
     },
   };
   globalThis.fetch = ((_url, init) => {
-    const extension = (init as { lynxExtension?: { useStreaming?: boolean } } | undefined)?.lynxExtension;
-    if (extension?.useStreaming !== true) {
+    const extension = (init as { lynxExtension?: { enableFetchAPIStandardStreaming?: boolean } } | undefined)
+      ?.lynxExtension;
+    if (extension?.enableFetchAPIStandardStreaming !== true) {
       return new Promise(() => {});
     }
     queueMicrotask(() => {
@@ -573,8 +577,9 @@ test("identifier fetchStream keeps NDJSON when Lynx emit applies params array", 
     },
   };
   globalThis.fetch = ((_url, init) => {
-    const extension = (init as { lynxExtension?: { useStreaming?: boolean } } | undefined)?.lynxExtension;
-    if (extension?.useStreaming !== true) {
+    const extension = (init as { lynxExtension?: { enableFetchAPIStandardStreaming?: boolean } } | undefined)
+      ?.lynxExtension;
+    if (extension?.enableFetchAPIStandardStreaming !== true) {
       return new Promise(() => {});
     }
     queueMicrotask(() => {
@@ -855,8 +860,9 @@ test("identifier fetchStream keeps incremental NDJSON when Response has no strea
     },
   };
   globalThis.fetch = ((_url, init) => {
-    const extension = (init as { lynxExtension?: { useStreaming?: boolean } } | undefined)?.lynxExtension;
-    if (extension?.useStreaming !== true) {
+    const extension = (init as { lynxExtension?: { enableFetchAPIStandardStreaming?: boolean } } | undefined)
+      ?.lynxExtension;
+    if (extension?.enableFetchAPIStandardStreaming !== true) {
       return new Promise(() => {});
     }
     return Promise.resolve({
@@ -918,8 +924,9 @@ test("identifier fetchStream keeps incremental NDJSON when Response.body is an e
     },
   };
   globalThis.fetch = ((_url, init) => {
-    const extension = (init as { lynxExtension?: { useStreaming?: boolean } } | undefined)?.lynxExtension;
-    if (extension?.useStreaming !== true) {
+    const extension = (init as { lynxExtension?: { enableFetchAPIStandardStreaming?: boolean } } | undefined)
+      ?.lynxExtension;
+    if (extension?.enableFetchAPIStandardStreaming !== true) {
       return new Promise(() => {});
     }
     return Promise.resolve({
