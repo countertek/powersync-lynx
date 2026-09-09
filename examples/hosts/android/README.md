@@ -73,7 +73,7 @@ builds have no cleartext.
 | Token works, sync does not | Still pointing at `127.0.0.1` from inside the emulator. Use `10.0.2.2`. |
 | `cleartext` / `ERR_CLEARTEXT_NOT_PERMITTED` | Debug network-security-config does not list that host. |
 | Empty `<input>` | `xelement` + `xelement-input` 4.0.0 missing. |
-| Download hangs / `ps_buckets=0` after server 200 | Stock `LynxHttpService` buffers via `ResponseBody.bytes()` on live `/sync/stream` and times out. This host registers `ShowcaseLynxHttpService` instead (idle-complete + long streaming read timeout). Rebuild/reinstall the APK after pulling that change. |
+| Download hangs / `ps_buckets=0` after server 200 | Use `NativePowerSyncModule.httpFetch` path (rebuild showcase + APK). Logcat should show FM-PS-LYNX-003 `via: "raw-body"`. Stock LynxFetchModule alone cannot deliver ~20KB NDJSON bodies. |
 
 ## `/sync/stream` download fix (`ShowcaseLynxHttpService`)
 
@@ -87,11 +87,13 @@ java.net.SocketTimeoutException: timeout
 
 JS never receives body bytes / `streamingId` / `onData` → SQLite stays at `ps_buckets=0` even though the service returned ~19KB of ops.
 
-This host registers `ShowcaseLynxHttpService` in `ShowcaseApplication` instead of `LynxHttpService.INSTANCE`:
+### `/sync/stream` download path (Android)
 
-- **Non-streaming `/sync/stream`:** read until EOF **or** a short idle timeout (~2.5s), then return the buffered checkpoint + ops. The bytes are also mirrored as `lynxExtension.powersyncIdleBodyBase64` because LynxFetchModule often fails to surface large `byte[]` bodies to JS (which previously selected an empty GlobalEventEmitter **fallback** and left `ps_buckets=0`).
-- **LynxRemote (Android):** does **not** set `enableFetchAPIStandardStreaming` for sync streams; prefers idle-complete / raw body over nameless streaming fallback.
-- **Streaming path:** pipe `byteStream()` into Lynx’s `HttpStreamingDelegate` with a **120s** read timeout so keepalive gaps do not abort the stream.
+LynxFetchModule drops large `byte[]` response bodies and `customInfo`→`lynxExtension` on PrimJS, so idle-complete via `ShowcaseLynxHttpService` alone never reached PowerSync (`via: "fallback"`, `ps_buckets=0`).
+
+**Current path:** `LynxRemote` calls `NativePowerSyncModule.httpFetch` for Android streaming downloads. That method idle-completes `/sync/stream` with `HttpURLConnection` and returns the NDJSON as a **UTF-8 string** (`body` + `bodyBase64`) on the same callback bridge used by SQL RPC. JS applies it as `via: "raw-body"`.
+
+`ShowcaseLynxHttpService` remains registered for Connector / `demoFetch` / other LynxFetchModule traffic.
 
 ### Rebuild after this change
 
@@ -110,10 +112,13 @@ adb shell am start -n com.powersync.lynx.showcase/.MainActivity
 
 1. Local stack up (`examples/docker-compose.yml`); create a todo via demo-api / web / Postgres.
 2. On the emulator, confirm the todo appears in the list.
-3. Optional SQLite check (after install with a debug shell / your usual DB inspector): `ps_buckets` count **> 0** and todos present after the server checkpoint.
+3. Optional SQLite check: `ps_buckets` count **> 0** and todos present after the server checkpoint.
 4. Upload still works: add a todo on device and see it in Postgres / another client.
 
-Host unit tests (no device): `./gradlew :app:testDebugUnitTest`
+Expect FM-PS-LYNX-003 `via: "raw-body"` (not `fallback`).
+
+Host unit tests (no device): `./gradlew :app:testDebugUnitTest`  
+Adapter tests: `NODE_OPTIONS=--experimental-strip-types pnpm test`
 
 ## What this environment verified
 

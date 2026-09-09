@@ -89,6 +89,72 @@ public class NativePowerSyncModule extends LynxModule {
     executor.execute(() -> invoke(callback, executeBatchSync(dbId, sql, params)));
   }
 
+  /**
+   * Idle-complete HTTP for PowerSync {@code /sync/stream}. Returns the body as a UTF-8
+   * <strong>string</strong> (and optional {@code bodyBase64}) so PrimJS receives the NDJSON —
+   * LynxFetchModule drops large {@code byte[]} / {@code customInfo} on this host.
+   */
+  @LynxMethod
+  public void httpFetch(ReadableMap request, Callback callback) {
+    executor.execute(() -> invoke(callback, httpFetchSync(request)));
+  }
+
+  private WritableMap httpFetchSync(ReadableMap request) {
+    try {
+      if (request == null || !request.hasKey("url") || request.isNull("url")) {
+        return fail("url is required");
+      }
+      String url = request.getString("url");
+      if (url == null || url.isEmpty()) {
+        return fail("url is required");
+      }
+      String method =
+          request.hasKey("method") && !request.isNull("method")
+              ? request.getString("method")
+              : "GET";
+      Map<String, String> headers = new java.util.LinkedHashMap<>();
+      if (request.hasKey("headers") && !request.isNull("headers")) {
+        ReadableMap headerMap = request.getMap("headers");
+        if (headerMap != null) {
+          for (Map.Entry<String, Object> entry : headerMap.asHashMap().entrySet()) {
+            if (entry.getKey() != null && entry.getValue() != null) {
+              headers.put(entry.getKey(), String.valueOf(entry.getValue()));
+            }
+          }
+        }
+      }
+      byte[] bodyBytes = null;
+      if (request.hasKey("body") && !request.isNull("body")) {
+        ReadableType bodyType = request.getType("body");
+        if (bodyType == ReadableType.String) {
+          bodyBytes = request.getString("body").getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        } else if (bodyType == ReadableType.ByteArray) {
+          bodyBytes = request.getByteArray("body");
+        }
+      }
+      IdleCompleteHttp.Result result = IdleCompleteHttp.fetch(method, url, headers, bodyBytes);
+      WritableMap ok = Arguments.createMap();
+      ok.putBoolean("ok", true);
+      ok.putDouble("status", result.status);
+      ok.putString("statusText", result.statusText);
+      // Flat content-type avoids nested header maps that PrimJS may drop.
+      String contentType = result.headers.get("content-type");
+      if (contentType != null) {
+        ok.putString("contentType", contentType);
+      }
+      String bodyText = IdleCompleteHttp.utf8(result.body);
+      ok.putString("body", bodyText);
+      // Base64 mirror — same string bridge; useful if body ever needs binary-safe transport.
+      ok.putString(
+          "bodyBase64",
+          android.util.Base64.encodeToString(result.body, android.util.Base64.NO_WRAP));
+      ok.putBoolean("idleComplete", IdleCompleteHttp.isSyncStreamUrl(url));
+      return ok;
+    } catch (Throwable t) {
+      return fail(t.getMessage() != null ? t.getMessage() : "httpFetch failed");
+    }
+  }
+
   private WritableMap openSync(ReadableMap options) {
     try {
       if (options == null || !options.hasKey("dbFilename") || options.isNull("dbFilename")) {

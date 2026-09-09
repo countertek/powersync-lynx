@@ -225,6 +225,42 @@ interface LynxFetchModule {
   ): void;
 }
 
+/** NativePowerSyncModule.httpFetch envelope — strings only (PrimJS-safe). */
+interface NativeHttpFetchEnvelope {
+  ok?: boolean;
+  message?: string;
+  status?: number;
+  statusText?: string;
+  contentType?: string;
+  body?: string;
+  bodyBase64?: string;
+  idleComplete?: boolean;
+}
+
+interface NativeHttpFetchModule {
+  httpFetch(request: Record<string, unknown>, callback: (envelope: NativeHttpFetchEnvelope) => void): void;
+}
+
+function nativeHttpFetchModule(): NativeHttpFetchModule | undefined {
+  const fromGlobalThis = (
+    globalThis as unknown as { NativeModules?: { NativePowerSyncModule?: NativeHttpFetchModule } }
+  ).NativeModules?.NativePowerSyncModule;
+  if (fromGlobalThis != null && typeof fromGlobalThis.httpFetch === "function") {
+    return fromGlobalThis;
+  }
+  try {
+    const mod = (0, eval)(
+      "typeof NativeModules === 'undefined' ? undefined : NativeModules.NativePowerSyncModule",
+    ) as NativeHttpFetchModule | undefined;
+    if (mod != null && typeof mod.httpFetch === "function") {
+      return mod;
+    }
+  } catch {
+    // PrimJS may not expose NativeModules on globalThis.
+  }
+  return undefined;
+}
+
 function encodeUtf8(text: string): ArrayBuffer {
   if (typeof TextEncoder !== "undefined") {
     return new TextEncoder().encode(text).buffer;
@@ -1090,6 +1126,56 @@ async function identifierStreamingResponse(response: Response): Promise<Response
   return stabilizeStreamingResponse(response, captured);
 }
 
+function fetchViaNativeHttp(resource: string, request: RequestInit): Promise<Response> {
+  const native = nativeHttpFetchModule();
+  if (native == null) {
+    throw new Error("NativePowerSyncModule.httpFetch is not registered");
+  }
+  const headers = headerMap(request.headers);
+  const payload: Record<string, unknown> = {
+    method: String(request.method ?? "GET"),
+    url: resource,
+    headers,
+  };
+  if (typeof request.body === "string") {
+    // String body crosses the Native Module bridge; ArrayBuffer often does not.
+    payload.body = request.body;
+  }
+  return new Promise((resolve, reject) => {
+    native.httpFetch(payload, (envelope) => {
+      try {
+        const result = unwrapFetchSuccess(envelope) as NativeHttpFetchEnvelope;
+        if (result.ok === false) {
+          reject(new Error(result.message ?? "NativePowerSyncModule.httpFetch failed"));
+          return;
+        }
+        const status = Number(result.status ?? 0);
+        const bodyText = typeof result.body === "string" ? result.body : "";
+        const success: LynxFetchSuccess = {
+          status,
+          statusText: String(result.statusText ?? ""),
+          headers: {
+            "content-type":
+              typeof result.contentType === "string" && result.contentType.length > 0
+                ? result.contentType
+                : "application/x-ndjson",
+          },
+          body: bodyText,
+          lynxExtension: {
+            powersyncIdleComplete: result.idleComplete === true || bodyText.length > 0,
+            powersyncIdleBodyBase64:
+              typeof result.bodyBase64 === "string" ? result.bodyBase64 : undefined,
+          },
+        };
+        // Complete body in hand — never nameless GlobalEventEmitter fallback.
+        resolve(moduleResponse(success, false));
+      } catch (err) {
+        reject(err);
+      }
+    });
+  });
+}
+
 function fetchViaLynxModule(
   resource: string,
   request: RequestInit,
@@ -1144,6 +1230,11 @@ export class LynxRemote extends AbstractRemote {
     if (expectStreamingResponse) {
       beginFirstSyncStreamDiag(url, extension);
       enterEarlyCapture();
+    }
+    // Android: LynxFetchModule drops large byte[] / customInfo for /sync/stream. Use
+    // NativePowerSyncModule.httpFetch (UTF-8 string body) for streaming downloads.
+    if (isLynxAndroid() && expectStreamingResponse && nativeHttpFetchModule() != null) {
+      return fetchViaNativeHttp(url, request);
     }
     if (isLynxAndroid() && lynxFetchModule() != null) {
       return fetchViaLynxModule(url, request, expectStreamingResponse);
