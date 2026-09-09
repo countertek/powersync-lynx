@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { callNative } from "../src/adapter/native.ts";
+import { nativeSql } from "../src/adapter/native.ts";
 import {
   getLynxHost,
   hostIsAndroid,
@@ -53,7 +53,7 @@ test("PrimJS adapter reads NativeModules, platform, text codec, and fetch from g
     assert.equal(host.textCodec()?.decode(new ArrayBuffer(0)), "ok");
     assert.equal(host.fetchImpl(), fetchImpl);
     assert.equal(host.globalEventEmitters().includes(emitter), true);
-    const opened = await callNative("open", { dbFilename: "host.db", readOnly: false });
+    const opened = await nativeSql.open({ dbFilename: "host.db", readOnly: false });
     assert.equal(opened.ok, true);
   } finally {
     globalThis.NativeModules = previousModules;

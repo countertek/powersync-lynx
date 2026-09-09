@@ -1,10 +1,10 @@
 import { LockContext, queryResultWithoutRows } from "@powersync/common";
 import type { QueryResult, RawQueryResult } from "@powersync/common";
 import {
-  callNative,
   decodeRawRows,
   encodeBindParams,
   encodeBindParamRows,
+  nativeSql,
   type BindValueRows,
   type BindValues,
   type NativeOkEnvelope,
@@ -19,7 +19,7 @@ export class LynxConnection extends LockContext {
   }
 
   async executeRaw(query: string, params?: BindValues): Promise<RawQueryResult> {
-    const envelope = await callNative("execute", this.dbId, query, encodeBindParams(params));
+    const envelope = await nativeSql.execute(this.dbId, query, encodeBindParams(params));
     return {
       insertId: envelope.insertId,
       rowsAffected: envelope.rowsAffected,
@@ -29,12 +29,7 @@ export class LynxConnection extends LockContext {
   }
 
   async executeNativeBatch(query: string, params?: BindValueRows): Promise<QueryResult<never>> {
-    const envelope = await callNative(
-      "executeBatch",
-      this.dbId,
-      query,
-      encodeBindParamRows(params),
-    );
+    const envelope = await nativeSql.executeBatch(this.dbId, query, encodeBindParamRows(params));
     return queryResultWithoutRows({
       rowsAffected: envelope.rowsAffected ?? 0,
     });
@@ -45,6 +40,6 @@ export class LynxConnection extends LockContext {
   }
 
   close(): Promise<NativeOkEnvelope> {
-    return callNative("close", this.dbId);
+    return nativeSql.close(this.dbId);
   }
 }
