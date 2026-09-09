@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import { isString } from "../src/type-guards.ts";
 import { LynxRemote } from "../src/sync/LynxRemote.ts";
+import { MAX_EARLY_EVENTS_PER_STREAM } from "../src/sync/transport/events.ts";
 import type { LynxStreamEventPayload } from "../src/globals.ts";
 import type { LynxFetchSuccessPayload } from "../src/sync/transport/http-types.ts";
 import type {
@@ -551,6 +552,124 @@ test("second streaming reader does not replay already-consumed chunks", async ()
         }),
       ]);
       assert.equal(raced.kind, "timeout", "second reader must not replay chunk-1");
+      emitter.emit?.(streamingId, { event: "onData", data: "chunk-2\n" });
+      const next = await pending;
+      assert.equal(next.done, false);
+      assert.equal(new TextDecoder().decode(next.value), "chunk-2\n");
+      await secondReader.cancel();
+    },
+  );
+});
+
+test("early-event buffer overflow fails the reader instead of hanging", async () => {
+  const { emitter } = createFakeEmitter();
+  const streamingId = "NativePowerSyncHttpStream-overflow";
+  await withFakeLynxHost(
+    {
+      platform: "Android",
+      emitter,
+      nativeModules: {
+        NativePowerSyncModule: nativeWithHttp({
+          httpFetch(_request, callback) {
+            for (let i = 0; i < MAX_EARLY_EVENTS_PER_STREAM + 1; i++) {
+              emitter.emit?.(streamingId, { event: "onData", data: `line-${i}\n` });
+            }
+            emitter.emit?.(streamingId, { event: "onEnd" });
+            callback({
+              ok: true,
+              status: 200,
+              statusText: "OK",
+              contentType: "application/x-ndjson",
+              body: "",
+              streamingId,
+              idleComplete: false,
+            });
+          },
+        }),
+      },
+    },
+    async () => {
+      const remote = new LynxRemote(stubConnector(), silentLogger);
+      const response = await remote.fetch({
+        resource: "http://10.0.2.2:8080/sync/stream",
+        request: { method: "POST", body: "{}" },
+        expectStreamingResponse: true,
+      });
+      const reader = response.body!.getReader();
+      await assert.rejects(
+        () =>
+          Promise.race([
+            reader.read(),
+            new Promise<never>((_, reject) => {
+              setTimeout(() => reject(new Error("reader hung after early-event overflow")), 200);
+            }),
+          ]),
+        /overflow/,
+      );
+    },
+  );
+});
+
+test("cancelled stream late onError/onEnd does not pollute a later reader", async () => {
+  const { emitter } = createFakeEmitter();
+  const streamingId = "NativePowerSyncHttpStream-late-cancel";
+  await withFakeLynxHost(
+    {
+      platform: "Android",
+      emitter,
+      nativeModules: {
+        NativePowerSyncModule: nativeWithHttp({
+          httpFetch(_request, callback) {
+            queueMicrotask(() => {
+              callback({
+                ok: true,
+                status: 200,
+                statusText: "OK",
+                contentType: "application/x-ndjson",
+                body: "",
+                streamingId,
+                idleComplete: false,
+              });
+            });
+          },
+          httpFetchAbort(_streamId, callback) {
+            callback({ ok: true });
+          },
+        }),
+      },
+    },
+    async () => {
+      const remote = new LynxRemote(stubConnector(), silentLogger);
+      const firstResponse = await remote.fetch({
+        resource: "http://10.0.2.2:8080/sync/stream",
+        request: { method: "POST", body: "{}" },
+        expectStreamingResponse: true,
+      });
+      const firstReader = firstResponse.body!.getReader();
+      emitter.emit?.(streamingId, { event: "onData", data: "chunk-1\n" });
+      const first = await firstReader.read();
+      assert.equal(new TextDecoder().decode(first.value), "chunk-1\n");
+      await firstReader.cancel();
+      emitter.emit?.(streamingId, { event: "onError", error: "aborted" });
+      emitter.emit?.(streamingId, { event: "onEnd" });
+
+      const secondResponse = await remote.fetch({
+        resource: "http://10.0.2.2:8080/sync/stream",
+        request: { method: "POST", body: "{}" },
+        expectStreamingResponse: true,
+      });
+      const secondReader = secondResponse.body!.getReader();
+      const pending = secondReader.read();
+      const raced = await Promise.race([
+        pending.then(
+          (result) => ({ kind: "read" as const, result }),
+          () => ({ kind: "error" as const }),
+        ),
+        new Promise<{ kind: "timeout" }>((resolve) => {
+          setTimeout(() => resolve({ kind: "timeout" }), 50);
+        }),
+      ]);
+      assert.equal(raced.kind, "timeout", "late aborted onError/onEnd must not replay");
       emitter.emit?.(streamingId, { event: "onData", data: "chunk-2\n" });
       const next = await pending;
       assert.equal(next.done, false);
