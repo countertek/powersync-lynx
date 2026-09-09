@@ -81,7 +81,7 @@ test("LynxRemote.fetch returns a streaming Response before the body ends", async
   );
 });
 
-test("identifier fetch uses Response.lynxExtension.streamingId when body is already used", async () => {
+test("HostFetch does not subscribe to lynxExtension.streamingId when body is unusable", async () => {
   const { emitter, listeners } = createFakeEmitter();
   await withFakeLynxHost(
     {
@@ -107,11 +107,21 @@ test("identifier fetch uses Response.lynxExtension.streamingId when body is alre
       queueMicrotask(() => {
         for (const fn of listeners.get("stream-ios") ?? []) {
           fn({ event: "onData", data: '{"ok":1}\n' });
+          fn({ event: "onEnd" });
         }
       });
-      const first = await response.body!.getReader().read();
-      assert.equal(first.done, false);
-      assert.ok(first.value != null && first.value.byteLength > 0);
+      const pending = response.body!.getReader().read();
+      const raced = await Promise.race([
+        pending.then((result) => ({ kind: "read" as const, result })),
+        new Promise<{ kind: "timeout" }>((resolve) => {
+          setTimeout(() => resolve({ kind: "timeout" }), 50);
+        }),
+      ]);
+      assert.equal(
+        raced.kind,
+        "timeout",
+        "HostFetch must not attach to Response.lynxExtension.streamingId",
+      );
     },
   );
 });
@@ -723,7 +733,11 @@ test("buffered onEnd on one of two emitters does not accept late data on the oth
       await reader.cancel();
       emitterB.emit?.(streamingId, { event: "onData", data: "late\n" });
       const next = await reader.read();
-      assert.equal(next.done, true, "late onData on the second emitter must not reopen a finished reader");
+      assert.equal(
+        next.done,
+        true,
+        "late onData on the second emitter must not reopen a finished reader",
+      );
     },
   );
 });
@@ -801,7 +815,11 @@ test("overflow on one of two emitters does not keep a handler on the other", asy
           setTimeout(() => resolve({ kind: "timeout" }), 50);
         }),
       ]);
-      assert.equal(raced.kind, "timeout", "stale overflow terminals on the second emitter must not replay");
+      assert.equal(
+        raced.kind,
+        "timeout",
+        "stale overflow terminals on the second emitter must not replay",
+      );
       emitterB.emit?.(streamingId, { event: "onData", data: "chunk-2\n" });
       const next = await pending;
       assert.equal(next.done, false);
@@ -1192,7 +1210,7 @@ test("fetchStream yields JSON checkpoint lines when the service honors Accept", 
   );
 });
 
-test("identifier fetchStream keeps NDJSON native delivered before addListener without emit", async () => {
+test("identifier fetchStream keeps NDJSON via nameless slots when body is unusable", async () => {
   const listeners = new Map<string, (payload: LynxStreamEventPayload) => void>();
   const previousLynx = globalThis.lynx;
   const previousFetch = globalThis.fetch;
@@ -1212,11 +1230,6 @@ test("identifier fetchStream keeps NDJSON native delivered before addListener wi
     if (!lynxStreamingRequested(init)) {
       return hangResponse();
     }
-    queueMicrotask(() => {
-      const streamingId = "LynxFetchModuleStreamingEvent0";
-      listeners.get(streamingId)?.({ event: "onData", data: NDJSON_LINE });
-      listeners.get(streamingId)?.({ event: "onEnd" });
-    });
     return identifierResponse({
       contentType: "application/x-ndjson",
       streamingId: "LynxFetchModuleStreamingEvent0",
@@ -1230,6 +1243,11 @@ test("identifier fetchStream keeps NDJSON native delivered before addListener wi
       data: {},
       abortSignal: new AbortController().signal,
     });
+    queueMicrotask(() => {
+      const streamingId = "LynxFetchModuleStreamingEvent0";
+      listeners.get(streamingId)?.({ event: "onData", data: NDJSON_LINE });
+      listeners.get(streamingId)?.({ event: "onEnd" });
+    });
     const first = await Promise.race([
       stream.next(),
       new Promise<{ done: true; value: undefined }>((resolve) => {
@@ -1239,7 +1257,7 @@ test("identifier fetchStream keeps NDJSON native delivered before addListener wi
     assert.equal(
       first.done,
       false,
-      "checkpoint must not be dropped if native onData raced ahead of addListener without emit",
+      "HostFetch fallback slots must apply NDJSON when the Fetch body is unusable",
     );
     assert.deepEqual(JSON.parse(String(first.value)), { checkpoint: { last_op_id: "1" } });
   } finally {
@@ -1248,67 +1266,35 @@ test("identifier fetchStream keeps NDJSON native delivered before addListener wi
   }
 });
 
-test("identifier fetchStream keeps NDJSON that arrived before addListener", async () => {
-  const listeners = new Map<string, (payload: LynxStreamEventPayload) => void>();
-  const previousLynx = globalThis.lynx;
-  const previousFetch = globalThis.fetch;
-  globalThis.lynx = {
-    getJSModule(name: string) {
-      if (name !== "GlobalEventEmitter") {
-        return undefined;
-      }
-      return {
-        addListener(eventName: string, fn: (payload: LynxStreamEventPayload) => void) {
-          listeners.set(eventName, fn);
-        },
-        emit(eventName: string, payload: LynxStreamEventPayload) {
-          listeners.get(eventName)?.(payload);
-        },
-      };
+test("HostFetch fetchStream uses Response.body and ignores lynxExtension.streamingId", async () => {
+  const { emitter } = createFakeEmitter();
+  await withFakeLynxHost(
+    {
+      emitter,
+      fetchImpl: async (_url, init) => {
+        if (!lynxStreamingRequested(init)) {
+          return hangResponse();
+        }
+        return identifierResponse({
+          contentType: "application/x-ndjson",
+          streamingId: "must-not-subscribe",
+          mockBody: chunkReader([new TextEncoder().encode(NDJSON_LINE)]),
+        });
+      },
     },
-  };
-  globalThis.fetch = async (_url, init) => {
-    if (!lynxStreamingRequested(init)) {
-      return hangResponse();
-    }
-    queueMicrotask(() => {
-      globalThis.lynx?.getJSModule?.("GlobalEventEmitter")?.emit?.("stream-early", {
-        event: "onData",
-        data: NDJSON_LINE,
+    async () => {
+      const remote = new LynxRemote(demoConnector("http://127.0.0.1:8080"), silentLogger);
+      const stream = await remote.fetchStream({
+        path: "/sync/stream",
+        data: {},
+        abortSignal: new AbortController().signal,
       });
-      globalThis.lynx
-        ?.getJSModule?.("GlobalEventEmitter")
-        ?.emit?.("stream-early", { event: "onEnd" });
-    });
-    return identifierResponse({
-      contentType: "application/x-ndjson",
-      streamingId: "stream-early",
-      bodyUsedError: true,
-    });
-  };
-  try {
-    const remote = new LynxRemote(demoConnector("http://127.0.0.1:8080"), silentLogger);
-    const stream = await remote.fetchStream({
-      path: "/sync/stream",
-      data: {},
-      abortSignal: new AbortController().signal,
-    });
-    const first = await Promise.race([
-      stream.next(),
-      new Promise<{ done: true; value: undefined }>((resolve) => {
-        setTimeout(() => resolve({ done: true, value: undefined }), 80);
-      }),
-    ]);
-    assert.equal(
-      first.done,
-      false,
-      "checkpoint must not be dropped if onData raced ahead of addListener",
-    );
-    assert.deepEqual(JSON.parse(String(first.value)), { checkpoint: { last_op_id: "1" } });
-  } finally {
-    globalThis.lynx = previousLynx;
-    globalThis.fetch = previousFetch;
-  }
+      emitter.emit?.("must-not-subscribe", { event: "onData", data: "from-events\n" });
+      const first = await stream.next();
+      assert.equal(first.done, false);
+      assert.deepEqual(JSON.parse(String(first.value)), { checkpoint: { last_op_id: "1" } });
+    },
+  );
 });
 
 test("Android fetchStream keeps NDJSON that arrived before addListener", async () => {
@@ -1340,6 +1326,11 @@ test("Android fetchStream keeps NDJSON that arrived before addListener", async (
       ) {
         const body = serviceFaithfulBody(headerAccept(request.headers));
         queueMicrotask(() => {
+          resolve({
+            status: 200,
+            statusText: "OK",
+            lynxExtension: { streamingId: "stream-early-and" },
+          });
           globalThis.lynx?.getJSModule?.("GlobalEventEmitter")?.emit?.("stream-early-and", {
             event: "onData",
             data: body,
@@ -1347,11 +1338,6 @@ test("Android fetchStream keeps NDJSON that arrived before addListener", async (
           globalThis.lynx
             ?.getJSModule?.("GlobalEventEmitter")
             ?.emit?.("stream-early-and", { event: "onEnd" });
-          resolve({
-            status: 200,
-            statusText: "OK",
-            lynxExtension: { streamingId: "stream-early-and" },
-          });
         });
       },
     },
@@ -1477,11 +1463,6 @@ test("identifier fetchStream keeps NDJSON when Lynx emit applies params array", 
     if (!lynxStreamingRequested(init)) {
       return hangResponse();
     }
-    queueMicrotask(() => {
-      globalThis.lynx
-        ?.getJSModule?.("GlobalEventEmitter")
-        ?.emit?.("LynxFetchModuleStreamingEvent3", [{ event: "onData", data: NDJSON_LINE }]);
-    });
     return identifierResponse({
       contentType: "application/x-ndjson",
       streamingId: "LynxFetchModuleStreamingEvent3",
@@ -1495,6 +1476,11 @@ test("identifier fetchStream keeps NDJSON when Lynx emit applies params array", 
       data: {},
       abortSignal: new AbortController().signal,
     });
+    queueMicrotask(() => {
+      globalThis.lynx
+        ?.getJSModule?.("GlobalEventEmitter")
+        ?.emit?.("LynxFetchModuleStreamingEvent3", [{ event: "onData", data: NDJSON_LINE }]);
+    });
     const first = await Promise.race([
       stream.next(),
       new Promise<{ done: true; value: undefined }>((resolve) => {
@@ -1504,7 +1490,7 @@ test("identifier fetchStream keeps NDJSON when Lynx emit applies params array", 
     assert.equal(
       first.done,
       false,
-      "checkpoint must not be dropped if Lynx emit(name, [map]) raced ahead",
+      "HostFetch fallback must apply NDJSON when Lynx emit(name, [map]) fires",
     );
     assert.deepEqual(JSON.parse(String(first.value)), { checkpoint: { last_op_id: "1" } });
   } finally {
@@ -1540,12 +1526,12 @@ test("Android fetchStream keeps NDJSON when native sendGlobalEvent passes an arr
         const body = serviceFaithfulBody(headerAccept(request.headers));
         queueMicrotask(() => {
           const streamingId = "LynxFetchModuleStreamingEvent0";
-          listeners.get(streamingId)?.([{ event: "onData", data: body }]);
           resolve({
             status: 200,
             statusText: "OK",
             lynxExtension: { streamingId },
           });
+          listeners.get(streamingId)?.([{ event: "onData", data: body }]);
         });
       },
     },
@@ -1604,12 +1590,12 @@ test("Android fetchStream keeps NDJSON native delivered before addListener witho
         queueMicrotask(() => {
           // Native LynxFetchModule names the stream and invokes stored listeners; it does not call emit().
           const streamingId = "LynxFetchModuleStreamingEvent0";
-          listeners.get(streamingId)?.({ event: "onData", data: body });
           resolve({
             status: 200,
             statusText: "OK",
             lynxExtension: { streamingId },
           });
+          listeners.get(streamingId)?.({ event: "onData", data: body });
         });
       },
     },
