@@ -1,4 +1,5 @@
 import type { SqliteValue } from "@powersync/common";
+import { getLynxHost } from "../host.ts";
 import {
   copyToArrayBuffer,
   hasPrimitiveConstructor,
@@ -136,18 +137,7 @@ export class NativeModuleError extends Error {
 }
 
 function nativeModulesHost(): NativeModulesHost | undefined {
-  const fromGlobalThis = globalThis.NativeModules;
-  if (fromGlobalThis?.NativePowerSyncModule != null) {
-    return fromGlobalThis;
-  }
-  try {
-    if (NativeModules?.NativePowerSyncModule != null) {
-      return NativeModules;
-    }
-    return NativeModules ?? fromGlobalThis;
-  } catch {
-    return fromGlobalThis;
-  }
+  return getLynxHost().nativeModules();
 }
 
 function getNativeModule(): NativePowerSyncModule {

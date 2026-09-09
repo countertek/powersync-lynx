@@ -1,4 +1,3 @@
-import "../abort-controller.ts";
 import { DBAdapter } from "@powersync/common";
 import type { DBLockOptions, LockContext, QueryResult } from "@powersync/common";
 import { timeoutSignal, Semaphore } from "@powersync/shared-internals";

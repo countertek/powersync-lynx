@@ -24,6 +24,10 @@ _Avoid_: JS facade, Client, NativeModules as app code
 JavaScript that runs in the Lynx-for-Web host page and maps Native Module SQL RPC onto official WASQLite. Not a second PowerSyncDatabase.
 _Avoid_: Web SDK (the official package), Lynx bundle, WebPowerSyncDatabase
 
+**LynxHost**:
+The Client interface to PrimJS / host globals (Native Module lookup, GlobalEventEmitter, platform, text codec, fetch, AbortController install). Production uses a PrimJS adapter; tests use a fake. Not public API.
+_Avoid_: Host helper, NativeModules as app code, globals.ts as the lookup
+
 **attach**:
 The Host-page function that wires Native Module SQL RPC onto WASQLite for one `<lynx-view>`.
 _Avoid_: init, register, bootstrap, Autolink (that is native registration)

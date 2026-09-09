@@ -1,6 +1,14 @@
 import type { PowerSyncBackendConnector, PowerSyncLogger } from "@powersync/common";
 
 import type { NativeModulesHost, NativePowerSyncModule } from "../src/adapter/native.ts";
+import {
+  createFakeEmitter,
+  withFakeLynxHost,
+  type FakeLynxHostState,
+} from "./fake-lynx-host.ts";
+
+export { createFakeEmitter, withFakeLynxHost };
+export type { FakeLynxHostState };
 
 export const silentLogger: PowerSyncLogger = {
   log() {},
