@@ -11,6 +11,7 @@ import {
 import { bootDemo } from "./boot.ts";
 import { getDb, setClientLog, waitForDemoReady } from "./database.ts";
 import type { TodoRow } from "./schema.ts";
+import { createSessionSyncTracker } from "./session-sync.ts";
 import { deviceId, errorMessage, hostLabel, newId, nowIso, rowArray } from "./util.ts";
 
 import "./App.css";
@@ -54,17 +55,6 @@ function asTodoRows(value: unknown[]): TodoRow[] {
     (row): row is TodoRow =>
       row instanceof Object && "id" in row && "description" in row && "completed" in row,
   );
-}
-
-function lastSyncedLabel(at: Date | undefined): string {
-  if (at == null) {
-    return "never";
-  }
-  const ms = at.getTime();
-  if (!Number.isFinite(ms)) {
-    return "never";
-  }
-  return at.toISOString();
 }
 
 function matchesFilter(todo: TodoRow, filter: Filter): boolean {
@@ -111,28 +101,13 @@ export function App() {
     let cancelled = false;
     let stopStatus = () => {};
 
-    let loggedConnected = false;
-    let loggedCheckpoint = false;
-    let sawDownloading = false;
-    let baselineLastSyncedMs: number | undefined;
-    let capturedBaseline = false;
-    let loggedFirstSync = false;
-
-    const startWaitingForFirstSync = () => {
-      void getDb()
-        .waitForFirstSync()
-        .then(() => {
-          if (cancelled || loggedFirstSync) {
-            return;
-          }
-          loggedFirstSync = true;
-          setFirstSyncDone(true);
-          log("first sync done");
-        })
-        .catch((err: unknown) => {
-          log(`waitForFirstSync: ${errorMessage(err)}`);
-        });
-    };
+    const tracker = createSessionSyncTracker({
+      log,
+      setSyncLabel,
+      setHasSyncedLabel,
+      setLastSyncedText,
+      setFirstSyncDone,
+    });
 
     bootDemo({
       waitForReady: waitForDemoReady,
@@ -142,55 +117,15 @@ export function App() {
       onLocalReady: () => {
         stopStatus = getDb().registerListener({
           statusChanged(status) {
-            const connected = status.connected === true;
-            const uploading = status.dataFlowStatus?.uploading === true;
-            const downloading =
-              status.downloading === true || status.dataFlowStatus?.downloading === true;
-            const lastMs = status.lastSyncedAt?.getTime();
-            if (!capturedBaseline) {
-              capturedBaseline = true;
-              baselineLastSyncedMs = Number.isFinite(lastMs) ? lastMs : undefined;
-            }
-            setHasSyncedLabel(status.hasSynced === true ? "yes" : "no");
-            setLastSyncedText(lastSyncedLabel(status.lastSyncedAt));
-            if (status.connecting === true) {
-              setSyncLabel("connecting");
-            } else {
-              setSyncLabel(connected ? "connected" : "offline");
-            }
-            if (connected && !loggedConnected) {
-              loggedConnected = true;
-              log("connected");
-            }
-            if (uploading) {
-              log("upload in progress");
-            }
-            if (downloading) {
-              sawDownloading = true;
-              log("download in progress");
-            }
-            const lastAdvanced =
-              lastMs != null && Number.isFinite(lastMs) && lastMs !== baselineLastSyncedMs;
-            if (
-              !loggedCheckpoint &&
-              ((sawDownloading && status.hasSynced === true) || lastAdvanced)
-            ) {
-              loggedCheckpoint = true;
-              log("first checkpoint applied");
-            }
-            const downloadError = status.dataFlowStatus?.downloadError;
-            const uploadError = status.dataFlowStatus?.uploadError;
-            if (downloadError != null) {
-              log(`sync error: ${errorMessage(downloadError)}`);
-            }
-            if (uploadError != null) {
-              log(`upload error: ${errorMessage(uploadError)}`);
-            }
+            tracker.statusChanged(status);
           },
         });
+        tracker.watchFirstSync(
+          () => getDb().waitForFirstSync(),
+          () => cancelled,
+        );
         setReady(true);
       },
-      onConnectSettled: startWaitingForFirstSync,
       log,
       isCancelled: () => cancelled,
       connectLabel: `${demoPowersyncUrl()} as ${device}`,
@@ -298,15 +233,6 @@ export function App() {
       }
       await getDb().connect(demoConnector);
       log("reconnect: connect() called");
-      void getDb()
-        .waitForFirstSync()
-        .then(() => {
-          setFirstSyncDone(true);
-          log("first sync done");
-        })
-        .catch((err: unknown) => {
-          log(`waitForFirstSync: ${errorMessage(err)}`);
-        });
     } catch (err) {
       log(`reconnect failed: ${errorMessage(err)}`);
     }

@@ -162,7 +162,7 @@ docker compose --profile sync --profile registry up --build
 1. **DB ready** after `waitForReady` (does not wait for `connect()` / first sync). Sync may stay connecting/offline; errors stay in the log
 2. Empty list on first load (no local seed — Postgres is the source of truth when the stack is up)
 3. Add / complete-toggle / delete / filter
-4. Status pills: **hasSynced** / **lastSynced** (persisted) and **first sync done** (`waitForFirstSync`, may resolve from persistence). **first checkpoint applied** in the log is this session’s download, distinct from **connected**
+4. Status pills: **hasSynced** / **lastSynced** (persisted) and **first sync done** (`waitForFirstSync`, may resolve from persistence even when credentials are unavailable). **first checkpoint applied** in the log requires this session’s `lastSyncedAt` to advance — not download-start plus persisted `hasSynced`
 5. Collapsible **Sync log**: connect, disconnect, upload/download, CRUD, `powersync-lynx /sync/stream via <transport>`, errors, timestamps
 6. **Go offline / Reconnect**
 
