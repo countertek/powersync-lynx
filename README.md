@@ -56,9 +56,30 @@ const db = new PowerSyncDatabase({
   database: { dbFilename: "app.db" },
 });
 
-await db.waitForReady();
-await db.connect(connector); // PowerSyncBackendConnector: fetchCredentials + uploadData
+await db.waitForReady(); // SQLite open — first paint can happen now
+void db.connect(connector); // PowerSyncBackendConnector: fetchCredentials + uploadData
 ```
+
+### Ready vs synced
+
+`waitForReady()` opens the local file. It does **not** wait for `connect()` or a checkpoint. Do not await first sync before first paint:
+
+```ts
+await db.waitForReady();
+showLocalUi(); // get / execute / watch from SQLite
+
+void db.connect(connector); // stream handshake must not gate the composer
+void db.waitForFirstSync().then(() => {
+  // hasSynced — may already be true from a previous launch (persisted)
+});
+void db.waitForStatus((status) => status.connected === true); // this session's socket
+```
+
+| Call | Resolves when |
+| --- | --- |
+| **`waitForReady()`** | Local SQLite is open |
+| **`waitForFirstSync()`** | `hasSynced === true` (persisted across launches; not the same as `connected`) |
+| **`waitForStatus(s => s.connected)`** | This session has a live PowerSync socket |
 
 Lynx-for-Web host page (not the bundle):
 
@@ -84,16 +105,26 @@ Stock Lynx fetch cannot reliably deliver live `/sync/stream` NDJSON on device. N
 2. Chunks arrive as UTF-8 strings on **`GlobalEventEmitter`**. Terminal sequence: `onData*` → `onError?` → `onEnd`.
 3. `LynxRemote` rebuilds a ReadableStream so PowerSync applies NDJSON incrementally.
 
-Idle-complete / `raw-body` remains a fallback when no event sender is available. Rebuild showcase + host after pulling streaming changes. Details: [iOS host](https://github.com/countertek/powersync-lynx/blob/main/examples/hosts/ios/README.md), [Android host](https://github.com/countertek/powersync-lynx/blob/main/examples/hosts/android/README.md).
+Idle-complete (buffered UTF-8 `body` / `bodyBase64` when `LynxContext` cannot send events) remains a fallback when no event sender is available. Rebuild showcase + host after pulling streaming changes. Disconnect abort of a live native stream is covered by [#36](https://github.com/countertek/powersync-lynx/pull/36) (`httpFetchAbort` in `test/lynx-remote-stream.test.ts`, iOS fixture abort). Details: [iOS host](https://github.com/countertek/powersync-lynx/blob/main/examples/hosts/ios/README.md), [Android host](https://github.com/countertek/powersync-lynx/blob/main/examples/hosts/android/README.md).
 
 ## ⚠️ Sync caveats
 
+`hasSynced` and `lastSyncedAt` are stored in SQLite (`powersync_offline_sync_status`). After a relaunch they can be true even if this process has not opened `/sync/stream`. Treat them as “this database has completed a checkpoint at least once,” not “this session downloaded.”
+
 | Signal | What it means |
 | --- | --- |
-| **`hasSynced` alone** | Not proof that downloads applied. Confirm `ps_buckets > 0` / row presence and the native `streamingId` realtime path (GlobalEventEmitter `onData` before `onEnd`). |
-| **Realtime on native** | Depends on `streamingId` + GlobalEventEmitter chunks staying open, not a single buffered body. |
+| **`hasSynced` / `lastSyncedAt`** | Persisted. True after a prior launch is **not** proof this session downloaded. |
+| **`waitForFirstSync()`** | Resolves when `hasSynced` is true, including a persisted value. Stays pending on `connected` alone. |
+| **`connected` / `waitForStatus(s => s.connected)`** | This session has a live PowerSync socket. |
+| **`downloading` / “first checkpoint applied”** | This session received checkpoint data. Confirm `ps_buckets > 0` / row presence. |
+| **`powersync-lynx /sync/stream via <transport>`** | Logger debug for this session’s transport (`native-http`, host `fetch`, …). Attach a `logger` on `PowerSyncDatabase` to see it (default min level is `info`). |
+| **Native `streamingId` + `onData` before `onEnd`** | Incremental `/sync/stream` this session, not idle-complete. |
 | **Local UI ready** | `waitForReady()` opens SQLite; it does **not** wait for `connect()` / first checkpoint. |
 | **Demo tokens** | The examples stack mints a static HS256 JWT. Not PowerSync Cloud / JWKS production auth. |
+
+### Android consumer builds
+
+Autolink apps compile this package’s `android/` tree: **NDK** + **CMake** for JNI `ps_sql`, with `-DANDROID_STL=c++_shared`. The consumer SDK needs an NDK and CMake so `externalNativeBuild` can build `libpowersync_lynx_sql.so`. `android/build.gradle` also runs a Gradle `Exec` of `node scripts/fetch-native-deps.mjs --sqlite` on `preBuild` (sqlite amalgamation). Gradle hosts without Node are tracked as [#39](https://github.com/countertek/powersync-lynx/issues/39) M2 and do not block `pnpm test` / `make test`.
 
 ## 🧪 Local demo stack
 

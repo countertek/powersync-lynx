@@ -45,15 +45,15 @@ Read this before treating a green web preview as "sync works".
 | Demo token endpoint | **Static HS256 JWT** minted by `demo-api` with the compose-stack secret. **Not** a JourneyApps / PowerSync Cloud account. **Not** RS256/JWKS from a real IdP |
 | `uploadData` | POSTs CRUD to `demo-api`, which writes Postgres. **Not** a production app backend |
 | Local UI ready without waiting for `connect()` | **Unit tested** (`test/demo-boot.test.ts`). iOS Simulator relaunch shows **DB ready** and the composer while `/sync/stream` is still handshake/erroring. Watch starts from local ready, not from first checkpoint |
-| Two-window money shot (A writes, B sees it via PowerSync) | **Not verified this checkout.** iOS `ios-t2` opened **DB ready** / sometimes **sync connected**, but `ps_data__todos` stayed 0 and the log repeated `errorStreamingMalformedResponse`. Web two-window procedure still documented below |
+| Two-window money shot (A writes, B sees it via PowerSync) | **Procedure documented** (web `?device=a` / `?device=b`). After [#32](https://github.com/countertek/powersync-lynx/pull/32) / [#36](https://github.com/countertek/powersync-lynx/pull/36), native incremental `/sync/stream` is **unit-tested** (`streamingId` + `onData` before `onEnd`, `httpFetchAbort`). Live two-window / device download is **not re-tapped** this checkout — prove with a server-created todo and `ps_buckets > 0`, not `hasSynced` / `connected` alone. Pre-#36 `errorStreamingMalformedResponse` / empty `ps_data__todos` is stale. |
 | Offline / reconnect beat (queue writes, reconnect, watch them sync) | In-app **Go offline / Reconnect** is `disconnect()` / `connect()`, not an OS network drop. **Not re-tapped** this checkout |
 | Live `/sync/stream` download on Android | **Native Module HTTP** (`httpFetch` + `streamingId` realtime; idle-complete fallback). Rebuild showcase + APK. Prove with a server-created todo on device and `ps_buckets > 0`. |
 | Live `/sync/stream` download on iOS | **Same Native Module HTTP path as Android**. Rebuild showcase + `pod install` + xcodebuild. Expect `ps_buckets > 0`. See [`hosts/ios/README.md`](hosts/ios/README.md). |
-| `disconnect()` cancelling a live native stream | Same ReactLynx control. **Not tapped** this checkout |
+| `disconnect()` cancelling a live native stream | Same ReactLynx control. **JS abort is tested** in [#36](https://github.com/countertek/powersync-lynx/pull/36) (`httpFetchAbort` when the streaming reader is cancelled / `fetchStream` abort). In-app Go offline is **not re-tapped** this checkout |
 | Physical iOS / Android Autolink host run | **Documented**. Simulator / emulator is what this checkout exercises |
 | Windows / macOS Autolink host run | **Not verified**. Desktop remains recipe-only |
 | Lynx Explorer | **Will not work** for SQL: Explorer does not register `NativePowerSyncModule` |
-| `pnpm publish` to npmjs | **Workflow checked in** (`.github/workflows/publish.yml`). **Not run** from this task |
+| `pnpm publish` to npmjs | **Workflow checked in** (`.github/workflows/release.yml`, `release` published). **Not run** from this task |
 | Publish dry-run to local Verdaccio | **Scripted** (`pnpm publish-dry-run`). Requires compose profile `registry` |
 
 Do not treat a successful web build as proof of per-platform sync.
@@ -119,11 +119,11 @@ origin without that query param share IndexedDB and would fake the demo.
 
 1. Window A: http://localhost:4173/?device=a
 2. Window B: http://localhost:4173/?device=b
-3. Wait until both show **DB ready**. Sync pill should move to **connected** if the compose stack is up (otherwise both stay offline — that is not the money shot).
+3. Wait until both show **DB ready**. Sync pill should move to **connected** if the compose stack is up (otherwise both stay offline — that is not the money shot). `hasSynced` / **first sync done** can light up from a *previous* launch; the money shot is B’s list updating, plus a **first checkpoint applied** / `powersync-lynx /sync/stream via …` line in the Sync log.
 4. In A, add a todo. Open the **Sync log** drawer: you should see `insert:` then `upload:`.
 5. In B, the same todo should appear via `watch` after PowerSync downloads it. Toggle complete in A; B should follow. Delete in A; B should drop it.
 
-If B never updates: the stack is down, `uploadData` failed (log it), or the two windows share a device id. Filter pills are local-only (they do not sync).
+If B never updates: the stack is down, `uploadData` failed (log it), or the two windows share a device id. Filter pills are local-only (they do not sync). Do not treat persisted `hasSynced` as proof B downloaded this session.
 
 ## 4. Offline / reconnect beat
 
@@ -148,7 +148,7 @@ pnpm publish-dry-run
 That publishes `powersync-lynx` to `http://localhost:4873`, installs it into a
 scratch consumer, and checks `src/index.ts` plus `dist/web-host/factory.js`
 (the factory default export is a function). Real npm publish is
-`.github/workflows/publish.yml` (`workflow_dispatch` and `v*` tags, provenance).
+`.github/workflows/release.yml` (`release` published, provenance).
 That workflow is **not** test/lint CI.
 
 Both profiles at once:
@@ -162,8 +162,9 @@ docker compose --profile sync --profile registry up --build
 1. **DB ready** after `waitForReady` (does not wait for `connect()` / first sync). Sync may stay connecting/offline; errors stay in the log
 2. Empty list on first load (no local seed — Postgres is the source of truth when the stack is up)
 3. Add / complete-toggle / delete / filter
-4. Collapsible **Sync log**: connect, disconnect, upload/download, CRUD, errors, timestamps
-5. **Go offline / Reconnect**
+4. Status pills: **hasSynced** / **lastSynced** (persisted) and **first sync done** (`waitForFirstSync`, may resolve from persistence). **first checkpoint applied** in the log is this session’s download, distinct from **connected**
+5. Collapsible **Sync log**: connect, disconnect, upload/download, CRUD, `powersync-lynx /sync/stream via <transport>`, errors, timestamps
+6. **Go offline / Reconnect**
 
 `uploadData` writes Postgres through `demo-api`. It does not POST to a cloud backend.
 
@@ -192,7 +193,7 @@ pnpm --dir examples/hosts install
 Two-client: one native store + `http://localhost:4173/?device=web-b`, or two
 native launches with different `device` values. Filter pills stay local.
 
-**Streaming:** hosts set LynxEnv `enable_fetch_api_standard_streaming` so Fetch uses the standard stream path (LynxSDK 3.7+). That is a prerequisite, not by itself proof of incremental `/sync/stream`.
+**Streaming:** native hosts use **`NativePowerSyncModule.httpFetch`** (`streamingId` + GlobalEventEmitter `onData` before `onEnd`; idle-complete is fallback). LynxEnv `enable_fetch_api_standard_streaming` is still set so stock Fetch uses the standard stream path (LynxSDK 3.7+) — a prerequisite, not by itself proof of incremental `/sync/stream`. Abort of a live native stream is covered by [#36](https://github.com/countertek/powersync-lynx/pull/36) tests; do not treat in-app Go offline as that proof.
 
 **Not verified on Windows / macOS Lynxtron.** Desktop remains recipe-only.
 

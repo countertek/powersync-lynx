@@ -97,7 +97,7 @@ JS never receives body bytes / `streamingId` / `onData` → SQLite stays at `ps_
 
 Idle-complete UTF-8 `body` / `bodyBase64` is fallback when `LynxContext` is unavailable. `ShowcaseLynxHttpService` is Connector / JSON `fetch` only — it does not idle-complete `/sync/stream`.
 
-Proof of the realtime path: `httpFetch` returns a `NativePowerSyncHttpStream*` `streamingId`, and GlobalEventEmitter `onData` fires before `onEnd` (not idle-complete `raw-body`). PowerSync logger debug: `powersync-lynx /sync/stream via native-http`.
+Proof of the realtime path: `httpFetch` returns a `NativePowerSyncHttpStream*` `streamingId`, and GlobalEventEmitter `onData` fires before `onEnd` (not idle-complete). PowerSync logger debug: `powersync-lynx /sync/stream via native-http`.
 
 ### Rebuild after this change
 

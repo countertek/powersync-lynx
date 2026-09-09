@@ -58,6 +58,43 @@ test("local UI ready fires while connect() is still pending", async () => {
   assert.equal(events.includes("log:connect: http://127.0.0.1:8080 as test"), true);
 });
 
+test("onConnectSettled runs after connect and does not delay local ready", async () => {
+  const connectGate = deferred<void>();
+  const events: string[] = [];
+  const finished = bootDemo({
+    waitForReady: async () => {},
+    fetchCredentials: async () => ({ endpoint: "http://127.0.0.1:8080", token: "tok" }),
+    setCredentials: () => {},
+    connect: async () => {
+      events.push("connect-start");
+      await connectGate.promise;
+      events.push("connect-done");
+    },
+    onLocalReady: () => {
+      events.push("local-ready");
+    },
+    onConnectSettled: () => {
+      events.push("connect-settled");
+    },
+    log: () => {},
+    isCancelled: () => false,
+    connectLabel: "unused",
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(
+    events.filter((e) => e === "local-ready" || e === "connect-start" || e === "connect-settled"),
+    ["local-ready", "connect-start"],
+  );
+
+  connectGate.resolve();
+  await finished;
+  assert.deepEqual(
+    events.filter((e) => e === "local-ready" || e === "connect-done" || e === "connect-settled"),
+    ["local-ready", "connect-done", "connect-settled"],
+  );
+});
+
 test("connect() rejection is logged and does not block local ready", async () => {
   const events: string[] = [];
   await bootDemo({
