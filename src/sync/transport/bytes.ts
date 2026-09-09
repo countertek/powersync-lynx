@@ -170,7 +170,8 @@ export function toUint8(data: HostByteSource): Uint8Array {
       // fall through
     }
   }
-  const rec = data;
+  // SAFETY: remaining host values after ArrayBuffer / string / array branches are HostByteBag.
+  const rec = data as HostByteBag;
   if (rec.buffer != null && isNumber(rec.byteLength)) {
     try {
       const offset = isNumber(rec.byteOffset) ? rec.byteOffset : 0;
@@ -267,8 +268,12 @@ export function stripBom(text: string): string {
   return text;
 }
 
-export function isParsedJsonValue(value: unknown): boolean {
-  if (value == null || typeof value !== "object") {
+export interface ParsedJsonValue {
+  readonly [key: string]: ParsedJsonValue | string | number | boolean | null | undefined;
+}
+
+export function isParsedJsonValue(value: unknown): value is ParsedJsonValue {
+  if (!isNonNullObject(value)) {
     return false;
   }
   if (Array.isArray(value)) {
@@ -280,7 +285,7 @@ export function isParsedJsonValue(value: unknown): boolean {
   return true;
 }
 
-export function parseJsonText(text: string): unknown {
+export function parseJsonText(text: string) {
   const trimmed = stripBom(text).trim();
   if (trimmed.length === 0 || trimmed === "undefined") {
     return { data: {} };
@@ -288,9 +293,11 @@ export function parseJsonText(text: string): unknown {
   const raw = latin1Bytes(trimmed);
   if (isGzip(raw)) {
     const inflated = gunzipSync(raw);
-    return JSON.parse(stripBom(decodeUtf8(copyToArrayBuffer(inflated))).trim());
+    // SAFETY: write-checkpoint / identifier JSON is an object after gunzip + UTF-8.
+    return JSON.parse(stripBom(decodeUtf8(copyToArrayBuffer(inflated))).trim()) as ParsedJsonValue;
   }
-  return JSON.parse(trimmed);
+  // SAFETY: write-checkpoint / identifier JSON text parses to an object (empty already handled).
+  return JSON.parse(trimmed) as ParsedJsonValue;
 }
 
 function hasHeader(headers: Record<string, string>, name: string): boolean {
@@ -326,7 +333,7 @@ interface HeaderFields {
 }
 
 /** Copy header pairs only. NDJSON Accept policy is {@link preferNdjsonAccept}. */
-export function headerMap(headers: HeadersInit | undefined): Record<string, string> {
+export function headerMap(headers: HeadersInit | undefined) {
   const out: Record<string, string> = {};
   if (headers == null) {
     return out;
@@ -350,7 +357,7 @@ export function headerMap(headers: HeadersInit | undefined): Record<string, stri
   return out;
 }
 
-export function copyHeaderRecord(headers: HeaderFields | undefined): Record<string, string> {
+export function copyHeaderRecord(headers: HeaderFields | undefined) {
   const lower: Record<string, string> = {};
   if (headers == null) {
     return lower;
