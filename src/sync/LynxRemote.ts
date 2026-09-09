@@ -1,4 +1,5 @@
 import "../abort-controller.ts";
+import "../globals.ts";
 import { AbstractRemote } from "@powersync/shared-internals";
 import type { PowerSyncBackendConnector, PowerSyncLogger } from "@powersync/common";
 import type { FetchOptions } from "@powersync/shared-internals";
@@ -235,10 +236,13 @@ interface NativeHttpFetchEnvelope {
   body?: string;
   bodyBase64?: string;
   idleComplete?: boolean;
+  /** Live stream id for GlobalEventEmitter onData/onEnd (incremental path). */
+  streamingId?: string;
 }
 
 interface NativeHttpFetchModule {
   httpFetch?(request: Record<string, unknown>, callback: (envelope: NativeHttpFetchEnvelope) => void): void;
+  httpFetchAbort?(streamId: string, callback: (envelope: NativeHttpFetchEnvelope) => void): void;
 }
 
 /**
@@ -1186,7 +1190,32 @@ function fetchViaNativeHttp(resource: string, request: RequestInit): Promise<Res
     console.log(FM_PS_LYNX_003, "invoking NativePowerSyncModule.httpFetch", {
       url: resource,
       httpFetchTypeof: typeof httpFetch,
+      mode: "incremental-stream-or-idle-fallback",
     });
+  }
+  // Capture GlobalEventEmitter early — native may emit onData before the Callback returns.
+  enterEarlyCapture();
+  let streamIdForAbort: string | undefined;
+  let aborted = false;
+  const abortNative = () => {
+    aborted = true;
+    const abortFn = native.httpFetchAbort;
+    if (abortFn == null || streamIdForAbort == null) {
+      return;
+    }
+    try {
+      abortFn(streamIdForAbort, () => {});
+    } catch {
+      // Presence-only; PrimJS host methods may throw on unused abort.
+    }
+  };
+  const signal = request.signal;
+  if (signal != null) {
+    if (signal.aborted) {
+      abortNative();
+    } else {
+      signal.addEventListener("abort", abortNative, { once: true });
+    }
   }
   return new Promise((resolve, reject) => {
     // Direct call like SQL RPC (open/execute). Do not use .call/.apply — PrimJS host
@@ -1199,6 +1228,41 @@ function fetchViaNativeHttp(resource: string, request: RequestInit): Promise<Res
           return;
         }
         const status = Number(result.status ?? 0);
+        const streamingId =
+          typeof result.streamingId === "string" && result.streamingId.length > 0
+            ? result.streamingId
+            : undefined;
+        if (streamingId != null) {
+          streamIdForAbort = streamingId;
+          if (aborted) {
+            abortNative();
+          }
+          if (firstSyncStreamDiag != null) {
+            console.log(FM_PS_LYNX_003, "native httpFetch incremental stream", {
+              streamingId,
+              status,
+            });
+          }
+          // Headers first, empty body — chunks arrive via GlobalEventEmitter onData.
+          const success: LynxFetchSuccess = {
+            status,
+            statusText: String(result.statusText ?? ""),
+            headers: {
+              "content-type":
+                typeof result.contentType === "string" && result.contentType.length > 0
+                  ? result.contentType
+                  : "application/x-ndjson",
+            },
+            body: "",
+            lynxExtension: {
+              streamingId,
+              powersyncIdleComplete: false,
+            },
+          };
+          resolve(moduleResponse(success, false));
+          return;
+        }
+        // Legacy idle-complete one-shot body (no LynxContext / unit tests).
         const bodyText = typeof result.body === "string" ? result.body : "";
         const success: LynxFetchSuccess = {
           status,
@@ -1216,7 +1280,6 @@ function fetchViaNativeHttp(resource: string, request: RequestInit): Promise<Res
               typeof result.bodyBase64 === "string" ? result.bodyBase64 : undefined,
           },
         };
-        // Complete body in hand — never nameless GlobalEventEmitter fallback.
         resolve(moduleResponse(success, false));
       } catch (err) {
         reject(err);

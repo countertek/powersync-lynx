@@ -84,8 +84,8 @@ int main() {
     NSDictionary* methods = [NativePowerSyncModule methodLookup];
     expect(methods[@"open"] != nil && methods[@"close"] != nil &&
                methods[@"execute"] != nil && methods[@"executeBatch"] != nil &&
-               methods[@"httpFetch"] != nil,
-           "methodLookup exposes open/close/execute/executeBatch/httpFetch");
+               methods[@"httpFetch"] != nil && methods[@"httpFetchAbort"] != nil,
+           "methodLookup exposes open/close/execute/executeBatch/httpFetch/httpFetchAbort");
 
     NSDictionary* opened = WaitFor(^(void (^cb)(id)) {
       [module open:@{@"dbFilename" : @":memory:"} callback:cb];

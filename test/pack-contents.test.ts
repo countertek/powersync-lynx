@@ -81,6 +81,21 @@ test("packed tarball ships iOS build inputs and omits host/build residue", async
       "iOS NativePowerSyncModule.httpFetch needs IdleCompleteHttp.mm",
     );
     assert.equal(
+      has("ios/src/StreamingHttp.h"),
+      true,
+      "iOS incremental /sync/stream needs StreamingHttp.h",
+    );
+    assert.equal(
+      has("ios/src/StreamingHttp.mm"),
+      true,
+      "iOS incremental /sync/stream needs StreamingHttp.mm",
+    );
+    assert.equal(
+      has("android/src/main/java/com/powersync/lynx/StreamingHttp.java"),
+      true,
+      "Android incremental /sync/stream needs StreamingHttp.java",
+    );
+    assert.equal(
       has("ios/src/NativePowerSyncModule.mm"),
       true,
       "iOS NativePowerSyncModule sources ship for Autolink",

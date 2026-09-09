@@ -8,6 +8,11 @@
 #import "HostConfig.h"
 #import "LynxGeneratedLibraryRegistry.h"
 
+// Declared by powersync-lynx NativePowerSyncModule (Autolinked).
+@interface NativePowerSyncModule : NSObject
++ (void)setSharedStreamEventSender:(id)sender;
+@end
+
 @implementation ViewController {
   LynxView *_lynxView;
 }
@@ -37,6 +42,11 @@
   [self.view addSubview:_lynxView];
 
   [_lynxView updateGlobalPropsWithDictionary:[HostConfig globalProps]];
+  // Autolink constructs NativePowerSyncModule without a LynxView param; wire sendGlobalEvent
+  // so incremental /sync/stream onData reaches GlobalEventEmitter.
+  if ([NativePowerSyncModule respondsToSelector:@selector(setSharedStreamEventSender:)]) {
+    [NativePowerSyncModule setSharedStreamEventSender:_lynxView];
+  }
   [_lynxView loadTemplateFromURL:@"main.lynx" initData:nil];
 }
 
