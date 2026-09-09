@@ -238,27 +238,64 @@ interface NativeHttpFetchEnvelope {
 }
 
 interface NativeHttpFetchModule {
-  httpFetch(request: Record<string, unknown>, callback: (envelope: NativeHttpFetchEnvelope) => void): void;
+  httpFetch?(request: Record<string, unknown>, callback: (envelope: NativeHttpFetchEnvelope) => void): void;
 }
 
-function nativeHttpFetchModule(): NativeHttpFetchModule | undefined {
+/**
+ * Resolve NativePowerSyncModule for httpFetch.
+ * PrimJS host methods often fail `typeof x === "function"` — never gate on that
+ * (LynxFetchModule lookup likewise only checks module presence).
+ */
+function lookupNativePowerSyncModule(): unknown {
   const fromGlobalThis = (
-    globalThis as unknown as { NativeModules?: { NativePowerSyncModule?: NativeHttpFetchModule } }
+    globalThis as unknown as { NativeModules?: { NativePowerSyncModule?: unknown } }
   ).NativeModules?.NativePowerSyncModule;
-  if (fromGlobalThis != null && typeof fromGlobalThis.httpFetch === "function") {
+  if (fromGlobalThis != null) {
     return fromGlobalThis;
   }
   try {
-    const mod = (0, eval)(
-      "typeof NativeModules === 'undefined' ? undefined : NativeModules.NativePowerSyncModule",
-    ) as NativeHttpFetchModule | undefined;
-    if (mod != null && typeof mod.httpFetch === "function") {
-      return mod;
+    const fromBinding = (
+      NativeModules as { NativePowerSyncModule?: unknown } | undefined
+    )?.NativePowerSyncModule;
+    if (fromBinding != null) {
+      return fromBinding;
     }
   } catch {
-    // PrimJS may not expose NativeModules on globalThis.
+    // NativeModules may be an unbound identifier outside Lynx.
   }
-  return undefined;
+  try {
+    return (0, eval)(
+      "typeof NativeModules === 'undefined' ? undefined : NativeModules.NativePowerSyncModule",
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+function nativeHttpFetchModule(): NativeHttpFetchModule | undefined {
+  const mod = lookupNativePowerSyncModule();
+  if (mod == null || (typeof mod !== "object" && typeof mod !== "function")) {
+    return undefined;
+  }
+  // Presence only — do not require typeof httpFetch === "function".
+  return mod as NativeHttpFetchModule;
+}
+
+function describeHttpFetchGate(): {
+  hasModule: boolean;
+  hasHttpFetch: boolean;
+  httpFetchTypeof: string;
+} {
+  const mod = lookupNativePowerSyncModule();
+  if (mod == null || (typeof mod !== "object" && typeof mod !== "function")) {
+    return { hasModule: false, hasHttpFetch: false, httpFetchTypeof: "undefined" };
+  }
+  const httpFetch = (mod as NativeHttpFetchModule).httpFetch;
+  return {
+    hasModule: true,
+    hasHttpFetch: httpFetch != null,
+    httpFetchTypeof: typeof httpFetch,
+  };
 }
 
 function encodeUtf8(text: string): ArrayBuffer {
@@ -1131,6 +1168,10 @@ function fetchViaNativeHttp(resource: string, request: RequestInit): Promise<Res
   if (native == null) {
     throw new Error("NativePowerSyncModule.httpFetch is not registered");
   }
+  const httpFetch = native.httpFetch;
+  if (httpFetch == null) {
+    throw new Error("NativePowerSyncModule.httpFetch is missing");
+  }
   const headers = headerMap(request.headers);
   const payload: Record<string, unknown> = {
     method: String(request.method ?? "GET"),
@@ -1141,8 +1182,16 @@ function fetchViaNativeHttp(resource: string, request: RequestInit): Promise<Res
     // String body crosses the Native Module bridge; ArrayBuffer often does not.
     payload.body = request.body;
   }
+  if (firstSyncStreamDiag != null) {
+    console.log(FM_PS_LYNX_003, "invoking NativePowerSyncModule.httpFetch", {
+      url: resource,
+      httpFetchTypeof: typeof httpFetch,
+    });
+  }
   return new Promise((resolve, reject) => {
-    native.httpFetch(payload, (envelope) => {
+    // Direct call like SQL RPC (open/execute). Do not use .call/.apply — PrimJS host
+    // methods may not be JS Function objects.
+    native.httpFetch!(payload, (envelope: NativeHttpFetchEnvelope) => {
       try {
         const result = unwrapFetchSuccess(envelope) as NativeHttpFetchEnvelope;
         if (result.ok === false) {
@@ -1233,8 +1282,16 @@ export class LynxRemote extends AbstractRemote {
     }
     // Android: LynxFetchModule drops large byte[] / customInfo for /sync/stream. Use
     // NativePowerSyncModule.httpFetch (UTF-8 string body) for streaming downloads.
-    if (isLynxAndroid() && expectStreamingResponse && nativeHttpFetchModule() != null) {
-      return fetchViaNativeHttp(url, request);
+    if (isLynxAndroid() && expectStreamingResponse) {
+      const nativeHttp = nativeHttpFetchModule();
+      if (nativeHttp != null) {
+        return fetchViaNativeHttp(url, request);
+      }
+      console.log(FM_PS_LYNX_003, "httpFetch gate failed — falling back to LynxFetchModule", {
+        url,
+        ...describeHttpFetchGate(),
+        note: "PrimJS host methods must not be gated on typeof === 'function'",
+      });
     }
     if (isLynxAndroid() && lynxFetchModule() != null) {
       return fetchViaLynxModule(url, request, expectStreamingResponse);

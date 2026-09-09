@@ -114,6 +114,61 @@ test("identifier fetch uses Response.lynxExtension.streamingId when body is alre
   }
 });
 
+test("nativeHttpFetch gate accepts module without typeof===function on httpFetch", async () => {
+  // PrimJS host methods often report typeof !== "function"; the old gate skipped httpFetch.
+  const previousLynx = (globalThis as { lynx?: unknown }).lynx;
+  const previousModules = globalThis.NativeModules;
+  const previousInfo = (globalThis as { SystemInfo?: { platform?: string } }).SystemInfo;
+  (globalThis as { SystemInfo?: { platform?: string } }).SystemInfo = { platform: "Android" };
+  (globalThis as { lynx?: unknown }).lynx = { getJSModule() { return undefined; } };
+  const ndjson = '{"checkpoint":{"last_op_id":"1"}}\n';
+  let invoked = false;
+  const hostMethod = ((
+    _request: unknown,
+    callback: (envelope: unknown) => void,
+  ) => {
+    invoked = true;
+    queueMicrotask(() => {
+      callback({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        contentType: "application/x-ndjson",
+        body: ndjson,
+        idleComplete: true,
+      });
+    });
+  }) as unknown as Record<string, unknown>;
+  // Simulate PrimJS: callable but Object.prototype.toString / typeof quirks — keep callable
+  // while ensuring our gate does not require typeof === "function" exclusively via presence.
+  Object.defineProperty(hostMethod, Symbol.toStringTag, { value: "HostFunction" });
+  globalThis.NativeModules = {
+    LynxFetchModule: {
+      fetch() {
+        throw new Error("LynxFetchModule must not be used when httpFetch is present");
+      },
+    },
+    NativePowerSyncModule: {
+      httpFetch: hostMethod,
+    },
+  } as typeof globalThis.NativeModules;
+  try {
+    const remote = new LynxRemote({ fetchCredentials: async () => null }, { log() {} });
+    const response = await remote.fetch({
+      resource: "http://10.0.2.2:8080/sync/stream",
+      request: { method: "POST", body: "{}" },
+      expectStreamingResponse: true,
+    });
+    assert.equal(invoked, true);
+    const first = await response.body!.getReader().read();
+    assert.equal(new TextDecoder().decode(first.value), ndjson);
+  } finally {
+    (globalThis as { lynx?: unknown }).lynx = previousLynx;
+    globalThis.NativeModules = previousModules;
+    (globalThis as { SystemInfo?: { platform?: string } }).SystemInfo = previousInfo;
+  }
+});
+
 test("LynxRemote.fetch applies NativePowerSyncModule.httpFetch UTF-8 body (device shape)", async () => {
   // Real LynxFetchModule drops large byte[] / customInfo; httpFetch returns strings only.
   const previousLynx = (globalThis as { lynx?: unknown }).lynx;
