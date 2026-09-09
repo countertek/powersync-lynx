@@ -3,14 +3,20 @@ import { test } from "node:test";
 
 import { bootDemo } from "../examples/showcase/src/boot.ts";
 
-function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (err: unknown) => void } {
+function deferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
-  let reject!: (err: unknown) => void;
+  let reject!: (reason: Error) => void;
   const promise = new Promise<T>((ok, fail) => {
     resolve = ok;
     reject = fail;
   });
   return { promise, resolve, reject };
+}
+
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason: Error) => void;
 }
 
 test("local UI ready fires while connect() is still pending", async () => {

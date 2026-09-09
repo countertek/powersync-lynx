@@ -21,7 +21,10 @@ function packedPaths(tarball) {
 test("packed tarball ships iOS build inputs and omits host/build residue", async () => {
   const dest = await mkdtemp(path.join(tmpdir(), "ps-lynx-pack-"));
   try {
-    execFileSync("node", ["scripts/fetch-native-deps.mjs", "--sqlite"], { cwd: root, stdio: "pipe" });
+    execFileSync("node", ["scripts/fetch-native-deps.mjs", "--sqlite"], {
+      cwd: root,
+      stdio: "pipe",
+    });
     execFileSync("node", ["scripts/bundle-web-host-factory.mjs"], { cwd: root, stdio: "pipe" });
     const packed = execFileSync("pnpm", ["pack", "--pack-destination", dest, "--ignore-scripts"], {
       cwd: root,
@@ -104,6 +107,11 @@ test("packed tarball ships iOS build inputs and omits host/build residue", async
       has("dist/web-host/factory.js"),
       true,
       "attach factory URL needs the bundled ESM entry",
+    );
+    assert.equal(
+      has("android/consumer-rules.pro"),
+      true,
+      "Android Autolink consumer ProGuard rules must ship",
     );
 
     const packedLynxLib = JSON.parse(

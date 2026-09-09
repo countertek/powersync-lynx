@@ -515,6 +515,7 @@ PowerSync all-SDK floors; Lynx 4.0 does not raise them.
 | Floor | Version |
 |---|---|
 | Lynx host SDK | **4.0+** |
+| Node | **>= 22.18** |
 | iOS | **15.0** |
 | Android | **API 24** |
 | macOS | **14.0** |

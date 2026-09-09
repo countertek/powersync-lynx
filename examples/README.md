@@ -61,7 +61,7 @@ Do not treat a successful web build as proof of per-platform sync.
 ## Prerequisites
 
 - pnpm **12** (`package.json` `packageManager` is `pnpm@12.3.4`)
-- Node 20.19+ or 22.12+
+- Node **>= 22.18** (library `engines` / `.nvmrc`)
 - Docker with Compose v2 (profiles)
 - Two browser windows for the web money shot
 - iOS Simulator: Xcode 16+, CocoaPods, `gem install cocoapods-lynx-library` — [`hosts/ios/README.md`](hosts/ios/README.md)

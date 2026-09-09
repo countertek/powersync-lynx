@@ -7,7 +7,19 @@ CXXFLAGS := -std=c++17 -fPIC -O2 -Ishared -I$(SQLITE_DIR)
 CFLAGS := -std=c11 -fPIC -O2 -I$(SQLITE_DIR) $(SQLITE_FLAGS)
 LDFLAGS := -ldl -lpthread
 
-CORE_DYLIB := dist/macos/arm64/libpowersync_aarch64.macos.dylib
+UNAME_S := $(shell uname -s)
+UNAME_M := $(shell uname -m)
+ifeq ($(UNAME_S),Linux)
+  CORE_DYLIB := dist/linux/x64/libpowersync_x64.linux.so
+else ifeq ($(UNAME_S),Darwin)
+  ifeq ($(UNAME_M),arm64)
+    CORE_DYLIB := dist/macos/arm64/libpowersync_aarch64.macos.dylib
+  else
+    CORE_DYLIB := dist/macos/x64/libpowersync_x64.macos.dylib
+  endif
+else
+  CORE_DYLIB := dist/macos/arm64/libpowersync_aarch64.macos.dylib
+endif
 TEST_BIN := shared/build/ps_sql_test
 IOS_TEST_BIN := shared/build/ios_module_rpc_test
 NODE := dist/macos/arm64/powersync-lynx.node

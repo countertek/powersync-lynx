@@ -11,7 +11,10 @@
     "isolatedModules": true,
     "erasableSyntaxOnly": true,
     "noEmit": true,
-    "types": ["node"]
+    "types": ["node"],
+    "paths": {
+      "powersync-lynx": ["./src/index.ts"]
+    }
   },
   "include": ["test"]
 }
