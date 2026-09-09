@@ -34,8 +34,6 @@ Do **not** expect Lynx Explorer to run SQL: Explorer does not register `NativePo
 
 ## 📦 Install
 
-Package name today: **`powersync-lynx@0.0.0`** (a scoped `@countertek/powersync-lynx` name may land later). Use **pnpm 12** only (see `packageManager` in `package.json`). Do not use the npm CLI for this repo.
-
 ```bash
 pnpm add powersync-lynx @powersync/common
 ```
