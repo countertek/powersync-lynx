@@ -322,6 +322,15 @@ int RunSyncHttpFixtureTests(void) {
       }
     }
     expect_http(abort_error, "abort after headers emits onError");
+    NSString* abort_err_text = nil;
+    for (NSDictionary* row in abort_events) {
+      if ([row[@"event"] isEqualToString:@"onError"] &&
+          [row[@"error"] isKindOfClass:[NSString class]]) {
+        abort_err_text = row[@"error"];
+      }
+    }
+    expect_http([abort_err_text isEqualToString:@"aborted"],
+                "abort onError text is aborted (not the fail default)");
     expect_http([abort_last isEqualToString:@"onEnd"],
                 "abort terminal sequence ends with onEnd");
     hold_server.stop();

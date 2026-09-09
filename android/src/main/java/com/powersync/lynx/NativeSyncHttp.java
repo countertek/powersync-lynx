@@ -151,7 +151,7 @@ final class NativeSyncHttp {
           "",
           null,
           null,
-          t.getMessage() != null ? t.getMessage() : PS_FAIL_DEFAULT);
+          t.getMessage() != null ? t.getMessage() : null);
     }
   }
 
@@ -183,17 +183,13 @@ final class NativeSyncHttp {
       invoke(callback, ok);
     }
     if ((effects & SyncHttpSession.EFFECT_CALLBACK_FAIL) != 0) {
-      invoke(callback, fail(error));
+      invoke(callback, fail(handle.session.errorText(error)));
     }
     if ((effects & SyncHttpSession.EFFECT_EVENT_DATA) != 0) {
       sendStreamEvent(streamId, SyncHttpPolicy.EVENT_ON_DATA, data, null);
     }
     if ((effects & SyncHttpSession.EFFECT_EVENT_ERROR) != 0) {
-      sendStreamEvent(
-          streamId,
-          SyncHttpPolicy.EVENT_ON_ERROR,
-          null,
-          error != null && !error.isEmpty() ? error : PS_FAIL_DEFAULT);
+      sendStreamEvent(streamId, SyncHttpPolicy.EVENT_ON_ERROR, null, handle.session.errorText(error));
     }
     if ((effects & SyncHttpSession.EFFECT_EVENT_END) != 0) {
       sendStreamEvent(streamId, SyncHttpPolicy.EVENT_ON_END, null, null);
@@ -307,11 +303,10 @@ final class NativeSyncHttp {
     context.sendGlobalEvent(streamId, params);
   }
 
-  private static final String PS_FAIL_DEFAULT = "httpFetch stream failed";
-
   /** Shared pre-headers failure envelope ({@code shared/sync_http_session.h}). */
   private static WritableMap fail(String message) {
-    String text = message != null && !message.isEmpty() ? message : PS_FAIL_DEFAULT;
+    String text =
+        message != null && !message.isEmpty() ? message : SyncHttpSession.FAIL_MESSAGE_DEFAULT;
     WritableMap map = Arguments.createMap();
     map.putBoolean("ok", false);
     map.putDouble("status", SyncHttpSession.FAIL_STATUS);

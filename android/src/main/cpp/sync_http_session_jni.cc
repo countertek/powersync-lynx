@@ -54,3 +54,8 @@ extern "C" JNIEXPORT jint JNICALL
 Java_com_powersync_lynx_SyncHttpSession_nativeAbort(JNIEnv*, jclass, jlong handle) {
   return ps_sync_http_session_abort(session_from(handle));
 }
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_powersync_lynx_SyncHttpSession_nativeAborted(JNIEnv*, jclass, jlong handle) {
+  return ps_sync_http_session_aborted(session_from(handle));
+}

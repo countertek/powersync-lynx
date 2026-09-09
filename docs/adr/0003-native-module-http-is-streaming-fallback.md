@@ -10,7 +10,7 @@ Android and iOS `NativeSyncHttp` share one decision state machine in [`shared/sy
 
 Pre-headers failure Callback (parse error, connect/RST before a status line, abort before headers): `{ok:false,status:-1,statusText:"",message,body,idleComplete:false}`. JS still rejects on `ok === false` + `message`. After headers, abort and stream errors emit `onError` then `onEnd` and do not invoke the one-shot Callback again.
 
-`httpFetchAbort` always Callbacks `{ok:true}`. It marks the session aborted and cancels I/O; the I/O `on_error` (or `on_end`) step emits the terminal. The abort caller does not emit events itself.
+`httpFetchAbort` always Callbacks `{ok:true}`. It marks the session aborted and cancels I/O; the I/O `on_error` (or `on_end`) step emits the terminal. The abort caller does not emit events itself. Empty I/O error text after abort is `"aborted"` (`ps_sync_http_session_error_text`), including when iOS `NSURLErrorCancelled` or Android read-timeout after disconnect reports `on_end` instead of `on_error`.
 
 ### Intentional remaining host differences
 

@@ -197,11 +197,17 @@ didReceiveResponse:(NSURLResponse *)response
 
 - (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task didCompleteWithError:(NSError *)error {
   dispatch_async(self.syncQueue, ^{
-    if (error != nil && error.code != NSURLErrorCancelled) {
-      [self finishLockedWithError:error.localizedDescription ?: @"request failed"];
-    } else {
-      [self finishLockedWithError:nil];
+    if (error != nil && error.code == NSURLErrorCancelled) {
+      // Race with -cancel: if didComplete wins, still emit onError(@"aborted")
+      // so NativeSyncHttp does not fill the default fail message.
+      [self finishLockedWithError:@"aborted"];
+      return;
     }
+    if (error != nil) {
+      [self finishLockedWithError:error.localizedDescription ?: @"request failed"];
+      return;
+    }
+    [self finishLockedWithError:nil];
   });
 }
 

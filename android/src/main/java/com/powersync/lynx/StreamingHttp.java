@@ -113,6 +113,10 @@ final class StreamingHttp {
         try {
           n = in.read(chunk);
         } catch (SocketTimeoutException idle) {
+          if (cancelled.get()) {
+            listener.onError("aborted");
+            return;
+          }
           // Long silence after bytes — keep waiting (timeout resets per read). Treat pure
           // first-byte timeout with no prior data as end; otherwise continue is not possible
           // because the read already failed. Disconnect and end so PowerSync can reconnect.

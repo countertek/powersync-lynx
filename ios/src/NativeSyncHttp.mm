@@ -32,9 +32,15 @@ BOOL UrlLooksLikeSyncStream(NSDictionary* request) {
   return ps_sync_http_is_sync_stream_url(Utf8FromNSString((NSString*)urlValue).c_str()) != 0;
 }
 
+NSString* ErrorText(ps_sync_http_session* session, NSString* message) {
+  if (message.length > 0) {
+    return message;
+  }
+  return @(ps_sync_http_session_error_text(session, nullptr));
+}
+
 NSDictionary* FailEnvelope(NSString* message) {
-  NSString* text =
-      message.length > 0 ? message : @(PS_SYNC_HTTP_FAIL_MESSAGE_DEFAULT);
+  NSString* text = message.length > 0 ? message : @(PS_SYNC_HTTP_FAIL_MESSAGE_DEFAULT);
   return @{
     @"ok" : @NO,
     @"status" : @(PS_SYNC_HTTP_FAIL_STATUS),
@@ -145,7 +151,7 @@ static __weak id g_sharedStreamEventSender = nil;
   }
   if ((effects & PS_SYNC_HTTP_EFFECT_CALLBACK_FAIL) != 0 && callback != nil) {
     @autoreleasepool {
-      callback(FailEnvelope(error));
+      callback(FailEnvelope(ErrorText(&handle->session, error)));
     }
   }
   if ((effects & PS_SYNC_HTTP_EFFECT_EVENT_DATA) != 0) {
@@ -155,12 +161,10 @@ static __weak id g_sharedStreamEventSender = nil;
                     error:nil];
   }
   if ((effects & PS_SYNC_HTTP_EFFECT_EVENT_ERROR) != 0) {
-    NSString* text =
-        error.length > 0 ? error : @(PS_SYNC_HTTP_FAIL_MESSAGE_DEFAULT);
     [self sendStreamEvent:streamId
                     event:@(PS_SYNC_HTTP_EVENT_ON_ERROR)
                      data:nil
-                    error:text];
+                    error:ErrorText(&handle->session, error)];
   }
   if ((effects & PS_SYNC_HTTP_EFFECT_EVENT_END) != 0) {
     [self sendStreamEvent:streamId event:@(PS_SYNC_HTTP_EVENT_ON_END) data:nil error:nil];

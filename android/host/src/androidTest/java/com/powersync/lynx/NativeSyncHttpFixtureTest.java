@@ -158,6 +158,15 @@ public class NativeSyncHttpFixtureTest {
           "abort emits onError then onEnd");
       expect(lynx.sawError(), "abort after headers emits onError");
       List<RecordingLynxContext.Event> events = lynx.snapshot();
+      String abortError = null;
+      for (RecordingLynxContext.Event event : events) {
+        if (SyncHttpPolicy.EVENT_ON_ERROR.equals(event.event)) {
+          abortError = event.error;
+        }
+      }
+      expect(
+          SyncHttpSession.ABORT_MESSAGE.equals(abortError),
+          "abort onError text is aborted (not the fail default)");
       expect(
           SyncHttpPolicy.EVENT_ON_END.equals(events.get(events.size() - 1).event),
           "abort terminal sequence ends with onEnd");

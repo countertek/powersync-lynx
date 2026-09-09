@@ -14,6 +14,8 @@ final class SyncHttpSession {
   static final int ROUTE_STREAMING = 1;
 
   static final int FAIL_STATUS = -1;
+  static final String ABORT_MESSAGE = "aborted";
+  static final String FAIL_MESSAGE_DEFAULT = "httpFetch stream failed";
 
   static final int EFFECT_NONE = 0;
   static final int EFFECT_CALLBACK_HEADERS = 1;
@@ -69,6 +71,17 @@ final class SyncHttpSession {
     return nativeAbort(nativeHandle);
   }
 
+  synchronized boolean aborted() {
+    return nativeHandle != 0L && nativeAborted(nativeHandle) != 0;
+  }
+
+  synchronized String errorText(String message) {
+    if (message != null && !message.isEmpty()) {
+      return message;
+    }
+    return aborted() ? ABORT_MESSAGE : FAIL_MESSAGE_DEFAULT;
+  }
+
   synchronized void close() {
     long handle = nativeHandle;
     nativeHandle = 0L;
@@ -92,4 +105,6 @@ final class SyncHttpSession {
   private static native int nativeOnError(long handle);
 
   private static native int nativeAbort(long handle);
+
+  private static native int nativeAborted(long handle);
 }

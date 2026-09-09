@@ -218,6 +218,22 @@ int main() {
   expect(std::string(PS_SYNC_HTTP_FAIL_MESSAGE_DEFAULT) == "httpFetch stream failed",
          "N3-fail default message");
   expect(std::string(PS_SYNC_HTTP_ABORT_MESSAGE) == "aborted", "N3-abort I/O message");
+  {
+    ps_sync_http_session session;
+    ps_sync_http_session_init(&session);
+    expect(std::string(ps_sync_http_session_error_text(&session, nullptr)) ==
+               PS_SYNC_HTTP_FAIL_MESSAGE_DEFAULT,
+           "N3-error-text: empty before abort is the fail default");
+    expect(std::string(ps_sync_http_session_error_text(&session, "stream reset")) == "stream reset",
+           "N3-error-text: I/O message wins");
+    ps_sync_http_session_abort(&session);
+    expect(ps_sync_http_session_aborted(&session) == 1, "N3-error-text: abort sets aborted");
+    expect(std::string(ps_sync_http_session_error_text(&session, nullptr)) ==
+               PS_SYNC_HTTP_ABORT_MESSAGE,
+           "N3-error-text: empty after abort is aborted (on_end-after-cancel)");
+    expect(std::string(ps_sync_http_session_error_text(&session, "")) == PS_SYNC_HTTP_ABORT_MESSAGE,
+           "N3-error-text: empty string after abort is aborted");
+  }
 
   try {
     const std::string java_http = read_file(PS_ANDROID_NATIVE_SYNC_HTTP_JAVA);
@@ -244,6 +260,10 @@ int main() {
            "iOS NativeSyncHttp.mm calls ps_sync_http_session_on_error");
     expect(ios.find("ps_sync_http_session_abort") != std::string::npos,
            "iOS NativeSyncHttp.mm calls ps_sync_http_session_abort");
+    expect(ios.find("ps_sync_http_session_error_text") != std::string::npos,
+           "iOS NativeSyncHttp.mm uses ps_sync_http_session_error_text");
+    expect(java_http.find("errorText(") != std::string::npos,
+           "Android NativeSyncHttp.java uses SyncHttpSession.errorText");
     expect(ios.find("if (!headersSent)") == std::string::npos,
            "iOS NativeSyncHttp.mm does not keep a local headersSent branch");
 

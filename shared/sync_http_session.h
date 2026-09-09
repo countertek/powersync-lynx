@@ -170,6 +170,26 @@ static inline int ps_sync_http_session_abort(ps_sync_http_session* session) {
   return PS_SYNC_HTTP_EFFECT_CANCEL_IO;
 }
 
+static inline int ps_sync_http_session_aborted(const ps_sync_http_session* session) {
+  return session != nullptr && session->aborted.load() != 0 ? 1 : 0;
+}
+
+/**
+ * onError / fail Callback text. Empty I/O text after abort is "aborted"
+ * (iOS cancelled-complete and Android read-timeout after disconnect report
+ * on_end, not on_error, and must not become FAIL_MESSAGE_DEFAULT).
+ */
+static inline const char* ps_sync_http_session_error_text(const ps_sync_http_session* session,
+                                                          const char* message) {
+  if (message != nullptr && message[0] != '\0') {
+    return message;
+  }
+  if (ps_sync_http_session_aborted(session)) {
+    return PS_SYNC_HTTP_ABORT_MESSAGE;
+  }
+  return PS_SYNC_HTTP_FAIL_MESSAGE_DEFAULT;
+}
+
 /** Apply effect bits through host callbacks (C++ tests + optional host use). */
 static inline void ps_sync_http_dispatch(int effects, const ps_sync_http_host* host) {
   if (host == nullptr || effects == PS_SYNC_HTTP_EFFECT_NONE) {
