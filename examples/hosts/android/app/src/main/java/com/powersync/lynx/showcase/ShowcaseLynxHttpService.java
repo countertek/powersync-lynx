@@ -1,6 +1,7 @@
 package com.powersync.lynx.showcase;
 
 import android.util.Log;
+import androidx.annotation.Keep;
 import androidx.annotation.NonNull;
 import com.lynx.jsbridge.network.HttpRequest;
 import com.lynx.jsbridge.network.HttpResponse;
@@ -44,6 +45,7 @@ import okhttp3.ResponseBody;
  *       read timeout so keepalive gaps do not abort the stream.
  * </ul>
  */
+@Keep
 public final class ShowcaseLynxHttpService implements ILynxHttpService {
   private static final String TAG = "ShowcaseLynxHttp";
   private static final int CODE_FAILED_INTERNALLY = 499;
