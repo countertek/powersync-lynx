@@ -1,0 +1,101 @@
+# Create architecture review GitHub issue (one-shot)
+
+# Cloud Agent tokens lack issues:write; Actions GITHUB_TOKEN can create the issue.
+# Safe to delete this workflow after the issue exists.
+
+name: Create architecture review issue
+
+on:
+  push:
+    branches:
+      - drkz/arch-review-issue-a43d
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  open-issue:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure labels
+        continue-on-error: true
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const wanted = [
+              { name: 'architecture', color: '5319E7', description: 'Architecture / deepening work' },
+              { name: 'enhancement', color: 'a2eeef', description: 'New feature or request' },
+            ];
+            for (const label of wanted) {
+              try {
+                await github.rest.issues.getLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: label.name,
+                });
+              } catch (_) {
+                try {
+                  await github.rest.issues.createLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    name: label.name,
+                    color: label.color,
+                    description: label.description,
+                  });
+                } catch (e) {
+                  core.info(`label ${label.name}: ${e}`);
+                }
+              }
+            }
+
+      - name: Create issue if missing
+        id: create
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const title =
+              'Architecture: deepen Lynx→Response transport; separate native sync HTTP from SQL RPC; unify idle-complete';
+            const body = fs.readFileSync(
+              '.scratch/architecture-review-2026-09/github-issue.md',
+              'utf8',
+            );
+
+            const existing = await github.rest.search.issuesAndPullRequests({
+              q: `repo:${context.repo.owner}/${context.repo.repo} is:issue in:title "Architecture: deepen Lynx→Response transport"`,
+            });
+            if (existing.data.total_count > 0) {
+              const issue = existing.data.items[0];
+              core.info(`Issue already exists: ${issue.html_url}`);
+              core.setOutput('url', issue.html_url);
+              core.setOutput('number', String(issue.number));
+              return;
+            }
+
+            const labels = [];
+            for (const name of ['enhancement', 'architecture']) {
+              try {
+                await github.rest.issues.getLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name,
+                });
+                labels.push(name);
+              } catch (_) {}
+            }
+
+            const issue = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body,
+              labels,
+            });
+            core.info(`Created ${issue.data.html_url}`);
+            core.setOutput('url', issue.data.html_url);
+            core.setOutput('number', String(issue.data.number));
