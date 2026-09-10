@@ -97,36 +97,34 @@ import { attach } from "powersync-lynx/web-host";
 | **Android** | Same Native Module path | `NativePowerSyncModule.httpFetch` |
 | **Windows / macOS** | Documented Autolink recipes only | Not verified in this checkout |
 
-### Native streaming caveat
+### Native streaming (iOS / Android)
 
-Stock Lynx fetch cannot reliably deliver live `/sync/stream` NDJSON on device. Native hosts use **`NativePowerSyncModule.httpFetch`**:
+Stock Lynx fetch cannot keep a live `/sync/stream` NDJSON connection open. Autolink hosts use **`NativePowerSyncModule.httpFetch`**:
 
 1. One-shot callback returns status + `streamingId` (empty body).
 2. Chunks arrive as UTF-8 strings on **`GlobalEventEmitter`**. Terminal sequence: `onData*` → `onError?` → `onEnd`.
 3. `LynxRemote` rebuilds a ReadableStream so PowerSync applies NDJSON incrementally.
 
-Idle-complete (buffered UTF-8 `body` / `bodyBase64` when `LynxContext` cannot send events) remains a fallback when no event sender is available. Rebuild showcase + host after pulling streaming changes. Disconnect abort of a live native stream is covered by [#36](https://github.com/countertek/powersync-lynx/pull/36) (`httpFetchAbort` in `test/lynx-remote-stream.test.ts`, iOS fixture abort). Details: [iOS host](https://github.com/countertek/powersync-lynx/blob/main/examples/hosts/ios/README.md), [Android host](https://github.com/countertek/powersync-lynx/blob/main/examples/hosts/android/README.md).
+Idle-complete (buffered UTF-8 `body` / `bodyBase64` when no event sender is registered) is the fallback, not the primary path. `httpFetchAbort(streamingId)` cancels after headers (`onError` then `onEnd`). Abort before the headers Callback settles the JS Promise immediately; native I/O may continue until a late Callback delivers `streamingId` ([ADR 0003](https://github.com/countertek/powersync-lynx/blob/main/docs/adr/0003-native-module-http-is-streaming-fallback.md)). Host details: [iOS](https://github.com/countertek/powersync-lynx/blob/main/examples/hosts/ios/README.md), [Android](https://github.com/countertek/powersync-lynx/blob/main/examples/hosts/android/README.md).
 
-## ⚠️ Sync caveats
+### Status signals
 
-`hasSynced` and `lastSyncedAt` are stored in SQLite (`powersync_offline_sync_status`). After a relaunch they can be true even if this process has not opened `/sync/stream`. Treat them as “this database has completed a checkpoint at least once,” not “this session downloaded.”
+`hasSynced` and `lastSyncedAt` live in SQLite (`powersync_offline_sync_status`). After a relaunch they can be true even if this process has not opened `/sync/stream`. Treat them as “this database has completed a checkpoint at least once,” not “this session downloaded.”
 
-| Signal | What it means |
+| Signal | Meaning |
 | --- | --- |
 | **`hasSynced` / `lastSyncedAt`** | Persisted. True after a prior launch is **not** proof this session downloaded. |
 | **`waitForFirstSync()`** | Resolves when `hasSynced` is true, including a persisted value. Stays pending on `connected` alone. |
 | **`connected` / `waitForStatus(s => s.connected)`** | This session has a live PowerSync socket. |
-| **`downloading` / “first checkpoint applied”** | This session received checkpoint data. Confirm `ps_buckets > 0` / row presence. |
-| **`powersync-lynx /sync/stream via <transport>`** | Logger debug for this session’s transport (`native-http`, host `fetch`, …). Attach a `logger` on `PowerSyncDatabase` to see it (default min level is `info`). |
-| **Native `streamingId` + `onData` before `onEnd`** | Incremental `/sync/stream` this session, not idle-complete. |
-| **Local UI ready** | `waitForReady()` opens SQLite; it does **not** wait for `connect()` / first checkpoint. |
-| **Demo tokens** | The examples stack mints a static HS256 JWT. Not PowerSync Cloud / JWKS production auth. |
+| **`downloading` / first checkpoint this session** | This session received checkpoint data (`lastSyncedAt` advanced). Use row presence / `ps_buckets > 0` when you need download evidence. |
+| **`powersync-lynx /sync/stream via <transport>`** | Logger debug for this session’s transport (`native-http`, host `fetch`, …). Attach a `logger` on `PowerSyncDatabase` (default min level is `info`). |
 
-### Android consumer builds
+## Limits
 
-Autolink apps compile this package’s `android/` tree: **NDK** + **CMake** for JNI `ps_sql`, with `-DANDROID_STL=c++_shared`. The consumer SDK needs an NDK and CMake so `externalNativeBuild` can build `libpowersync_lynx_sql.so`. `android/build.gradle` also runs a Gradle `Exec` of `node scripts/fetch-native-deps.mjs --sqlite` on `preBuild` (sqlite amalgamation). Gradle hosts without Node are tracked as [#39](https://github.com/countertek/powersync-lynx/issues/39) M2 and do not block `pnpm test` / `make test`. Sync-HTTP timeouts and stream event names live in `shared/sync_http_policy.h`; Android compiles committed `SyncHttpPolicy.java` generated from that header (`node scripts/gen-sync-http-policy-java.mjs`). Consumer Gradle does not run the generator. Drift fails `make test` / `pnpm test`.
-
-iOS Autolink compiles canonical `shared/ps_sql.{cc,h}` through `ios/src/ps_sql_engine.cc` (a CocoaPods compile unit that `#include`s the shared engine). CocoaPods drops `source_files` outside `PODS_TARGET_SRCROOT` (`ios/`), so the podspec does not list `../shared/ps_sql.cc`. Those shared sources still ship in the npm package; `fetch-native-deps` does not copy them under `ios/src`.
+- **Lynx Explorer** does not register `NativePowerSyncModule` — SQL and native streaming will not run there.
+- **Windows / macOS** hosts are Autolink recipes only. Desktop is not a full Autolink product path in this checkout (N-API is SQL-only; desktop `/sync/stream` is unverified).
+- **Native abort before headers:** JS settlement may precede native cancel until the `streamingId` Callback ([ADR 0003](https://github.com/countertek/powersync-lynx/blob/main/docs/adr/0003-native-module-http-is-streaming-fallback.md)).
+- **Demo tokens** in the examples stack are a static HS256 JWT, not PowerSync Cloud / JWKS production auth.
 
 ## 🧪 Local demo stack
 
@@ -160,6 +158,10 @@ make test          # Native Module (see Makefile for iOS / Android targets)
 ```
 
 Requires **Node >= 22.18** (`.nvmrc` / `package.json` `engines`) and pnpm 12 (`packageManager` is `pnpm@12.3.4`).
+
+Autolink apps compile this package’s `android/` tree: **NDK** + **CMake** for JNI `ps_sql`, with `-DANDROID_STL=c++_shared`. The consumer SDK needs an NDK and CMake so `externalNativeBuild` can build `libpowersync_lynx_sql.so`. `android/build.gradle` also runs a Gradle `Exec` of `node scripts/fetch-native-deps.mjs --sqlite` on `preBuild` (sqlite amalgamation). Gradle hosts without Node are tracked as [#39](https://github.com/countertek/powersync-lynx/issues/39) M2 and do not block `pnpm test` / `make test`. Sync-HTTP timeouts and stream event names live in `shared/sync_http_policy.h`; Android compiles committed `SyncHttpPolicy.java` generated from that header (`node scripts/gen-sync-http-policy-java.mjs`). Consumer Gradle does not run the generator. Drift fails `make test` / `pnpm test`.
+
+iOS Autolink compiles canonical `shared/ps_sql.{cc,h}` through `ios/src/ps_sql_engine.cc` (a CocoaPods compile unit that `#include`s the shared engine). CocoaPods drops `source_files` outside `PODS_TARGET_SRCROOT` (`ios/`), so the podspec does not list `../shared/ps_sql.cc`. Those shared sources still ship in the npm package; `fetch-native-deps` does not copy them under `ios/src`.
 
 Normative Client behavior: [docs/spec.md](https://github.com/countertek/powersync-lynx/blob/main/docs/spec.md). Ubiquitous language: [CONTEXT.md](https://github.com/countertek/powersync-lynx/blob/main/CONTEXT.md). ADRs: [docs/adr/](https://github.com/countertek/powersync-lynx/tree/main/docs/adr).
 
