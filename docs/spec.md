@@ -187,7 +187,7 @@ Mobile hosts still register a Lynx HTTP Service for Connector traffic: iOS `Lynx
 
 1. One-shot callback returns HTTP status + `streamingId` with an empty body (Lynx Callback is one-shot).
 2. Chunks are UTF-8 strings on GlobalEventEmitter. Terminal sequence after headers: **`onData*` → `onError?` → `onEnd`**. JS waits for `onEnd`; `onError` records failure.
-3. `httpFetchAbort(streamingId)` cancels the native request. After headers this is `onError` then `onEnd`. Before headers the one-shot Callback is `{ok:false,status:-1,message,…}` and no events fire.
+3. `httpFetchAbort(streamingId)` cancels the native request. After headers this is `onError` then `onEnd`. Before headers the one-shot Callback is `{ok:false,status:-1,message,…}` and no events fire. JS learns `streamingId` only from that Callback: abort after dispatch rejects the JS Promise immediately, then `httpFetchAbort` runs if a late Callback delivers the id. Until then native I/O may continue (residual: callback-only handle — [ADR 0003](adr/0003-native-module-http-is-streaming-fallback.md)).
 4. Idle-complete (2.5 s quiet window after bytes, UTF-8 `body` / `bodyBase64`, `idleComplete: true`) runs only when streaming cannot be started. It is not the primary realtime path.
 
 Pre-headers / I/O failure Callback on iOS and Android: `{ok:false,status:-1,statusText:"",message,body,idleComplete:false}`. Session decisions live in `shared/sync_http_session.h` (hosts keep their HTTP I/O).

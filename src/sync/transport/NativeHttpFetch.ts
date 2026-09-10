@@ -88,6 +88,31 @@ export function responseFromNativeHttpEnvelope(result: NativeHttpFetchEnvelope) 
   });
 }
 
+function abortError(): Error {
+  const error = new Error("Aborted");
+  error.name = "AbortError";
+  return error;
+}
+
+function requestNativeAbort(native: NativeSyncHttpModule, streamId: string | undefined): void {
+  const abortFn = native.httpFetchAbort;
+  if (abortFn == null || streamId == null) {
+    return;
+  }
+  try {
+    abortFn(streamId, () => {});
+  } catch {
+    // Presence-only; PrimJS host methods may throw on unused abort.
+  }
+}
+
+/**
+ * Residual (issue #52 / ADR-0003): `httpFetchAbort` is keyed by `streamingId`,
+ * which JS only learns from the one-shot Callback. Abort after dispatch rejects
+ * this Promise immediately. Native I/O is cancelled when a late Callback
+ * delivers `streamingId`. Until then (or if the Callback never fires), native
+ * I/O may continue — Promise rejection is not full cancellation.
+ */
 function fetchViaNativeHttp(request: SyncStreamRequest): Promise<Response> {
   const native = lookupNativeSyncHttp();
   if (native == null) {
@@ -104,50 +129,73 @@ function fetchViaNativeHttp(request: SyncStreamRequest): Promise<Response> {
   }
   const signal = request.signal;
   if (signal != null && signal.aborted) {
-    return Promise.reject(new Error("Aborted"));
+    return Promise.reject(abortError());
   }
   // Capture GlobalEventEmitter early — native may emit onData before the Callback returns.
   enterEarlyCapture();
-  let streamIdForAbort: string | undefined;
-  let aborted = false;
-  const abortNative = () => {
-    aborted = true;
-    const abortFn = native.httpFetchAbort;
-    if (abortFn == null || streamIdForAbort == null) {
-      return;
-    }
-    try {
-      abortFn(streamIdForAbort, () => {});
-    } catch {
-      // Presence-only; PrimJS host methods may throw on unused abort.
-    }
-  };
-  if (signal != null) {
-    signal.addEventListener("abort", abortNative, { once: true });
-  }
   return new Promise((resolve, reject) => {
+    let streamIdForAbort: string | undefined;
+    let aborted = false;
+    let settled = false;
+
+    const onAbort = (): void => {
+      aborted = true;
+      requestNativeAbort(native, streamIdForAbort);
+      settleReject(abortError());
+    };
+
+    const detachAbort = (): void => {
+      if (signal != null) {
+        signal.removeEventListener("abort", onAbort);
+      }
+    };
+
+    const settleReject = (error: Error): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      detachAbort();
+      reject(error);
+    };
+
+    const settleResolve = (response: Response): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      detachAbort();
+      resolve(response);
+    };
+
+    if (signal != null) {
+      signal.addEventListener("abort", onAbort);
+    }
+
     // Direct call like SQL RPC (open/execute). Do not use .call/.apply — PrimJS host
     // methods may not be JS Function objects.
     httpFetch(payload, (envelope: NativeHttpFetchEnvelope) => {
       try {
         const result = unwrapNativeEnvelope(envelope);
-        if (result.ok === false) {
-          reject(new Error(result.message ?? "Native Module HTTP httpFetch failed"));
-          return;
-        }
         const streamingId =
           isString(result.streamingId) && result.streamingId.length > 0
             ? result.streamingId
             : undefined;
         if (streamingId != null) {
           streamIdForAbort = streamingId;
-          if (aborted) {
-            abortNative();
-          }
         }
-        resolve(responseFromNativeHttpEnvelope(result));
+        if (aborted) {
+          requestNativeAbort(native, streamIdForAbort);
+          settleReject(abortError());
+          return;
+        }
+        if (result.ok === false) {
+          settleReject(new Error(result.message ?? "Native Module HTTP httpFetch failed"));
+          return;
+        }
+        settleResolve(responseFromNativeHttpEnvelope(result));
       } catch (err) {
-        reject(err);
+        settleReject(err instanceof Error ? err : new Error("Native Module HTTP httpFetch failed"));
       }
     });
   });
