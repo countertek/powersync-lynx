@@ -11,7 +11,11 @@ UNAME_S := $(shell uname -s)
 UNAME_M := $(shell uname -m)
 ifeq ($(UNAME_S),Linux)
   CORE_DYLIB := dist/linux/x64/libpowersync_x64.linux.so
+  JNI_OS_INCLUDE := linux
+  JAVA_HOME ?= $(shell dirname $$(dirname $$(readlink -f $$(command -v java))))
 else ifeq ($(UNAME_S),Darwin)
+  JNI_OS_INCLUDE := darwin
+  JAVA_HOME ?= $(shell /usr/libexec/java_home 2>/dev/null)
   ifeq ($(UNAME_M),arm64)
     CORE_DYLIB := dist/macos/arm64/libpowersync_aarch64.macos.dylib
   else
@@ -19,6 +23,8 @@ else ifeq ($(UNAME_S),Darwin)
   endif
 else
   CORE_DYLIB := dist/macos/arm64/libpowersync_aarch64.macos.dylib
+  JNI_OS_INCLUDE := darwin
+  JAVA_HOME ?= $(shell /usr/libexec/java_home 2>/dev/null)
 endif
 TEST_BIN := shared/build/ps_sql_test
 FIXTURE_TEST_BIN := shared/build/sync_stream_fixtures_test
@@ -44,11 +50,11 @@ PNPM ?= $(shell \
 		printf '%s\n' "pnpm"; \
 	fi)
 
-JAVA_HOME ?= $(shell dirname $$(dirname $$(readlink -f $$(command -v java))))
-JNI_CFLAGS := -I$(JAVA_HOME)/include -I$(JAVA_HOME)/include/linux
+JNI_CFLAGS := -I$(JAVA_HOME)/include -I$(JAVA_HOME)/include/$(JNI_OS_INCLUDE)
 JNI_OBJ := shared/build/ps_sql_jni.o
 JNI_UTF8_OBJ := shared/build/utf8_hold_jni.o
 JNI_SESSION_OBJ := shared/build/sync_http_session_jni.o
+POD_ENGINE_OBJ := shared/build/ps_sql_engine_pod.o
 
 ANDROID_SDK ?= $(ANDROID_HOME)
 ADB := $(ANDROID_SDK)/platform-tools/adb
@@ -127,7 +133,7 @@ $(SESSION_TEST_BIN): shared/tests/sync_http_session_test.cc shared/sync_http_ses
 		shared/tests/sync_http_session_test.cc -o $@
 
 test: deps $(TEST_BIN) $(FIXTURE_TEST_BIN) $(POLICY_ANDROID_TEST_BIN) $(UTF8_HOLD_TEST_BIN) \
-		$(SESSION_TEST_BIN) $(JNI_OBJ) $(JNI_UTF8_OBJ) $(JNI_SESSION_OBJ)
+		$(SESSION_TEST_BIN) $(JNI_OBJ) $(JNI_UTF8_OBJ) $(JNI_SESSION_OBJ) $(POD_ENGINE_OBJ)
 	@! grep -n 'UIApplication.sharedApplication.windows' ios/src/NativeSyncHttp.mm
 	@! grep -n 'findLynxViewIn' ios/src/NativeSyncHttp.mm
 	POWERSYNC_CORE_PATH="$(CURDIR)/$(CORE_DYLIB)" $(TEST_BIN)
@@ -149,6 +155,10 @@ $(JNI_SESSION_OBJ): android/src/main/cpp/sync_http_session_jni.cc shared/sync_ht
 		shared/sync_http_policy.h
 	mkdir -p shared/build
 	$(CXX) $(CXXFLAGS) $(JNI_CFLAGS) -c android/src/main/cpp/sync_http_session_jni.cc -o $@
+
+$(POD_ENGINE_OBJ): ios/src/ps_sql_engine.cc shared/ps_sql.cc shared/ps_sql.h $(SQLITE_DIR)/sqlite3.h
+	mkdir -p shared/build
+	$(CXX) $(CXXFLAGS) $(SQLITE_FLAGS) -c ios/src/ps_sql_engine.cc -o $@
 
 $(IOS_TEST_BIN): deps ios/tests/ios_module_rpc_test.mm ios/tests/ios_sync_http_fixture_test.mm \
 		ios/tests/ios_sync_http_fixtures.h \

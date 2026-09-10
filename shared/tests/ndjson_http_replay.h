@@ -7,6 +7,8 @@
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -127,7 +129,47 @@ class NdjsonReplayServer {
     ::close(fd);
   }
 
+  static void set_tcp_nodelay(int fd) {
+    int yes = 1;
+    ::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes));
+  }
+
+  /**
+   * Darwin SO_LINGER/RST discards unacked (and often still-unread) send data, so
+   * NSURLSession never sees headers + the first chunk. Wait until the send queue
+   * is empty, then give the peer a beat to read before RST.
+   */
+  static void wait_send_drained(int fd) {
+    for (int i = 0; i < 200; ++i) {
+      int outstanding = 0;
+#if defined(__APPLE__)
+      socklen_t len = sizeof(outstanding);
+      if (::getsockopt(fd, SOL_SOCKET, SO_NWRITE, &outstanding, &len) != 0) {
+        break;
+      }
+#elif defined(TIOCOUTQ)
+      if (::ioctl(fd, TIOCOUTQ, &outstanding) != 0) {
+        break;
+      }
+#else
+      (void)fd;
+      break;
+#endif
+      if (outstanding == 0) {
+        break;
+      }
+      ::usleep(5000);
+    }
+    ::usleep(100000);
+  }
+
+  static void rst_after_delivered(int fd) {
+    wait_send_drained(fd);
+    rst_close(fd);
+  }
+
   void serve(int fd) {
+    set_tcp_nodelay(fd);
     if (config_.rst_before_headers) {
       read_headers(fd);
       rst_close(fd);
@@ -163,7 +205,7 @@ class NdjsonReplayServer {
       if (!config_.chunks.empty()) {
         write_chunked(config_.chunks.front());
       }
-      rst_close(fd);
+      rst_after_delivered(fd);
       return;
     }
     std::string header;
@@ -230,7 +272,11 @@ class NdjsonReplayServer {
   std::thread worker_;
 };
 
-inline bool http_get_body(const std::string& url, std::string* body_out, int* status_out) {
+/**
+ * Connect, GET, read until FIN or RST. RST is success if any bytes arrived
+ * (`saw_rst_out`). Returns false if the socket fails before any payload.
+ */
+inline bool http_read_until_close(const std::string& url, std::string* raw_out, bool* saw_rst_out) {
   const char* prefix = "http://127.0.0.1:";
   if (url.rfind(prefix, 0) != 0) {
     return false;
@@ -259,10 +305,18 @@ inline bool http_get_body(const std::string& url, std::string* body_out, int* st
     return false;
   }
   std::string raw;
+  bool saw_rst = false;
   char buf[1024];
   for (;;) {
     ssize_t n = ::recv(fd, buf, sizeof(buf), 0);
     if (n < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      if ((errno == ECONNRESET || errno == EPIPE) && !raw.empty()) {
+        saw_rst = true;
+        break;
+      }
       ::close(fd);
       return false;
     }
@@ -272,6 +326,20 @@ inline bool http_get_body(const std::string& url, std::string* body_out, int* st
     raw.append(buf, static_cast<size_t>(n));
   }
   ::close(fd);
+  if (raw_out != nullptr) {
+    *raw_out = raw;
+  }
+  if (saw_rst_out != nullptr) {
+    *saw_rst_out = saw_rst;
+  }
+  return !raw.empty();
+}
+
+inline bool http_get_body(const std::string& url, std::string* body_out, int* status_out) {
+  std::string raw;
+  if (!http_read_until_close(url, &raw, nullptr)) {
+    return false;
+  }
   size_t sep = raw.find("\r\n\r\n");
   if (sep == std::string::npos) {
     return false;

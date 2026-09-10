@@ -76,6 +76,7 @@ ATS is `NSAllowsLocalNetworking` only (not `NSAllowsArbitraryLoads`).
 | Symptom | Check |
 |---|---|
 | `NativePowerSyncModule is not registered` | Open the **workspace**. `pod install` must see `examples/hosts/node_modules/powersync-lynx/lynx.lib.json`. |
+| Undefined `ps_sql::*` at link | Pods.xcodeproj must compile `ios/src/ps_sql_engine.cc` (not `../shared/ps_sql.cc`). Re-run `pod install` after pulling; confirm `ps_sql_engine` is in the powersync-lynx compile sources. |
 | Copy Lynx bundle phase fails | `pnpm --dir examples/showcase build` first. |
 | `connect skipped` | Compose profile `sync` is down, or ATS blocked a non-local URL. |
 | Empty input field | `XElement` pod is missing. |

@@ -67,12 +67,17 @@ test("packed tarball ships iOS build inputs and omits host/build residue", async
     assert.equal(
       has("shared/ps_sql.cc"),
       true,
-      "CocoaPods compiles canonical shared/ps_sql.cc — it must ship",
+      "canonical shared/ps_sql.cc must ship for the CocoaPods compile unit",
     );
     assert.equal(
       has("shared/ps_sql.h"),
       true,
-      "CocoaPods compiles canonical shared/ps_sql.h — it must ship",
+      "canonical shared/ps_sql.h must ship for the CocoaPods compile unit",
+    );
+    assert.equal(
+      has("ios/src/ps_sql_engine.cc"),
+      true,
+      "CocoaPods compile unit ios/src/ps_sql_engine.cc must ship",
     );
     assert.equal(
       has("ios/src/ps_sql.cc"),
@@ -237,17 +242,35 @@ test("packed tarball ships iOS build inputs and omits host/build residue", async
   }
 });
 
-test("iOS podspec compiles shared/ps_sql by path; test-ios uses otool -D", () => {
+test("iOS podspec compiles shared/ps_sql via src/ps_sql_engine.cc; test-ios uses otool -D", () => {
   const podspec = readFileSync(path.join(root, "ios/powersync-lynx.podspec"), "utf8");
-  assert.match(
-    podspec,
-    /\.\.\/shared\/ps_sql\.\{cc,h\}/,
-    "podspec must compile canonical ../shared/ps_sql.{cc,h}",
+  assert.equal(
+    podspec.includes("src/**/*.{h,m,mm,c,cc}"),
+    true,
+    "podspec source_files must stay under PODS_TARGET_SRCROOT (ios/src)",
+  );
+  assert.equal(
+    /source_files\s*=\s*'[^']*\.\.\/shared\/ps_sql/.test(podspec),
+    false,
+    "CocoaPods drops parent-path source_files; do not list ../shared/ps_sql there",
+  );
+  assert.equal(
+    podspec.includes("exclude_files = 'src/ps_sql.{cc,h}'"),
+    true,
+    "podspec must keep leftover ios/src engine copies out of the target",
   );
   assert.doesNotMatch(
     podspec,
     /materializeIosSrcCompileInputs/,
     "podspec must not depend on iOS ps_sql materialization",
+  );
+
+  const engineUnit = readFileSync(path.join(root, "ios/src/ps_sql_engine.cc"), "utf8");
+  assert.match(engineUnit, /#include "ps_sql\.cc"/, "pod compile unit must include canonical shared/ps_sql.cc");
+  assert.doesNotMatch(
+    engineUnit,
+    /namespace\s+ps_sql/,
+    "pod compile unit must not duplicate the engine",
   );
 
   const fetchScript = readFileSync(path.join(root, "scripts/fetch-native-deps.mjs"), "utf8");
@@ -261,5 +284,22 @@ test("iOS podspec compiles shared/ps_sql by path; test-ios uses otool -D", () =>
     makefile,
     /\/Users\/runner\/work\/powersync-sqlite-core/,
     "make test-ios must not hard-code the CI runner core dylib install name",
+  );
+  assert.match(makefile, /JNI_OS_INCLUDE := linux/, "make test JNI includes linux on Linux");
+  assert.match(makefile, /JNI_OS_INCLUDE := darwin/, "make test JNI includes darwin on Darwin");
+  assert.match(
+    makefile,
+    /include\/\$\(JNI_OS_INCLUDE\)/,
+    "JNI_CFLAGS must select the host JNI include dir",
+  );
+  assert.equal(
+    makefile.includes("$(JAVA_HOME)/include/linux"),
+    false,
+    "JNI_CFLAGS must not hard-code include/linux",
+  );
+  assert.match(
+    makefile,
+    /ios\/src\/ps_sql_engine\.cc/,
+    "make test must compile the CocoaPods ps_sql_engine.cc unit",
   );
 });

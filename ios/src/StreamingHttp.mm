@@ -146,23 +146,27 @@ NSTimeInterval StreamReadTimeoutSec() {
           dataTask:(NSURLSessionDataTask *)dataTask
 didReceiveResponse:(NSURLResponse *)response
  completionHandler:(void (^)(NSURLSessionResponseDisposition))completionHandler {
+  // Allow the body only after headers are recorded. Completing on this serial
+  // queue keeps Darwin RST-after-first-chunk from finishing before onHeaders.
   dispatch_async(self.syncQueue, ^{
-    if (self.finished || self.headersDelivered) {
-      return;
+    NSURLSessionResponseDisposition disposition = NSURLSessionResponseAllow;
+    if (self.finished) {
+      disposition = NSURLSessionResponseCancel;
+    } else if (!self.headersDelivered) {
+      self.headersDelivered = YES;
+      NSInteger status = 0;
+      NSString *contentType = nil;
+      if ([response isKindOfClass:[NSHTTPURLResponse class]]) {
+        NSHTTPURLResponse *http = (NSHTTPURLResponse *)response;
+        status = http.statusCode;
+        contentType = http.allHeaderFields[@"Content-Type"] ?: http.allHeaderFields[@"content-type"];
+      }
+      if (self.onHeaders) {
+        self.onHeaders(status, contentType);
+      }
     }
-    self.headersDelivered = YES;
-    NSInteger status = 0;
-    NSString *contentType = nil;
-    if ([response isKindOfClass:[NSHTTPURLResponse class]]) {
-      NSHTTPURLResponse *http = (NSHTTPURLResponse *)response;
-      status = http.statusCode;
-      contentType = http.allHeaderFields[@"Content-Type"] ?: http.allHeaderFields[@"content-type"];
-    }
-    if (self.onHeaders) {
-      self.onHeaders(status, contentType);
-    }
+    completionHandler(disposition);
   });
-  completionHandler(NSURLSessionResponseAllow);
 }
 
 - (void)URLSession:(NSURLSession *)session
