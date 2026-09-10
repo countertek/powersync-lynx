@@ -26,8 +26,9 @@ android/host/local.properties
 /tmp/
 *.tsbuildinfo
 
-# Extra-arch core dylib with no matching powersync-lynx.node (not an Autolink artifact).
+# Extra-arch core binaries with no matching powersync-lynx.node (not Autolink artifacts).
 dist/macos/x64/
+dist/linux/
 
 # Generated lynx-bg factory ESM (scripts/bundle-web-host-factory.mjs).
 dist/web-host/

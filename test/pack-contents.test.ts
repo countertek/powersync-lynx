@@ -1,7 +1,7 @@
 // @ts-nocheck
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -37,6 +37,12 @@ test("packed tarball ships iOS build inputs and omits host/build residue", async
       "fetch-native-deps must not materialize ios/src/ps_sql.h",
     );
     execFileSync("node", ["scripts/bundle-web-host-factory.mjs"], { cwd: root, stdio: "pipe" });
+    const linuxMarker = path.join(root, "dist/linux/x64/libpowersync_x64.linux.so");
+    const macosX64Marker = path.join(root, "dist/macos/x64/libpowersync_x64.macos.dylib");
+    mkdirSync(path.dirname(linuxMarker), { recursive: true });
+    mkdirSync(path.dirname(macosX64Marker), { recursive: true });
+    writeFileSync(linuxMarker, "local-build");
+    writeFileSync(macosX64Marker, "local-build");
     const packed = execFileSync("pnpm", ["pack", "--pack-destination", dest, "--ignore-scripts"], {
       cwd: root,
       encoding: "utf8",
@@ -200,6 +206,26 @@ test("packed tarball ships iOS build inputs and omits host/build residue", async
       "attach factory URL needs the bundled ESM entry",
     );
     assert.equal(
+      has("dist/macos/arm64/powersync-lynx.node"),
+      true,
+      "Autolink macos arm64 node must ship",
+    );
+    assert.equal(
+      has("dist/windows/x64/powersync-lynx.node"),
+      true,
+      "Autolink windows x64 node must ship",
+    );
+    assert.equal(
+      files.some((file) => file.startsWith("dist/linux/")),
+      false,
+      "machine-local linux native build outputs must not ship",
+    );
+    assert.equal(
+      files.some((file) => file.startsWith("dist/macos/x64/")),
+      false,
+      "extra-arch macos/x64 core dylib must not ship",
+    );
+    assert.equal(
       has("android/consumer-rules.pro"),
       true,
       "Android Autolink consumer ProGuard rules must ship",
@@ -238,6 +264,8 @@ test("packed tarball ships iOS build inputs and omits host/build residue", async
       "shared C++ tests must not ship",
     );
   } finally {
+    await rm(path.join(root, "dist/linux"), { recursive: true, force: true });
+    await rm(path.join(root, "dist/macos/x64"), { recursive: true, force: true });
     await rm(dest, { recursive: true, force: true });
   }
 });

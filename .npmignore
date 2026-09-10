@@ -3,6 +3,7 @@ shared/build
 shared/tests
 ios/tests
 dist/macos/x64
+dist/linux
 native-vendor
 node_modules
 .scratch
