@@ -44,7 +44,8 @@
     "prepack": "pnpm typecheck && node scripts/bundle-web-host-factory.mjs && node scripts/fetch-native-deps.mjs --sqlite",
     "bundle-factory": "node scripts/bundle-web-host-factory.mjs",
     "prepare": "node scripts/bundle-web-host-factory.mjs",
-    "publish-dry-run": "node examples/scripts/publish-dry-run.mjs"
+    "publish-dry-run": "node examples/scripts/publish-dry-run.mjs",
+    "check-packed-consumers": "node scripts/check-packed-consumers.mjs"
   },
   "dependencies": {
     "@powersync/common": "^2.2.0",
