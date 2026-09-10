@@ -1,6 +1,29 @@
 {
   "name": "powersync-lynx",
-  "version": "0.1.0",
+  "version": "0.1.1",
+  "description": "PowerSync client for Lynx apps — local SQLite + sync on web, iOS, and Android",
+  "keywords": [
+    "powersync",
+    "lynx",
+    "lynxjs",
+    "sqlite",
+    "offline-first",
+    "local-first",
+    "sync",
+    "typescript",
+    "reactlynx",
+    "android",
+    "ios",
+    "wasm"
+  ],
+  "homepage": "https://github.com/countertek/powersync-lynx",
+  "bugs": {
+    "url": "https://github.com/countertek/powersync-lynx/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/countertek/powersync-lynx.git"
+  },
   "license": "Apache-2.0",
   "files": [
     "src",
