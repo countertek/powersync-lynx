@@ -12,7 +12,7 @@ test("web-host attach keeps a literal optional-peer import", () => {
   const attach = readFileSync(path.join(root, "src/web-host/attach.ts"), "utf8");
   assert.match(attach, /await import\("@powersync\/web"\)/);
   assert.match(attach, /@ts-ignore TS2307/);
-  assert.doesNotMatch(attach, /@ts-expect-error/);
+  assert.doesNotMatch(attach, /^\s*\/\/\s*@ts-expect-error\b/m);
 });
 
 test("packed native and web consumers typecheck optional-peer web-host", async () => {

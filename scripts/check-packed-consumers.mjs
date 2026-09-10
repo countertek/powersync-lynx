@@ -101,7 +101,7 @@ function assertLiteralWebImport(attachSource) {
   if (attachSource.includes('import("@powersync/web")') === false) {
     throw new Error('packed attach.ts must keep a literal import("@powersync/web")');
   }
-  if (attachSource.includes("@ts-expect-error")) {
+  if (/^\s*\/\/\s*@ts-expect-error\b/m.test(attachSource)) {
     throw new Error(
       "packed attach.ts must not use @ts-expect-error on the optional peer import",
     );

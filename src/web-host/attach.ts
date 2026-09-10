@@ -62,7 +62,7 @@ export function attach(lynxView: LynxViewHost, options?: AttachOptions): AttachH
 
 async function loadWeb(): Promise<import("./page-rpc.ts").PowerSyncWebModule> {
   // Native installs omit the optional @powersync/web peer (TS2307).
-  // Web installs resolve it, so @ts-expect-error would be unused.
+  // Web installs resolve it, so an unused expect-error directive would fail.
   // @ts-ignore TS2307
   const loaded = await import("@powersync/web");
   // SAFETY: Lynx-for-Web loads @powersync/web as WASQLiteOpenFactory + optional createConsoleLogger.
