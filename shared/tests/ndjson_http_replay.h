@@ -25,6 +25,10 @@ struct ReplayConfig {
   std::string content_type = "application/x-ndjson";
   std::vector<std::string> chunks;
   bool hold_open = false;
+  /** Accept then RST with no response line — pre-headers failure. */
+  bool rst_before_headers = false;
+  /** Write the first body chunk, then RST — error-then-end after onData. */
+  bool rst_after_first_chunk = false;
   int gap_ms = 0;
 };
 
@@ -115,7 +119,20 @@ class NdjsonReplayServer {
     return buf.find("\r\n\r\n") != std::string::npos;
   }
 
+  static void rst_close(int fd) {
+    linger so {};
+    so.l_onoff = 1;
+    so.l_linger = 0;
+    ::setsockopt(fd, SOL_SOCKET, SO_LINGER, &so, sizeof(so));
+    ::close(fd);
+  }
+
   void serve(int fd) {
+    if (config_.rst_before_headers) {
+      read_headers(fd);
+      rst_close(fd);
+      return;
+    }
     if (!read_headers(fd)) {
       ::close(fd);
       return;
@@ -123,6 +140,31 @@ class NdjsonReplayServer {
     std::string body;
     for (const auto& chunk : config_.chunks) {
       body += chunk;
+    }
+    auto write_chunked = [&](const std::string& piece) {
+      if (piece.empty()) {
+        return true;
+      }
+      char hex[32];
+      int n = std::snprintf(hex, sizeof(hex), "%zx\r\n", piece.size());
+      if (n <= 0) {
+        return false;
+      }
+      return write_all(fd, hex, static_cast<size_t>(n)) &&
+             write_all(fd, piece.data(), piece.size()) && write_all(fd, "\r\n", 2);
+    };
+    if (config_.rst_after_first_chunk) {
+      std::string header = "HTTP/1.1 200 OK\r\nContent-Type: " + config_.content_type +
+                           "\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
+      if (!write_all(fd, header.data(), header.size())) {
+        ::close(fd);
+        return;
+      }
+      if (!config_.chunks.empty()) {
+        write_chunked(config_.chunks.front());
+      }
+      rst_close(fd);
+      return;
     }
     std::string header;
     if (config_.hold_open) {
@@ -137,18 +179,6 @@ class NdjsonReplayServer {
       ::close(fd);
       return;
     }
-    auto write_chunked = [&](const std::string& piece) {
-      if (piece.empty()) {
-        return true;
-      }
-      char hex[32];
-      int n = std::snprintf(hex, sizeof(hex), "%zx\r\n", piece.size());
-      if (n <= 0) {
-        return false;
-      }
-      return write_all(fd, hex, static_cast<size_t>(n)) &&
-             write_all(fd, piece.data(), piece.size()) && write_all(fd, "\r\n", 2);
-    };
     if (config_.hold_open) {
       if (!config_.chunks.empty()) {
         write_chunked(config_.chunks.front());

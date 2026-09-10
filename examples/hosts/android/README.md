@@ -137,7 +137,7 @@ This checkout, 2026-09-08/09. AVD **Pixel_10_Pro** (API 37, `emulator-5554`), JD
 | Go offline / Reconnect (stream cancel) | Same ReactLynx control. **Not re-tapped** this checkout |
 | Offline queue | **Not re-tapped** this checkout |
 | Toggle / delete / filter | Toggle/delete hit targets are small (Lynx `bindtap` on row text). Filters paint (All is filled teal). Not used as the money-shot proof |
-| `fetch(url, init)` | **Broken on Android PrimJS** (`Failed to construct 'Request'`). Sync uses `LynxFetchModule`; demo-api POST uses `demoFetch()` in `examples/showcase/src/util.ts` |
+| `fetch(url, init)` | **Broken on Android PrimJS** (`Failed to construct 'Request'`). Sync download uses Native Module HTTP (`httpFetch`); JSON write-checkpoint uses `LynxFetchModule`; demo-api POST uses `demoFetch()` in `examples/showcase/src/util.ts` |
 | Physical device | **Not run** |
 
 `am force-stop` often leaves the process; `adb uninstall` is the reliable way to load a new bundle (it wipes the local DB).

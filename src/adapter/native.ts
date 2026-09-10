@@ -135,46 +135,34 @@ function withNativeCallback(run: (callback: NativeCallback) => void): Promise<Na
   });
 }
 
-export function callNative(method: "open", payload: OpenPayload): Promise<NativeOkEnvelope>;
-export function callNative(method: "close", dbId: string): Promise<NativeOkEnvelope>;
-export function callNative(
-  method: "execute",
-  dbId: string,
-  sql: string,
-  params: BindValues,
-): Promise<NativeOkEnvelope>;
-export function callNative(
-  method: "executeBatch",
-  dbId: string,
-  sql: string,
-  params: BindValueRows,
-): Promise<NativeOkEnvelope>;
-export function callNative(
-  method: "open" | "close" | "execute" | "executeBatch",
-  first?: OpenPayload | string,
-  sql?: string,
-  params?: BindValues | BindValueRows,
-): Promise<NativeOkEnvelope> {
-  const native = getNativeModule();
-  switch (method) {
-    case "open":
-      // SAFETY: open overload requires OpenPayload as the first argument.
-      return withNativeCallback((callback) => native.open(first as OpenPayload, callback));
-    case "close":
-      // SAFETY: close overload requires dbId string as the first argument.
-      return withNativeCallback((callback) => native.close(first as string, callback));
-    case "execute":
-      // SAFETY: execute overload is (dbId, sql, BindValues).
-      return withNativeCallback((callback) =>
-        native.execute(first as string, sql as string, params as BindValues, callback),
-      );
-    case "executeBatch":
-      // SAFETY: executeBatch overload is (dbId, sql, BindValueRows).
-      return withNativeCallback((callback) =>
-        native.executeBatch(first as string, sql as string, params as BindValueRows, callback),
-      );
-  }
-}
+type NativeSqlFn<T> = T extends (...args: [...infer Args, NativeCallback]) => void
+  ? (...args: Args) => Promise<NativeOkEnvelope>
+  : never;
+
+/**
+ * Promise form of {@link NativePowerSyncModule} SQL RPC.
+ * Wire methods stay callback-based (ADR-0001); this value wraps each op.
+ */
+export type NativeSql = {
+  readonly [K in keyof NativePowerSyncModule]: NativeSqlFn<NativePowerSyncModule[K]>;
+};
+
+export const nativeSql: NativeSql = {
+  open(payload) {
+    return withNativeCallback((callback) => getNativeModule().open(payload, callback));
+  },
+  close(dbId) {
+    return withNativeCallback((callback) => getNativeModule().close(dbId, callback));
+  },
+  execute(dbId, sql, params) {
+    return withNativeCallback((callback) => getNativeModule().execute(dbId, sql, params, callback));
+  },
+  executeBatch(dbId, sql, params) {
+    return withNativeCallback((callback) =>
+      getNativeModule().executeBatch(dbId, sql, params, callback),
+    );
+  },
+};
 
 export function blobToArrayBuffer(value: BindValue): BindValue {
   if (value instanceof ArrayBuffer) {

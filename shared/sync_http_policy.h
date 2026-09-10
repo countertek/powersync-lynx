@@ -6,9 +6,8 @@
 /**
  * Idle-complete + streaming HTTP policy for PowerSync /sync/stream.
  *
- * Keep Android IdleCompleteHttp.java / StreamingHttp.java constants in
- * lockstep with these values. iOS IdleCompleteHttp.mm / StreamingHttp.mm
- * include this header.
+ * Android compiles generated SyncHttpPolicy.java (scripts/gen-sync-http-policy-java.mjs).
+ * iOS IdleCompleteHttp.mm / StreamingHttp.mm include this header.
  *
  * Idle-complete is the fallback when no GlobalEventEmitter sender is
  * reachable. The primary path is streamingId + onData / onError / onEnd.

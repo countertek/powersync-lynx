@@ -1,6 +1,7 @@
 #import "IdleCompleteHttp.h"
 
 #include "sync_http_policy.h"
+#include "sync_http_session.h"
 
 #include <string>
 
@@ -58,12 +59,14 @@ BOOL LooksLikeLongLivedHeaders(NSDictionary* headers) {
 }
 
 NSDictionary* ErrorResult(NSInteger status, NSString* message) {
+  NSString* text = message ?: @(PS_SYNC_HTTP_FAIL_MESSAGE_DEFAULT);
+  NSInteger code = status == 0 ? PS_SYNC_HTTP_FAIL_STATUS : status;
   return @{
     @"ok" : @NO,
-    @"status" : @(status),
+    @"status" : @(code),
     @"statusText" : @"",
-    @"message" : message ?: @"",
-    @"body" : message ?: @"",
+    @"message" : text,
+    @"body" : text,
     @"bodyBase64" : @"",
     @"contentType" : @"",
     @"idleComplete" : @NO,

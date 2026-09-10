@@ -7,7 +7,7 @@ import type {
   NativeHttpFetchEnvelope,
   NativeHttpFetchRequest,
 } from "../src/sync/transport/http-types.ts";
-import { fromNativeHttpEnvelope } from "../src/sync/transport/response.ts";
+import { responseFromNativeHttpEnvelope } from "../src/sync/transport/NativeHttpFetch.ts";
 import type { LynxStreamEventPayload } from "../src/globals.ts";
 import {
   joinedFixtureBody,
@@ -27,6 +27,7 @@ const catalog = loadSyncStreamFixtures();
 const checkpointOps = requireScenario(catalog, "checkpoint-ops");
 const errorThenEnd = requireScenario(catalog, "error-then-end");
 const idleComplete = requireScenario(catalog, "idle-complete");
+const splitMultibyte = requireScenario(catalog, "split-multibyte");
 
 const STREAM_ID = "NativePowerSyncHttpStream-fixture";
 
@@ -94,7 +95,7 @@ async function readUtf8Chunks(reader: ReadableStreamDefaultReader<Uint8Array>): 
   return parts;
 }
 
-test("shared NDJSON catalog covers checkpoint-ops, error-then-end, and idle-complete", () => {
+test("shared NDJSON catalog covers checkpoint-ops, error-then-end, idle-complete, and split-multibyte", () => {
   assert.equal(catalog.contentType, "application/x-ndjson");
   assert.equal(checkpointOps.path, "streamingId");
   assert.equal(checkpointOps.chunks.length, 2);
@@ -105,11 +106,18 @@ test("shared NDJSON catalog covers checkpoint-ops, error-then-end, and idle-comp
   assert.deepEqual(errorThenEnd.events, ["onData", "onError", "onEnd"]);
   assert.equal(idleComplete.path, "idleComplete");
   assert.deepEqual(idleComplete.events, []);
+  assert.equal(splitMultibyte.path, "streamingId");
+  assert.equal(splitMultibyte.wireChunksHex?.length, 2);
+  assert.deepEqual(splitMultibyte.events, ["onData", "onData", "onEnd"]);
   for (const key of ["body", "bodyBase64", "idleComplete"] as const) {
     assert.equal(catalog.idleCompleteEnvelopeKeys.includes(key), true, key);
   }
   assert.equal(catalog.idleCompleteEnvelopeKeys.includes("streamingId"), false);
   assert.equal(catalog.streamingEnvelopeKeys.includes("streamingId"), true);
+  for (const key of ["ok", "status", "message", "body", "idleComplete"] as const) {
+    assert.equal(catalog.failEnvelopeKeys.includes(key), true, key);
+  }
+  assert.equal(catalog.failEnvelopeKeys.includes("streamingId"), false);
 });
 
 test("fixture checkpoint-ops streams onData chunks on streamingId before onEnd", async () => {
@@ -181,11 +189,10 @@ test("fixture idle-complete envelope is UTF-8 body without streamingId", async (
     bodyBase64: Buffer.from(ndjson, "utf8").toString("base64"),
     idleComplete: true,
   };
-  const wire = fromNativeHttpEnvelope(envelope);
-  assert.equal(wire.streamingId, undefined);
-  assert.equal(wire.idleComplete, true);
-  assert.equal(wire.body, ndjson);
-  assert.equal(wire.bodyBase64, envelope.bodyBase64);
+  const mapped = responseFromNativeHttpEnvelope(envelope);
+  assert.equal(mapped.ok, true);
+  assert.equal(mapped.status, 200);
+  assert.equal(mapped.headers.get("content-type"), catalog.contentType);
 
   await withFakeLynxHost(
     {

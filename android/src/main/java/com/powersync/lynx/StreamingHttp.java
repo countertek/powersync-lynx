@@ -21,16 +21,11 @@ import java.util.concurrent.atomic.AtomicReference;
  * Unlike {@link IdleCompleteHttp}, this does <strong>not</strong> close after a short idle window —
  * PowerSync keepalive (~20s) and later checkpoints stay on the same session.
  *
- * <p>Read timeout is {@code PS_SYNC_HTTP_STREAM_READ_TIMEOUT_MS} (120s) so keepalive gaps do not
- * abort. Terminal GlobalEventEmitter sequence ({@code onData*} → {@code onError?} → {@code onEnd})
- * is assembled by {@link NativeSyncHttp}, not this reader.
+ * <p>Read timeout is {@link SyncHttpPolicy#STREAM_READ_TIMEOUT_MS} so keepalive gaps do not abort.
+ * Terminal GlobalEventEmitter sequence ({@code onData*} → {@code onError?} → {@code onEnd}) is
+ * assembled by {@link NativeSyncHttp} via {@link SyncHttpSession}, not this reader.
  */
 final class StreamingHttp {
-  /** Keep in lockstep with {@code PS_SYNC_HTTP_CONNECT_TIMEOUT_MS}. */
-  static final long CONNECT_TIMEOUT_MS = 30_000L;
-  /** Keep in lockstep with {@code PS_SYNC_HTTP_STREAM_READ_TIMEOUT_MS}. */
-  static final long STREAM_READ_TIMEOUT_MS = 120_000L;
-
   interface Listener {
     void onHeaders(int status, String statusText, String contentType);
 
@@ -58,8 +53,8 @@ final class StreamingHttp {
       bound.set(conn);
     }
     conn.setInstanceFollowRedirects(true);
-    conn.setConnectTimeout((int) CONNECT_TIMEOUT_MS);
-    conn.setReadTimeout((int) STREAM_READ_TIMEOUT_MS);
+    conn.setConnectTimeout((int) SyncHttpPolicy.CONNECT_TIMEOUT_MS);
+    conn.setReadTimeout((int) SyncHttpPolicy.STREAM_READ_TIMEOUT_MS);
     conn.setRequestMethod(httpMethod);
     conn.setUseCaches(false);
     if (headers != null) {
@@ -110,6 +105,7 @@ final class StreamingHttp {
 
     byte[] chunk = new byte[8192];
     // Carry incomplete UTF-8 so PrimJS always receives well-formed string chunks.
+    // Hold count is shared/utf8_hold.h (JNI), not a Java copy of bytes.ts.
     byte[] carry = new byte[0];
     try (InputStream in = stream) {
       while (!cancelled.get()) {
@@ -162,38 +158,8 @@ final class StreamingHttp {
     }
   }
 
-  /** Same incomplete-UTF-8 hold as LynxRemote.createLynxTextDecoder. */
-  static int trailingIncompleteUtf8Bytes(byte[] bytes) {
-    if (bytes == null || bytes.length == 0) {
-      return 0;
-    }
-    int i = bytes.length - 1;
-    int continuation = 0;
-    while (i >= 0 && (bytes[i] & 0xc0) == 0x80) {
-      continuation++;
-      i--;
-    }
-    if (i < 0) {
-      return bytes.length;
-    }
-    int lead = bytes[i] & 0xff;
-    int expected;
-    if ((lead & 0x80) == 0) {
-      expected = 0;
-    } else if ((lead & 0xe0) == 0xc0) {
-      expected = 1;
-    } else if ((lead & 0xf0) == 0xe0) {
-      expected = 2;
-    } else if ((lead & 0xf8) == 0xf0) {
-      expected = 3;
-    } else {
-      return 0;
-    }
-    if (continuation < expected) {
-      return continuation + 1;
-    }
-    return 0;
-  }
+  /** Incomplete UTF-8 hold; {@code shared/utf8_hold.h} via JNI. */
+  static native int trailingIncompleteUtf8Bytes(byte[] bytes);
 
   private static final int HTTP_BAD_REQUEST = 400;
 

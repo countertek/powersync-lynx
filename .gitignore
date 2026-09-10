@@ -1,8 +1,7 @@
 node_modules/
 third_party/
-# Generated iOS Autolink compile inputs copied by fetch-native-deps.
-ios/src/ps_sql.cc
-ios/src/ps_sql.h
+# Generated iOS Autolink sqlite amalgamation copied by fetch-native-deps.
+# ps_sql is compiled from shared/ — do not recreate copies under ios/src.
 ios/src/sqlite3.c
 ios/src/sqlite3.h
 native-vendor/

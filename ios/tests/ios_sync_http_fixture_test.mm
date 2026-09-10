@@ -2,7 +2,9 @@
 #import "ios_sync_http_fixtures.h"
 
 #include "ndjson_http_replay.h"
+#include "sync_http_session.h"
 #include "sync_stream_fixtures.h"
+#include "utf8_hold.h"
 
 #include <cstdio>
 #include <string>
@@ -134,9 +136,24 @@ int RunSyncHttpFixtureTests(void) {
     }
     const auto* checkpoint = ps_sync_fixtures::find_scenario(catalog, "checkpoint-ops");
     const auto* idle = ps_sync_fixtures::find_scenario(catalog, "idle-complete");
-    expect_http(checkpoint != nullptr && idle != nullptr, "iOS loaded shared NDJSON scenarios");
-    if (checkpoint == nullptr || idle == nullptr) {
+    const auto* split = ps_sync_fixtures::find_scenario(catalog, "split-multibyte");
+    expect_http(checkpoint != nullptr && idle != nullptr && split != nullptr,
+                "iOS loaded shared NDJSON scenarios");
+    if (checkpoint == nullptr || idle == nullptr || split == nullptr) {
       return g_http_failures == 0 ? 1 : g_http_failures;
+    }
+    {
+      const auto wire = ps_sync_fixtures::wire_chunks(*split);
+      expect_http(wire.size() == 2, "split-multibyte decodes two wire pieces");
+      expect_http(ps_utf8_trailing_incomplete(
+                      reinterpret_cast<const uint8_t*>(wire[0].data()), wire[0].size()) == 1,
+                  "iOS helper holds euro lead from split-multibyte fixture");
+      std::string joined;
+      for (const auto& piece : wire) {
+        joined += piece;
+      }
+      expect_http(joined == ps_sync_fixtures::joined_body(*split),
+                  "iOS split-multibyte wire bytes match chunks");
     }
 
     ps_sync_fixtures::ReplayConfig config;
@@ -308,6 +325,93 @@ int RunSyncHttpFixtureTests(void) {
     expect_http([abort_last isEqualToString:@"onEnd"],
                 "abort terminal sequence ends with onEnd");
     hold_server.stop();
+
+    RecordingStreamSender* parse_sender = [RecordingStreamSender new];
+    NativePowerSyncModule* parse_module =
+        [[NativePowerSyncModule alloc] initWithParam:parse_sender];
+    NSDictionary* parse_fail = WaitForHttp(^(void (^cb)(id)) {
+      [parse_module httpFetch:@{@"method" : @"POST"} callback:cb];
+    });
+    expect_http([parse_fail[@"ok"] boolValue] == NO, "parse missing url ok is false");
+    expect_http([parse_fail[@"status"] intValue] == PS_SYNC_HTTP_FAIL_STATUS,
+                "parse missing url status is -1");
+    expect_http([parse_fail[@"message"] isKindOfClass:[NSString class]] &&
+                    [(NSString*)parse_fail[@"message"] length] > 0,
+                "parse missing url has message");
+    expect_http([parse_fail[@"idleComplete"] boolValue] == NO,
+                "parse missing url idleComplete is false");
+    expect_http([parse_sender snapshot].count == 0,
+                "parse fail emits no GlobalEventEmitter events");
+
+    ps_sync_fixtures::ReplayConfig rst_headers;
+    rst_headers.rst_before_headers = true;
+    ps_sync_fixtures::NdjsonReplayServer rst_header_server;
+    expect_http(rst_header_server.start(rst_headers), "RST-before-headers server starts");
+    NSString* rstHeaderUrl =
+        [NSString stringWithUTF8String:rst_header_server.url().c_str()];
+    RecordingStreamSender* rst_sender = [RecordingStreamSender new];
+    NativePowerSyncModule* rst_module =
+        [[NativePowerSyncModule alloc] initWithParam:rst_sender];
+    NSDictionary* rst_fail = WaitForHttp(^(void (^cb)(id)) {
+      [rst_module httpFetch:@{
+        @"method" : @"GET",
+        @"url" : rstHeaderUrl,
+      }
+                   callback:cb];
+    });
+    expect_http([rst_fail[@"ok"] boolValue] == NO, "RST before headers ok is false");
+    expect_http([rst_fail[@"status"] intValue] == PS_SYNC_HTTP_FAIL_STATUS,
+                "RST before headers status is -1");
+    expect_http([rst_fail[@"message"] isKindOfClass:[NSString class]],
+                "RST before headers has message");
+    expect_http([rst_fail[@"body"] isKindOfClass:[NSString class]],
+                "RST before headers has body");
+    expect_http([rst_fail[@"idleComplete"] boolValue] == NO,
+                "RST before headers idleComplete is false");
+    expect_http([rst_sender snapshot].count == 0,
+                "RST before headers has no stream events");
+    rst_header_server.stop();
+
+    const auto* errored = ps_sync_fixtures::find_scenario(catalog, "error-then-end");
+    expect_http(errored != nullptr, "error-then-end scenario present");
+    if (errored != nullptr) {
+      ps_sync_fixtures::ReplayConfig rst_chunk;
+      rst_chunk.content_type = catalog.content_type;
+      rst_chunk.chunks = errored->chunks;
+      rst_chunk.rst_after_first_chunk = true;
+      ps_sync_fixtures::NdjsonReplayServer rst_chunk_server;
+      expect_http(rst_chunk_server.start(rst_chunk), "error-then-end RST server starts");
+      NSString* rstChunkUrl =
+          [NSString stringWithUTF8String:rst_chunk_server.url().c_str()];
+      RecordingStreamSender* err_sender = [RecordingStreamSender new];
+      NativePowerSyncModule* err_module =
+          [[NativePowerSyncModule alloc] initWithParam:err_sender];
+      NSDictionary* err_headers = WaitForHttp(^(void (^cb)(id)) {
+        [err_module httpFetch:@{
+          @"method" : @"POST",
+          @"url" : rstChunkUrl,
+          @"body" : @"{}",
+        }
+                     callback:cb];
+      });
+      expect_http([err_headers[@"ok"] boolValue], "error-then-end headers ok");
+      expect_http(WaitForEventCount(err_sender, 2),
+                  "error-then-end onData then terminal events");
+      expect_http(WaitForEventCount(err_sender, [err_sender snapshot].count + 1) ||
+                      [[err_sender snapshot].lastObject[@"event"] isEqualToString:@"onEnd"],
+                  "error-then-end waits for onEnd");
+      NSArray<NSDictionary*>* err_events = [err_sender snapshot];
+      BOOL saw_stream_error = NO;
+      for (NSDictionary* row in err_events) {
+        if ([row[@"event"] isEqualToString:@"onError"]) {
+          saw_stream_error = YES;
+        }
+      }
+      expect_http(saw_stream_error, "error-then-end records onError");
+      expect_http([err_events.lastObject[@"event"] isEqualToString:@"onEnd"],
+                  "error-then-end terminal is onEnd");
+      rst_chunk_server.stop();
+    }
   }
   return g_http_failures;
 }

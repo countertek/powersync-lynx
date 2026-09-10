@@ -37,12 +37,15 @@ struct Scenario {
   std::string error;
   std::vector<std::string> chunks;
   std::vector<std::string> events;
+  /** Raw socket/read splits as lowercase hex; empty when chunks are already wire UTF-8. */
+  std::vector<std::string> wire_chunks_hex;
 };
 
 struct Catalog {
   std::string content_type;
   std::vector<std::string> idle_complete_keys;
   std::vector<std::string> streaming_keys;
+  std::vector<std::string> fail_keys;
   std::vector<Scenario> scenarios;
 };
 
@@ -307,6 +310,8 @@ class Parser {
         scenario.chunks = parse_string_array();
       } else if (key == "events") {
         scenario.events = parse_string_array();
+      } else if (key == "wireChunksHex") {
+        scenario.wire_chunks_hex = parse_string_array();
       } else {
         skip_value();
       }
@@ -355,6 +360,8 @@ class Parser {
         catalog.idle_complete_keys = parse_string_array();
       } else if (key == "streamingEnvelopeKeys") {
         catalog.streaming_keys = parse_string_array();
+      } else if (key == "failEnvelopeKeys") {
+        catalog.fail_keys = parse_string_array();
       } else if (key == "scenarios") {
         catalog.scenarios = parse_scenario_array();
       } else {
@@ -414,6 +421,53 @@ inline bool has_key(const std::vector<std::string>& keys, const char* want) {
     }
   }
   return false;
+}
+
+inline int hex_nibble(char c) {
+  if (c >= '0' && c <= '9') {
+    return c - '0';
+  }
+  if (c >= 'a' && c <= 'f') {
+    return c - 'a' + 10;
+  }
+  if (c >= 'A' && c <= 'F') {
+    return c - 'A' + 10;
+  }
+  return -1;
+}
+
+inline bool decode_hex(const std::string& hex, std::string* out) {
+  if (out == nullptr || hex.size() % 2 != 0) {
+    return false;
+  }
+  out->clear();
+  out->reserve(hex.size() / 2);
+  for (size_t i = 0; i < hex.size(); i += 2) {
+    const int hi = hex_nibble(hex[i]);
+    const int lo = hex_nibble(hex[i + 1]);
+    if (hi < 0 || lo < 0) {
+      return false;
+    }
+    out->push_back(static_cast<char>((hi << 4) | lo));
+  }
+  return true;
+}
+
+/** Socket/read pieces: wireChunksHex when present, otherwise UTF-8 of chunks. */
+inline std::vector<std::string> wire_chunks(const Scenario& scenario) {
+  std::vector<std::string> out;
+  if (!scenario.wire_chunks_hex.empty()) {
+    out.reserve(scenario.wire_chunks_hex.size());
+    for (const auto& hex : scenario.wire_chunks_hex) {
+      std::string bytes;
+      if (!decode_hex(hex, &bytes)) {
+        throw std::runtime_error("invalid wireChunksHex in scenario " + scenario.id);
+      }
+      out.push_back(std::move(bytes));
+    }
+    return out;
+  }
+  return scenario.chunks;
 }
 
 }  // namespace ps_sync_fixtures
