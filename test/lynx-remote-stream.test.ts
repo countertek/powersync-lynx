@@ -913,6 +913,151 @@ test("pre-aborted httpFetch signal does not start a native request", async () =>
   );
 });
 
+async function waitUntil(predicate: () => boolean, message: string): Promise<void> {
+  const deadline = Date.now() + 500;
+  while (!predicate() && Date.now() < deadline) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  }
+  assert.ok(predicate(), message);
+}
+
+function rejectIfStillPending<T>(promise: Promise<T>, ms = 80): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error("cancellation still pending")), ms);
+    }),
+  ]);
+}
+
+test("HostFetch fetchStream rejects when aborted before headers", async () => {
+  let dispatched = false;
+  let dispatchedSignal: AbortSignal | undefined;
+  await withFakeLynxHost(
+    {
+      fetchImpl: async (_url, init) => {
+        dispatched = true;
+        dispatchedSignal = init?.signal;
+        return new Promise((_resolve, reject) => {
+          const signal = init?.signal;
+          if (signal == null) {
+            return;
+          }
+          const fail = () => {
+            const error = new Error("Aborted");
+            error.name = "AbortError";
+            reject(error);
+          };
+          if (signal.aborted) {
+            fail();
+            return;
+          }
+          signal.addEventListener("abort", fail, { once: true });
+        });
+      },
+    },
+    async () => {
+      const remote = new LynxRemote(demoConnector("http://127.0.0.1:8080"), silentLogger);
+      const controller = new AbortController();
+      const pending = remote.fetchStream({
+        path: "/sync/stream",
+        data: {},
+        abortSignal: controller.signal,
+      });
+      await waitUntil(() => dispatched, "HostFetch must dispatch fetch before abort");
+      assert.ok(dispatchedSignal != null, "HostFetch must pass request.signal to fetchImpl");
+      controller.abort();
+      assert.equal(dispatchedSignal.aborted, true);
+      await assert.rejects(() => rejectIfStillPending(pending), /aborted/i);
+    },
+  );
+});
+
+test("fetchStream abort after httpFetch dispatch settles without a native callback", async () => {
+  let dispatched = 0;
+  await withFakeLynxHost(
+    {
+      platform: "iOS",
+      nativeModules: {
+        NativePowerSyncModule: nativeWithHttp({
+          httpFetch() {
+            dispatched += 1;
+          },
+        }),
+      },
+    },
+    async () => {
+      const remote = new LynxRemote(demoConnector("http://127.0.0.1:8080"), silentLogger);
+      const controller = new AbortController();
+      const pending = remote.fetchStream({
+        path: "/sync/stream",
+        data: {},
+        abortSignal: controller.signal,
+      });
+      await waitUntil(() => dispatched === 1, "httpFetch must dispatch before abort");
+      controller.abort();
+      await assert.rejects(() => rejectIfStillPending(pending), /aborted/i);
+    },
+  );
+});
+
+test("fetchStream abort before headers cancels a late streamingId and does not leak a stream", async () => {
+  const { emitter, listeners } = createFakeEmitter();
+  const streamingId = "NativePowerSyncHttpStream-late-headers";
+  const abortIds: string[] = [];
+  let headersCallback: NativeHttpFetchCallback | undefined;
+  await withFakeLynxHost(
+    {
+      platform: "Android",
+      emitter,
+      nativeModules: {
+        NativePowerSyncModule: nativeWithHttp({
+          httpFetch(_request, callback) {
+            headersCallback = callback;
+          },
+          httpFetchAbort(streamId, callback) {
+            abortIds.push(streamId);
+            callback({ ok: true });
+          },
+        }),
+      },
+    },
+    async () => {
+      const remote = new LynxRemote(demoConnector("http://127.0.0.1:8080"), silentLogger);
+      const controller = new AbortController();
+      const pending = remote.fetchStream({
+        path: "/sync/stream",
+        data: {},
+        abortSignal: controller.signal,
+      });
+      await waitUntil(() => headersCallback != null, "httpFetch must dispatch before abort");
+      const lateHeaders = headersCallback;
+      assert.ok(lateHeaders != null);
+      controller.abort();
+      await assert.rejects(() => rejectIfStillPending(pending), /aborted/i);
+      lateHeaders({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        contentType: "application/x-ndjson",
+        body: "",
+        streamingId,
+        idleComplete: false,
+      });
+      emitter.emit?.(streamingId, {
+        event: "onData",
+        data: '{"checkpoint":{"last_op_id":"1"}}\n',
+      });
+      assert.deepEqual(abortIds, [streamingId]);
+      assert.equal(
+        (listeners.get(streamingId) ?? []).length,
+        0,
+        "late headers after abort must not attach a streaming reader",
+      );
+    },
+  );
+});
+
 test("httpFetch streamingId onError then onEnd fails the reader", async () => {
   const { emitter, listeners } = createFakeEmitter();
   await withFakeLynxHost(

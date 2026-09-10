@@ -53,6 +53,9 @@ async function fetchViaHost(request: SyncStreamRequest): Promise<Response> {
   if (request.body != null) {
     init.body = request.body;
   }
+  if (request.signal != null) {
+    init.signal = request.signal;
+  }
   if (request.expectStreamingResponse) {
     init.lynxExtension = { enableFetchAPIStandardStreaming: true };
   }

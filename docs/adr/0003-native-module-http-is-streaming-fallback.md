@@ -12,6 +12,18 @@ Pre-headers failure Callback (parse error, connect/RST before a status line, abo
 
 `httpFetchAbort` always Callbacks `{ok:true}`. It marks the session aborted and cancels I/O; the I/O `on_error` (or `on_end`) step emits the terminal. The abort caller does not emit events itself.
 
+### Residual: JS cannot cancel native I/O before the headers Callback
+
+Native assigns `streamingId` when `httpFetch` starts and can cancel I/O before headers if `httpFetchAbort(streamingId)` is invoked. JS only learns that id from the one-shot Callback (headers or pre-headers fail). The abort handle is therefore callback-only on the JS side.
+
+Abort after `httpFetch` dispatch:
+
+1. Rejects the JS `httpFetch` Promise immediately (`Aborted` / `AbortError`).
+2. Removes the abort listener once the Promise settles.
+3. Calls `httpFetchAbort` if a late Callback later delivers `streamingId`, and does not resolve a stream.
+
+Until that Callback (or if it never fires), native I/O may continue. Promise rejection is not full cancellation. Closing the gap is a native handle-before-headers change, not this JS settlement.
+
 ### Intentional remaining host differences
 
 - HTTP stacks stay platform-native: Android `HttpURLConnection`, iOS `NSURLSession`.
