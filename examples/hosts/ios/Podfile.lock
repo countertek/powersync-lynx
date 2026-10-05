@@ -11,9 +11,9 @@ PODS:
   - libwebp/sharpyuv (1.6.0)
   - libwebp/webp (1.6.0):
     - libwebp/sharpyuv
-  - Lynx (4.0.0):
-    - Lynx/Framework (= 4.0.0)
-  - Lynx/Framework (4.0.0):
+  - Lynx (4.0.3):
+    - Lynx/Framework (= 4.0.3)
+  - Lynx/Framework (4.0.3):
     - Lynx/ReleaseResource
     - LynxBase/Framework
     - LynxServiceAPI
@@ -21,28 +21,28 @@ PODS:
     - PrimJS/napi/jsc
     - PrimJS/napi/quickjs
     - PrimJS/quickjs (= 4.0.0)
-  - Lynx/ReleaseResource (4.0.0)
-  - LynxBase (4.0.0):
-    - LynxBase/Framework (= 4.0.0)
-  - LynxBase/Framework (4.0.0):
+  - Lynx/ReleaseResource (4.0.3)
+  - LynxBase (4.0.3):
+    - LynxBase/Framework (= 4.0.3)
+  - LynxBase/Framework (4.0.3):
     - LynxServiceAPI/Core
   - LynxLibraryRegistry (0.1.0):
     - Lynx
-  - LynxService/Http (4.0.0):
-    - Lynx (= 4.0.0)
-    - LynxServiceAPI (= 4.0.0)
-  - LynxService/Image (4.0.0):
-    - Lynx (= 4.0.0)
-    - LynxServiceAPI (= 4.0.0)
+  - LynxService/Http (4.0.3):
+    - Lynx (= 4.0.3)
+    - LynxServiceAPI (= 4.0.3)
+  - LynxService/Image (4.0.3):
+    - Lynx (= 4.0.3)
+    - LynxServiceAPI (= 4.0.3)
     - SDWebImage (= 5.15.5)
     - SDWebImageWebPCoder (= 0.11.0)
-  - LynxService/Log (4.0.0):
-    - Lynx (= 4.0.0)
-    - LynxBase (= 4.0.0)
-    - LynxServiceAPI (= 4.0.0)
-  - LynxServiceAPI (4.0.0):
-    - LynxServiceAPI/Core (= 4.0.0)
-  - LynxServiceAPI/Core (4.0.0)
+  - LynxService/Log (4.0.3):
+    - Lynx (= 4.0.3)
+    - LynxBase (= 4.0.3)
+    - LynxServiceAPI (= 4.0.3)
+  - LynxServiceAPI (4.0.3):
+    - LynxServiceAPI/Core (= 4.0.3)
+  - LynxServiceAPI/Core (4.0.3)
   - LynxTextra (0.2.1)
   - MJRefresh (3.7.9)
   - powersync-lynx (0.0.0):
@@ -80,19 +80,19 @@ PODS:
   - ServalMarkdown (0.1.1):
     - LynxTextra
   - ServalSVG (0.2.4)
-  - XElement (4.0.0):
-    - XElement/Behavior (= 4.0.0)
-    - XElement/BlurView (= 4.0.0)
-    - XElement/Input (= 4.0.0)
-    - XElement/Markdown (= 4.0.0)
-    - XElement/Overlay (= 4.0.0)
-    - XElement/Refresh (= 4.0.0)
-    - XElement/ScrollCoordinator (= 4.0.0)
-    - XElement/SVG (= 4.0.0)
-    - XElement/ViewPager (= 4.0.0)
-    - XElement/WebView (= 4.0.0)
-  - XElement/Behavior (4.0.0):
-    - Lynx (= 4.0.0)
+  - XElement (4.0.3):
+    - XElement/Behavior (= 4.0.3)
+    - XElement/BlurView (= 4.0.3)
+    - XElement/Input (= 4.0.3)
+    - XElement/Markdown (= 4.0.3)
+    - XElement/Overlay (= 4.0.3)
+    - XElement/Refresh (= 4.0.3)
+    - XElement/ScrollCoordinator (= 4.0.3)
+    - XElement/SVG (= 4.0.3)
+    - XElement/ViewPager (= 4.0.3)
+    - XElement/WebView (= 4.0.3)
+  - XElement/Behavior (4.0.3):
+    - Lynx (= 4.0.3)
     - XElement/BlurView
     - XElement/Input
     - XElement/Markdown
@@ -102,41 +102,41 @@ PODS:
     - XElement/SVG
     - XElement/ViewPager
     - XElement/WebView
-  - XElement/BlurView (4.0.0):
-    - Lynx (= 4.0.0)
-  - XElement/Input (4.0.0):
-    - Lynx (= 4.0.0)
-  - XElement/Markdown (4.0.0):
-    - Lynx (= 4.0.0)
+  - XElement/BlurView (4.0.3):
+    - Lynx (= 4.0.3)
+  - XElement/Input (4.0.3):
+    - Lynx (= 4.0.3)
+  - XElement/Markdown (4.0.3):
+    - Lynx (= 4.0.3)
     - ServalMarkdown (= 0.1.1)
-  - XElement/Overlay (4.0.0):
-    - Lynx (= 4.0.0)
-  - XElement/Refresh (4.0.0):
-    - Lynx (= 4.0.0)
+  - XElement/Overlay (4.0.3):
+    - Lynx (= 4.0.3)
+  - XElement/Refresh (4.0.3):
+    - Lynx (= 4.0.3)
     - MJRefresh (>= 3.6.1)
-  - XElement/ScrollCoordinator (4.0.0):
-    - Lynx (= 4.0.0)
+  - XElement/ScrollCoordinator (4.0.3):
+    - Lynx (= 4.0.3)
     - XElement/ViewPager
-  - XElement/SVG (4.0.0):
-    - Lynx (= 4.0.0)
+  - XElement/SVG (4.0.3):
+    - Lynx (= 4.0.3)
     - ServalSVG (>= 0.0.17)
-  - XElement/ViewPager (4.0.0):
-    - Lynx (= 4.0.0)
-  - XElement/WebView (4.0.0):
-    - Lynx (= 4.0.0)
+  - XElement/ViewPager (4.0.3):
+    - Lynx (= 4.0.3)
+  - XElement/WebView (4.0.3):
+    - Lynx (= 4.0.3)
 
 DEPENDENCIES:
-  - Lynx/Framework (= 4.0.0)
-  - LynxLibraryRegistry (from `/Users/drkz/orca/workspaces/powersync-for-lynxjs/fm-ps-lynx-mobile-demo/examples/hosts/ios/generated/lynx-library`)
-  - LynxService/Http (= 4.0.0)
-  - LynxService/Image (= 4.0.0)
-  - LynxService/Log (= 4.0.0)
-  - powersync-lynx (from `/Users/drkz/orca/workspaces/powersync-for-lynxjs/fm-ps-lynx-mobile-demo`)
+  - Lynx/Framework (= 4.0.3)
+  - LynxLibraryRegistry (from `/Users/drkz/orca/projects/powersync-for-lynxjs/examples/hosts/ios/generated/lynx-library`)
+  - LynxService/Http (= 4.0.3)
+  - LynxService/Image (= 4.0.3)
+  - LynxService/Log (= 4.0.3)
+  - powersync-lynx (from `/Users/drkz/orca/projects/powersync-for-lynxjs/ios`)
   - PrimJS/napi (= 4.0.0)
   - PrimJS/quickjs (= 4.0.0)
   - SDWebImage (= 5.15.5)
   - SDWebImageWebPCoder (= 0.11.0)
-  - XElement (= 4.0.0)
+  - XElement (= 4.0.3)
 
 SPEC REPOS:
   trunk:
@@ -157,28 +157,28 @@ SPEC REPOS:
 
 EXTERNAL SOURCES:
   LynxLibraryRegistry:
-    :path: "/Users/drkz/orca/workspaces/powersync-for-lynxjs/fm-ps-lynx-mobile-demo/examples/hosts/ios/generated/lynx-library"
+    :path: "/Users/drkz/orca/projects/powersync-for-lynxjs/examples/hosts/ios/generated/lynx-library"
   powersync-lynx:
-    :path: "/Users/drkz/orca/workspaces/powersync-for-lynxjs/fm-ps-lynx-mobile-demo"
+    :path: "/Users/drkz/orca/projects/powersync-for-lynxjs/ios"
 
 SPEC CHECKSUMS:
   libwebp: af5937a13536ef73f3784d69cc342b98961acf33
-  Lynx: 34c94a5ca239b8c282519ccbb598da390c3d7741
-  LynxBase: 0d3bd0b34481421ab2650c5ce2ede9bd8a9d4d0d
+  Lynx: e1fb48fd1c2d2fa187fa9259c8010005bd50e56e
+  LynxBase: c90f118654a8b5ca43ce4fe2dae9661bd289ec7f
   LynxLibraryRegistry: b2017f1b3dd04bcac00caacc69d28fddcd6c9043
-  LynxService: e814fa4b7fc2df2abd9d3d330a1f2160130ecbdd
-  LynxServiceAPI: 49e15fd0fa9647a36118016ce271b097297f5e23
+  LynxService: 040c3a40fe8d2721c6f930cd23ac2dff93d7dea8
+  LynxServiceAPI: 015608819cdcbc6a398613170baf27d07a2b5797
   LynxTextra: 82539791caa56e964cde427f05cff24ed3736d36
   MJRefresh: ff9e531227924c84ce459338414550a05d2aea78
-  powersync-lynx: 53328691358d016047377d5575b9f7cd67284f06
+  powersync-lynx: 848d4c41d12e9bb2e12c3f8e340ae44faddebe81
   powersync-sqlite-core: 2d191e4a7c9f5c33893ee0f7a1ad7e53e5a4a3bf
   PrimJS: f048efc0923e73cde312466a110516f56b70834d
   SDWebImage: fd7e1a22f00303e058058278639bf6196ee431fe
   SDWebImageWebPCoder: 295a6573c512f54ad2dd58098e64e17dcf008499
   ServalMarkdown: 4e0401818bc34bbb7659270e2df775119ccc029f
   ServalSVG: 19bf88f72dae928c28a744c9b91475a3691ded42
-  XElement: 4f08b694546688719a726cf2cbe4a28d4d01e9ef
+  XElement: a9a21dacf1865bc9ac4b0ed928c1941b4317ba7b
 
-PODFILE CHECKSUM: e2bb4506c6e4e9f7bd40d3df4bcc5f3003c36630
+PODFILE CHECKSUM: 2cabf59dbe1803154f34c2664589c6891045d0f8
 
 COCOAPODS: 1.17.0

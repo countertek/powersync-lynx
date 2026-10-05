@@ -7,12 +7,12 @@ inhibit_all_warnings!
 target 'PowerSyncLynxShowcase' do
   use_lynx_library!
 
-  pod 'Lynx', '4.0.0', :subspecs => ['Framework']
+  pod 'Lynx', '4.0.3', :subspecs => ['Framework']
   pod 'PrimJS', '4.0.0', :subspecs => ['quickjs', 'napi']
-  pod 'LynxService', '4.0.0', :subspecs => ['Image', 'Log', 'Http']
+  pod 'LynxService', '4.0.3', :subspecs => ['Image', 'Log', 'Http']
   pod 'SDWebImage', '5.15.5'
   pod 'SDWebImageWebPCoder', '0.11.0'
-  pod 'XElement', '4.0.0'
+  pod 'XElement', '4.0.3'
 end
 
 post_install do |installer|

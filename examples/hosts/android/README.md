@@ -4,7 +4,7 @@ A Lynx **4.0** Android app that loads the ReactLynx TODO bundle and Autolinks
 `NativePowerSyncModule`. Emulator is the path this repo verifies. Lynx Explorer
 does **not** register the module.
 
-Floors: minSdk **24**, compileSdk 35, Lynx **4.0.1** (PrimJS **4.0.0** — Maven has no `primjs:4.0.1`), Autolink Gradle plugins **4.0.1**.
+Floors: minSdk **24**, compileSdk 35, Lynx **4.0.3** (PrimJS **4.0.0** — Maven has no `primjs:4.0.x` patch), Autolink Gradle plugins **4.0.3**.
 
 ## Prerequisites
 
@@ -67,12 +67,12 @@ builds have no cleartext.
 
 | Symptom | Check |
 |---|---|
-| Autolink plugin not found | Plugin ids are `org.lynxsdk.lynx.library-settings` / `library-build` **4.0.1** on the Gradle Plugin Portal, not the shorter `org.lynxsdk.library-*` names in older recipes. |
+| Autolink plugin not found | Plugin ids are `org.lynxsdk.lynx.library-settings` / `library-build` **4.0.3** on the Gradle Plugin Portal, not the shorter `org.lynxsdk.library-*` names in older recipes. |
 | `NativePowerSyncModule is not registered` | `pnpm --dir examples/hosts install` so Autolink can see `lynx.lib.json`. Fallback only if the plugin cannot resolve: `LynxEnv.inst().registerModule("NativePowerSyncModule", NativePowerSyncModule.class)`. |
 | Missing bundle | `pnpm --dir examples/showcase build` first (`copyLynxBundle` fails loudly). |
 | Token works, sync does not | Still pointing at `127.0.0.1` from inside the emulator. Use `10.0.2.2`. |
 | `cleartext` / `ERR_CLEARTEXT_NOT_PERMITTED` | Debug network-security-config does not list that host. |
-| Empty `<input>` | `xelement` + `xelement-input` 4.0.0 missing. |
+| Empty `<input>` | `xelement` + `xelement-input` missing. |
 | Download hangs / `ps_buckets=0` after server 200 | Use `NativePowerSyncModule.httpFetch` path (rebuild showcase + APK). Confirm `streamingId` + GlobalEventEmitter `onData` (not idle-complete-only). Stock LynxFetchModule alone cannot deliver live NDJSON. |
 
 ## `/sync/stream` download path
