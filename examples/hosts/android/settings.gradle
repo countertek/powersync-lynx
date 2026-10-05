@@ -6,8 +6,8 @@ pluginManagement {
   }
   plugins {
     id 'com.android.application' version '8.7.2'
-    id 'org.lynxsdk.lynx.library-settings' version '4.0.1'
-    id 'org.lynxsdk.lynx.library-build' version '4.0.1'
+    id 'org.lynxsdk.lynx.library-settings' version '4.0.3'
+    id 'org.lynxsdk.lynx.library-build' version '4.0.3'
   }
 }
 
