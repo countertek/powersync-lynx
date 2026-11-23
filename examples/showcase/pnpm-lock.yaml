@@ -122,11 +122,11 @@ importers:
         specifier: ^0.26.0
         version: 0.26.0(patch_hash=44ad2f849b10c38f52d404930b73354a8d4b07a87510621b86b64088d5eb3501)(@lynx-js/lynx-core@0.1.4)(tslib@2.8.1)
       '@powersync/common':
-        specifier: ^2.2.0
-        version: 2.2.0
+        specifier: ^2.5.0
+        version: 2.5.0
       '@powersync/web':
-        specifier: ^2.3.0
-        version: 2.3.0(@powersync/common@2.2.0)
+        specifier: ^2.7.0
+        version: 2.7.0(@powersync/common@2.5.0)
       powersync-lynx:
         specifier: link:../..
         version: link:../..
@@ -193,8 +193,8 @@ packages:
     resolution: {integrity: sha512-LvVYn83nnXPl+Rg98nvcFgjx6nRMTArhSn6RAX/w3ELn54S8A42TYZvsCMdGUqTM8S0wyXbtlQdU6Hi6dykj9g==}
     engines: {node: ^18.14.0 || ^20.0.0 || ^22.0.0 || >=24.0.0}
 
-  '@journeyapps/wa-sqlite@2.0.3':
-    resolution: {integrity: sha512-LEnzLL/+6z9AAOJQ1nZD5/lo5xE6ZWpkH/M6S3RAGiM047jDqKvGjx8SkGkG1bRcFbbGApf3RWlHGfrmButXcg==}
+  '@journeyapps/wa-sqlite@2.0.10':
+    resolution: {integrity: sha512-6Wo5ZijOc4/6M9u+MDsJdW8zDCdrct/p+7LcG7S7CT5YKu42j6lshMfUvgtGYMaZeuH7rpQHULZupPTQFqbS0w==}
 
   '@jridgewell/resolve-uri@3.1.2':
     resolution: {integrity: sha512-bRISgCIjP20/tbWSPWMEi54QVPRZExkuD9lJL+UIxUKtwVJA8wW1Trb1jMs1RFXo1CBTNZ/5hpC9QvmKWdopKw==}
@@ -519,19 +519,22 @@ packages:
   '@oxc-project/types@0.148.0':
     resolution: {integrity: sha512-Nm4s/jB+4FpFsPhWGEC4h7rzksesmtnMXomo6rCMcg/b8zLQuOziRgkCS1fxDCXOlJB/6Q8oABOZ/OP6RIPj9A==}
 
-  '@powersync/common@2.2.0':
-    resolution: {integrity: sha512-TLQE0De9TAniQIyvfkPiim5MHi/nDely7ZT7iSBHY+xtDt5pwelqwmq0IcWSqZnkTagimGXp7p1z5htWwt0Wbw==}
+  '@powersync/common@2.5.0':
+    resolution: {integrity: sha512-kMlAfrQddGIAFuO7qCyYxf2yxAKdCrwGany9VcHs8Rx9f5KuqxqaCikzq/SC4Evf/f/sTS5eIwczZPPQboTjxw==}
 
-  '@powersync/shared-internals@1.2.0':
-    resolution: {integrity: sha512-wkSgKKcIo9It6axdDBfAJNxzQcfc6hVMlcycxoPSAuMIo/GnXuyi2bl3DpMaZWMutrXlkemPKG3y4nuqxLYpVA==}
+  '@powersync/shared-internals@1.6.0':
+    resolution: {integrity: sha512-UduDSVv9qfonIezOklBUR6c3KNlwOQ8/XCsTDwrBUXnVv4wmAZuIDO7C2hX2KKcQGKn+rU0Z5R9uPtgl1uK7Vg==}
     peerDependencies:
-      '@powersync/common': ^2.2.0
+      '@powersync/common': ^2.5.0
+    peerDependenciesMeta:
+      '@powersync/common':
+        optional: true
 
-  '@powersync/web@2.3.0':
-    resolution: {integrity: sha512-6NjVRB+RmxlL+insiWOZrpolrAChsfL1MpULv2Impk242y5ZSAdk+lUPn5XBYltsHorhKov8PplbDbL1sAYmIQ==}
+  '@powersync/web@2.7.0':
+    resolution: {integrity: sha512-nRUVB6ybqR5TeoQqGs16IAn//4eHlp5AToWuAPlsaAxwQFTXBSHnFemh5YQtgLR4Mb7YpQjc3OKfjt5eXCYLHQ==}
     hasBin: true
     peerDependencies:
-      '@powersync/common': ^2.2.0
+      '@powersync/common': ^2.5.0
 
   '@rolldown/binding-android-arm-eabi@1.2.7':
     resolution: {integrity: sha512-EypzgnYCwyVY4NDHKzGmNJT5b+XaQEBniHxsMdeIQLB/tcCzZnhqrzHpZFbX9iaxx+5RiB8caATBtfvZP7zVxQ==}
@@ -2285,7 +2288,7 @@ snapshots:
       '@types/yargs': 17.0.35
       chalk: 4.1.2
 
-  '@journeyapps/wa-sqlite@2.0.3': {}
+  '@journeyapps/wa-sqlite@2.0.10': {}
 
   '@jridgewell/resolve-uri@3.1.2': {}
 
@@ -2644,17 +2647,17 @@ snapshots:
 
   '@oxc-project/types@0.148.0': {}
 
-  '@powersync/common@2.2.0': {}
+  '@powersync/common@2.5.0': {}
 
-  '@powersync/shared-internals@1.2.0(@powersync/common@2.2.0)':
-    dependencies:
-      '@powersync/common': 2.2.0
+  '@powersync/shared-internals@1.6.0(@powersync/common@2.5.0)':
+    optionalDependencies:
+      '@powersync/common': 2.5.0
 
-  '@powersync/web@2.3.0(@powersync/common@2.2.0)':
+  '@powersync/web@2.7.0(@powersync/common@2.5.0)':
     dependencies:
-      '@journeyapps/wa-sqlite': 2.0.3
-      '@powersync/common': 2.2.0
-      '@powersync/shared-internals': 1.2.0(@powersync/common@2.2.0)
+      '@journeyapps/wa-sqlite': 2.0.10
+      '@powersync/common': 2.5.0
+      '@powersync/shared-internals': 1.6.0(@powersync/common@2.5.0)
       comlink: 4.4.2
       commander: 12.1.0
 

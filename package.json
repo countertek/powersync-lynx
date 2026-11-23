@@ -71,8 +71,8 @@
     "check-packed-consumers": "node scripts/check-packed-consumers.mjs"
   },
   "dependencies": {
-    "@powersync/common": "^2.2.0",
-    "@powersync/shared-internals": "^1.2.0"
+    "@powersync/common": "^2.5.0",
+    "@powersync/shared-internals": "^1.6.0"
   },
   "devDependencies": {
     "@oxlint/plugins": "1.78.0",
@@ -84,8 +84,8 @@
     "vite": "8.2.2"
   },
   "peerDependencies": {
-    "@powersync/common": "^2.2.0",
-    "@powersync/web": "^2.3.0"
+    "@powersync/common": "^2.5.0",
+    "@powersync/web": "^2.7.0"
   },
   "peerDependenciesMeta": {
     "@powersync/web": {

@@ -157,15 +157,17 @@ function browser(context: TestContext, multiTab: boolean): Browser {
       const sync = new StatusSync({
         adapter: storage,
         subscriptions: [],
-        async uploadCrud() {
-          const next = await storage.nextCrudItem();
-          if (next == null) {
-            return;
-          }
-          uploads.push({ tab: label, crudId: next.clientId });
-          await adapter.execute("DELETE FROM ps_crud WHERE id <= ?", [next.clientId]);
+        connector: {
+          ...stubConnector(),
+          async uploadCrud() {
+            const next = await storage.nextCrudItem();
+            if (next == null) {
+              return;
+            }
+            uploads.push({ tab: label, crudId: next.clientId });
+            await adapter.execute("DELETE FROM ps_crud WHERE id <= ?", [next.clientId]);
+          },
         },
-        postCheckpointRequest: () => null,
         identifier: DATABASE,
         logger,
         remote: new LynxRemote(stubConnector(), logger),
@@ -388,8 +390,7 @@ test("without a shared database, clients of one identifier still exclude each ot
   const options = {
     adapter: new SqliteBucketStorage(new LynxDBAdapter({ name: "unopened.db" }), silentLogger),
     subscriptions: [],
-    uploadCrud: async () => {},
-    postCheckpointRequest: () => null,
+    connector: { ...stubConnector(), uploadCrud: async () => {} },
     identifier: "local.db",
     logger: silentLogger,
     remote: new LynxRemote(stubConnector(), silentLogger),

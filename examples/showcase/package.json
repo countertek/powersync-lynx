@@ -16,8 +16,8 @@
     "@lynx-js/lynx-core": "0.1.4",
     "@lynx-js/react": "^0.126.0",
     "@lynx-js/web-core": "^0.26.0",
-    "@powersync/common": "^2.2.0",
-    "@powersync/web": "^2.3.0",
+    "@powersync/common": "^2.5.0",
+    "@powersync/web": "^2.7.0",
     "powersync-lynx": "link:../.."
   },
   "devDependencies": {

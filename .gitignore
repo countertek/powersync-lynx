@@ -50,3 +50,6 @@ examples/hosts/android/local.properties
 examples/hosts/ios/generated/
 
 
+
+# pnpm pack output.
+*.tgz
