@@ -16,6 +16,9 @@ import {
   mappingStats,
   resetWebHostMapping,
 } from "../src/web-host/page-rpc.ts";
+import { resetLynxHost } from "../src/host.ts";
+import { installFakeLynxHost } from "./fake-lynx-host.ts";
+import { FakeTabHub } from "./fake-tabs.ts";
 
 interface WebCalls {
   constructs: object[];
@@ -405,6 +408,49 @@ test("one WASQLiteOpenFactory per dbFilename+dbLocation; extra opens refcount", 
   await handleNativeCall("close", ids[5], null, loadWeb);
   assert.equal(calls.closes.length, 1);
   assert.equal(mappingStats().connections, 1);
+});
+
+test("open tells the Adapter when WASQLite shares the file between tabs", async (context) => {
+  const loadWeb = loadMock({});
+  const openWith = async (options) => {
+    const open = await handleNativeCall("open", { dbFilename: "app.db" }, options, loadWeb);
+    assert.equal(open.ok, true);
+    return open.multiTab;
+  };
+
+  assert.equal(await openWith({ enableMultiTabs: true }), true);
+  assert.equal(await openWith({ enableMultiTabs: false }), undefined);
+  // Node has no SharedWorker, so the official default for an omitted flag is off.
+  assert.equal(await openWith(undefined), undefined);
+
+  // Where SharedWorker exists (desktop Chromium), the official default is on.
+  globalThis.SharedWorker = class {};
+  context.after(() => {
+    delete globalThis.SharedWorker;
+  });
+  assert.equal(await openWith(undefined), true);
+  assert.equal(await openWith({ enableMultiTabs: false }), undefined);
+});
+
+test("an Adapter opened through a multi-tab Host helper exchanges table changes with other tabs", async (context) => {
+  const hub = new FakeTabHub();
+  const loadWeb = loadMock({}, hookTrackingSqlHandler());
+  const hop = (name, data) => handleNativeCall(name, data, { enableMultiTabs: true }, loadWeb);
+  installFakeLynxHost({
+    nativeModules: { NativePowerSyncModule: createFactory({}, hop) },
+    tabs: hub.tab(),
+  });
+  context.after(resetLynxHost);
+  const received = [];
+  hub.tab().channel("powersync-lynx:tables:app.db:", (change) => received.push(change));
+
+  const adapter = new LynxDBAdapter({ name: "app.db" });
+  await adapter.initialized;
+  await adapter.execute("INSERT INTO lists (id, name) VALUES (?, ?)", ["list-1", "Groceries"]);
+  await waitUntil(() => received.length > 0);
+
+  assert.deepEqual(received, [{ tables: ["lists"] }]);
+  await adapter.close();
 });
 
 test("readOnly routes execute to readLock+executeRaw; writes use writeLock", async () => {

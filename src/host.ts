@@ -7,6 +7,7 @@ import type {
   LynxSystemInfo,
   LynxTextCodecHelper,
 } from "./globals.ts";
+import { browserTabPrimitives, type TabPrimitives } from "./tabs.ts";
 import { isNonNullObject, isString } from "./type-guards.ts";
 
 /**
@@ -46,7 +47,7 @@ export function isHostFetch(value: unknown): value is HostFetch {
  * PrimJS / host-global seam for the Client.
  *
  * One interface for Native Module lookup, GlobalEventEmitter, platform,
- * text codec, and fetch. Production uses {@link PrimJSLynxHost}; tests install
+ * text codec, fetch, and cross-tab primitives. Production uses {@link PrimJSLynxHost}; tests install
  * a fake via {@link setLynxHost}. Not the Host helper (WASQLite `attach`).
  */
 export interface LynxHost {
@@ -56,6 +57,8 @@ export interface LynxHost {
   platform(): string | undefined;
   textCodec(): LynxTextCodecHelper | undefined;
   fetchImpl(): HostFetch | undefined;
+  /** Cross-tab locks and channels; undefined off the web. */
+  tabs(): TabPrimitives | undefined;
 }
 
 let installed: LynxHost | undefined;
@@ -260,6 +263,10 @@ export class PrimJSLynxHost implements LynxHost {
       return undefined;
     }
     return undefined;
+  }
+
+  tabs(): TabPrimitives | undefined {
+    return browserTabPrimitives();
   }
 
   private lookupNativeModulesTable(): NativeModulesHost | undefined {

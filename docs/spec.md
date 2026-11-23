@@ -227,7 +227,7 @@ Wire types are the Lynx Native Module table: primitives, `BigInt`, `ArrayBuffer`
 
 | Method | Arguments | Callback envelope (success) |
 |---|---|---|
-| `open` | `{ dbFilename, dbLocation?, readOnly? }` | `{ ok: true, dbId }` (`dbId` is an opaque string) |
+| `open` | `{ dbFilename, dbLocation?, readOnly? }` | `{ ok: true, dbId }` (`dbId` is an opaque string). The web Host helper adds `multiTab: true` when the file is shared between tabs ([Multi-tab sync](#multi-tab-sync)); native never sends it |
 | `close` | `dbId` | `{ ok: true }` |
 | `execute` | `dbId, sql, params` | `{ ok: true, insertId, rowsAffected, columnNames, rawRows }` (`QueryResult` cells) |
 | `executeBatch` | `dbId, sql, params` | same as `execute` — official RN shape: **one SQL, many parameter rows** (`params: BindValue[][]`) |
@@ -357,7 +357,21 @@ Also pass-through when set: `temporaryStorage`, `cacheSizeKb`, `databaseWorkerLo
 
 Safari / iOS multi-tab: host passes `vfs: WASQLiteVFS.OPFSCoopSyncVFS` from `@powersync/web`. Chromium parallel reads: `vfs: WASQLiteVFS.OPFSWriteAheadVFS` and optional `additionalReaders`. Experimental `InMemoryWriteAheadLogPool` / COOP / COEP headers are not this spec.
 
-`enableMultiTabs` is official WASQLite SharedWorker sharing for that filename. It is **not** official Web’s shared sync worker: Connector and `/sync/stream` stay in each Lynx bundle. One `PowerSyncDatabase` per file still holds, including across `<lynx-view>`s on one page.
+`enableMultiTabs` is official WASQLite SharedWorker sharing for that filename. It is **not** official Web’s shared sync worker: Connector and `/sync/stream` stay in each Lynx bundle, and the bundles coordinate as below. One `PowerSyncDatabase` per file still holds, including across `<lynx-view>`s on one page.
+
+### Multi-tab sync
+
+Applies when the resolved `enableMultiTabs` is `true` (the host's value, else the official default above). The Host helper then answers `open` with `multiTab: true`. Without that field (native, or `enableMultiTabs: false`) the Client keeps its in-memory sync / CRUD mutexes and local table notifications, unchanged.
+
+With it, the Client coordinates the tabs (and `<lynx-view>`s) of one origin that open the same file, using `navigator.locks` and `BroadcastChannel` in `lynx-bg`. If either global is missing it behaves as without the field.
+
+- **One tab syncs.** A sync client takes the cross-tab sync lease (`navigator.locks`, one per database name) before its first sync iteration and keeps it across iterations until `disconnect()` / `close()` or until its tab closes. Only the holder runs `powersync_control` sync iterations and opens `/sync/stream`.
+- **Every tab's writes upload.** Only the lease holder uploads, under a second cross-tab CRUD lock. Clients that wait for the lease do not call the Connector's `uploadData`.
+- **Every tab sees every change.** After a write lock, the Adapter also posts the changed table names to the other tabs' Adapters of that file, which notify their `tablesUpdated` listeners. `watch` in any tab follows writes and downloads from any tab, and a waiting tab's `ps_crud` write triggers the upload in the syncing tab.
+- **Status in every tab.** The holder broadcasts its sync status; waiting clients show it as their own (`connected`, `hasSynced`, `lastSyncedAt`, download progress, upload / download errors), so `connect()` resolves in a waiting tab once the syncing tab's attempt settles.
+- **Takeover.** When the holder disconnects or its tab closes, the next waiting client gets the lease, starts its own iteration and `/sync/stream`, and uploads whatever is pending in `ps_crud`.
+
+Not coordinated: a waiting tab's Sync Stream subscriptions and `requestCheckpoint()` are not forwarded to the syncing tab.
 
 ### Workers / WASM assets
 
