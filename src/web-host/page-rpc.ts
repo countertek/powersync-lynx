@@ -215,6 +215,27 @@ function assignAttachOption(
   }
 }
 
+interface SafariWindow {
+  safari?: object;
+}
+
+/**
+ * Whether WASQLite shares this file between tabs: the host's `enableMultiTabs`,
+ * else the same default `@powersync/web` resolves for an omitted flag.
+ */
+function sharesFileBetweenTabs(attachOptions: AttachOptions | undefined): boolean {
+  const requested = attachOptions?.enableMultiTabs;
+  if (hasPrimitiveConstructor(requested, Boolean)) {
+    return requested;
+  }
+  if (globalThis.navigator == null || globalThis.SharedWorker == null) {
+    return false;
+  }
+  // SAFETY: Safari exposes a non-standard `safari` object on the page global.
+  const page = globalThis as SafariWindow;
+  return !/(Android|iPhone|iPod|iPad)/i.test(navigator.userAgent) && page.safari == null;
+}
+
 /** wa-sqlite bind() accepts Uint8Array | number[] for blobs; ArrayBuffer is bound as NULL. */
 function toSqliteBind(value: Cloneable): WASQLiteBindValue {
   if (value instanceof ArrayBuffer) {
@@ -385,6 +406,9 @@ async function dispatchOpen(
     lease: null,
     tail: Promise.resolve(),
   });
+  if (sharesFileBetweenTabs(attachOptions)) {
+    return { ok: true, dbId, multiTab: true };
+  }
   return { ok: true, dbId };
 }
 
@@ -795,6 +819,7 @@ function envelopeToCloneable(result: NativeEnvelope): Cloneable {
   return {
     ok: true,
     dbId: result.dbId,
+    multiTab: result.multiTab,
     insertId: result.insertId,
     rowsAffected: result.rowsAffected,
     columnNames: result.columnNames,

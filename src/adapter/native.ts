@@ -32,6 +32,8 @@ export type NativeCell = SqliteValue | ArrayBuffer | TaggedBigInt;
 export interface NativeOkEnvelope {
   ok: true;
   dbId?: string;
+  /** `open` on the web Host helper only: other tabs share this database file. */
+  multiTab?: boolean;
   insertId?: number;
   rowsAffected?: number;
   columnNames?: string[];
@@ -51,6 +53,7 @@ export interface NativeWireEnvelope {
   message?: string;
   code?: number;
   dbId?: string;
+  multiTab?: boolean;
   insertId?: number;
   rowsAffected?: number;
   columnNames?: string[];
@@ -107,6 +110,7 @@ function parseNativeEnvelope(envelope: NativeWireEnvelope | null | undefined): N
   }
   const ok: NativeOkEnvelope = { ok: true };
   if (envelope.dbId !== undefined) ok.dbId = envelope.dbId;
+  if (envelope.multiTab === true) ok.multiTab = true;
   if (envelope.insertId !== undefined) ok.insertId = envelope.insertId;
   if (envelope.rowsAffected !== undefined) ok.rowsAffected = envelope.rowsAffected;
   if (envelope.columnNames !== undefined) ok.columnNames = envelope.columnNames;

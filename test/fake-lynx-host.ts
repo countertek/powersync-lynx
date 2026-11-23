@@ -12,6 +12,7 @@ import {
   type HostFetch,
   type LynxHost,
 } from "../src/host.ts";
+import type { TabPrimitives } from "../src/tabs.ts";
 
 export interface FakeLynxHostState {
   nativeModules?: NativeModulesHost;
@@ -20,6 +21,7 @@ export interface FakeLynxHostState {
   platform?: string;
   textCodec?: LynxTextCodecHelper;
   fetchImpl?: HostFetch;
+  tabs?: TabPrimitives;
 }
 
 export function runtimeFromEmitter(emitter: LynxGlobalEventEmitter): LynxRuntime {
@@ -56,12 +58,14 @@ export class FakeLynxHost implements LynxHost {
   private readonly platformValue: string | undefined;
   private readonly codec: LynxTextCodecHelper | undefined;
   private readonly fetchValue: HostFetch | undefined;
+  private readonly tabsValue: TabPrimitives | undefined;
 
   constructor(state: FakeLynxHostState) {
     this.modules = state.nativeModules;
     this.platformValue = state.platform;
     this.codec = state.textCodec;
     this.fetchValue = state.fetchImpl;
+    this.tabsValue = state.tabs;
     if (state.runtime != null) {
       this.runtimeValue = state.runtime;
     } else if (state.emitter != null) {
@@ -91,6 +95,10 @@ export class FakeLynxHost implements LynxHost {
 
   fetchImpl(): HostFetch | undefined {
     return this.fetchValue;
+  }
+
+  tabs(): TabPrimitives | undefined {
+    return this.tabsValue;
   }
 }
 
