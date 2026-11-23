@@ -40,7 +40,7 @@ test("package.json keeps @powersync/web as an optional peer only", () => {
   const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
   assert.equal(pkg.packageManager, "pnpm@12.3.4");
   assert.equal(Object.hasOwn(pkg.dependencies ?? {}, "@powersync/web"), false);
-  assert.equal(pkg.peerDependencies["@powersync/web"], "^2.3.0");
+  assert.equal(pkg.peerDependencies["@powersync/web"], "^2.7.0");
   assert.equal(pkg.peerDependenciesMeta["@powersync/web"]?.optional, true);
 });
 

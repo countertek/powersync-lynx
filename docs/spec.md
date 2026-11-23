@@ -466,12 +466,12 @@ Lynx 4.0 Autolink pages cover Android/iOS only; desktop Autolink keys and `plugi
     "lynx.lib.json"
   ],
   "dependencies": {
-    "@powersync/common": "^2.2.0",
-    "@powersync/shared-internals": "^1.2.0"
+    "@powersync/common": "^2.5.0",
+    "@powersync/shared-internals": "^1.6.0"
   },
   "peerDependencies": {
-    "@powersync/common": "^2.2.0",
-    "@powersync/web": "^2.3.0"
+    "@powersync/common": "^2.5.0",
+    "@powersync/web": "^2.7.0"
   },
   "peerDependenciesMeta": {
     "@powersync/web": { "optional": true }
@@ -552,9 +552,9 @@ PowerSync all-SDK floors; Lynx 4.0 does not raise them.
 | Android | **API 24** |
 | macOS | **14.0** |
 | Windows | **10** |
-| `@powersync/common` | **^2.2.0** (peer + runtime dep) |
-| `@powersync/shared-internals` | **^1.2.0** (runtime dep; official 2.x loop) |
-| `@powersync/web` | **^2.3.0** (optional peer; Host helper only) |
+| `@powersync/common` | **^2.5.0** (peer + runtime dep) |
+| `@powersync/shared-internals` | **^1.6.0** (runtime dep; official 2.x loop) |
+| `@powersync/web` | **^2.7.0** (optional peer; Host helper only) |
 | `powersync-sqlite-core` | **0.5.3** |
 | SQLite | **3.44+**, never Apple system SQLite |
 

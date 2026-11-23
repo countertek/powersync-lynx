@@ -3,7 +3,7 @@
  * Pack powersync-lynx and typecheck two scratch consumers:
  *
  *   native — tarball only, no @powersync/web
- *   web    — tarball + @powersync/web@2.3.0, imports powersync-lynx/web-host
+ *   web    — tarball + @powersync/web@2.7.0, imports powersync-lynx/web-host
  *
  * Also checks that the packed factory stays importable and that attach keeps
  * a literal `import("@powersync/web")` for bundler resolution.
@@ -20,7 +20,7 @@ import { bundleWebHostFactory } from "./bundle-web-host-factory.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const configsDir = path.join(root, "scripts/packed-consumers");
-const webPeer = "@powersync/web@2.3.0";
+const webPeer = "@powersync/web@2.7.0";
 const require = createRequire(import.meta.url);
 
 function pnpmArgs(args) {
@@ -172,11 +172,11 @@ export async function checkPackedConsumers() {
 
     const webPkg = await installConsumer(webDir, "web", tarball, [webPeer]);
     if (installedWebPeer(webDir) === false) {
-      throw new Error("web consumer must install @powersync/web@2.3.0");
+      throw new Error("web consumer must install @powersync/web@2.7.0");
     }
     const webPkgJson = require(path.join(webDir, "node_modules/@powersync/web/package.json"));
-    if (webPkgJson.version !== "2.3.0") {
-      throw new Error(`web consumer resolved @powersync/web@${webPkgJson.version}, expected 2.3.0`);
+    if (webPkgJson.version !== "2.7.0") {
+      throw new Error(`web consumer resolved @powersync/web@${webPkgJson.version}, expected 2.7.0`);
     }
     typecheckConsumer(webDir);
 

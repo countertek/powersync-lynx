@@ -110,11 +110,11 @@ importers:
   .:
     dependencies:
       '@powersync/common':
-        specifier: ^2.2.0
-        version: 2.2.0
+        specifier: ^2.5.0
+        version: 2.5.0
       '@powersync/shared-internals':
-        specifier: ^1.2.0
-        version: 1.2.0(@powersync/common@2.2.0)
+        specifier: ^1.6.0
+        version: 1.6.0(@powersync/common@2.5.0)
     devDependencies:
       '@oxlint/plugins':
         specifier: 1.78.0
@@ -547,13 +547,16 @@ packages:
     resolution: {integrity: sha512-Ypt8KeRYw+4jUtlPirfcHWMrn5ms12VrrFPD+Mds477/7tJxG1Kcz2Yrg2nVcTQEUx/GdlhS+BUg1kmxNm04Ug==}
     engines: {node: ^12.22.0 || ^14.17.0 || >=16.0.0}
 
-  '@powersync/common@2.2.0':
-    resolution: {integrity: sha512-TLQE0De9TAniQIyvfkPiim5MHi/nDely7ZT7iSBHY+xtDt5pwelqwmq0IcWSqZnkTagimGXp7p1z5htWwt0Wbw==}
+  '@powersync/common@2.5.0':
+    resolution: {integrity: sha512-kMlAfrQddGIAFuO7qCyYxf2yxAKdCrwGany9VcHs8Rx9f5KuqxqaCikzq/SC4Evf/f/sTS5eIwczZPPQboTjxw==}
 
-  '@powersync/shared-internals@1.2.0':
-    resolution: {integrity: sha512-wkSgKKcIo9It6axdDBfAJNxzQcfc6hVMlcycxoPSAuMIo/GnXuyi2bl3DpMaZWMutrXlkemPKG3y4nuqxLYpVA==}
+  '@powersync/shared-internals@1.6.0':
+    resolution: {integrity: sha512-UduDSVv9qfonIezOklBUR6c3KNlwOQ8/XCsTDwrBUXnVv4wmAZuIDO7C2hX2KKcQGKn+rU0Z5R9uPtgl1uK7Vg==}
     peerDependencies:
-      '@powersync/common': ^2.2.0
+      '@powersync/common': ^2.5.0
+    peerDependenciesMeta:
+      '@powersync/common':
+        optional: true
 
   '@rolldown/binding-android-arm-eabi@1.2.7':
     resolution: {integrity: sha512-EypzgnYCwyVY4NDHKzGmNJT5b+XaQEBniHxsMdeIQLB/tcCzZnhqrzHpZFbX9iaxx+5RiB8caATBtfvZP7zVxQ==}
@@ -1182,11 +1185,11 @@ snapshots:
 
   '@oxlint/plugins@1.78.0': {}
 
-  '@powersync/common@2.2.0': {}
+  '@powersync/common@2.5.0': {}
 
-  '@powersync/shared-internals@1.2.0(@powersync/common@2.2.0)':
-    dependencies:
-      '@powersync/common': 2.2.0
+  '@powersync/shared-internals@1.6.0(@powersync/common@2.5.0)':
+    optionalDependencies:
+      '@powersync/common': 2.5.0
 
   '@rolldown/binding-android-arm-eabi@1.2.7':
     optional: true
