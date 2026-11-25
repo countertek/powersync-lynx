@@ -1,17 +1,16 @@
 import type { SqliteValue } from "@powersync/common";
 import { getLynxHost } from "../host.ts";
 import type { LynxFetchModule, NativeSyncHttpModule } from "../sync/transport/http-types.ts";
+import { isBigInt } from "../type-guards.ts";
 import {
   copyToArrayBuffer,
-  hasPrimitiveConstructor,
+  decodeTaggedBigInt,
+  encodeTaggedBigInt,
   isNumberArray,
-  type RuntimeValue,
+  type TaggedBigInt,
 } from "../values.ts";
 
-export interface TaggedBigInt {
-  readonly __psBig: true;
-  readonly v: string;
-}
+export type { TaggedBigInt };
 
 export type BindValue =
   | string
@@ -175,7 +174,7 @@ export function blobToArrayBuffer(value: BindValue): BindValue {
   if (value instanceof Uint8Array) {
     return copyToArrayBuffer(value);
   }
-  if (Array.isArray(value) && isNumberArray(value)) {
+  if (isNumberArray(value)) {
     return copyToArrayBuffer(Uint8Array.from(value));
   }
   return value;
@@ -186,8 +185,8 @@ export function encodeBindParams(params: BindValues | null | undefined): BindVal
     return [];
   }
   return params.map((value) => {
-    if (hasPrimitiveConstructor(value, BigInt)) {
-      return { __psBig: true, v: value.toString(10) };
+    if (isBigInt(value)) {
+      return encodeTaggedBigInt(value);
     }
     return blobToArrayBuffer(value);
   });
@@ -198,29 +197,6 @@ export function encodeBindParamRows(params: BindValueRows | null | undefined): B
     return [];
   }
   return params.map(encodeBindParams);
-}
-
-function decodeTaggedBigInt(value: NativeCell): bigint | undefined {
-  if (value === null || value instanceof ArrayBuffer || Array.isArray(value)) {
-    return undefined;
-  }
-  if (!(value instanceof Object)) {
-    return undefined;
-  }
-  // SAFETY: iOS CellToId and the web hop tag INTEGER/bigint as { __psBig, v }.
-  const tagged = value as { readonly __psBig?: RuntimeValue; readonly v?: RuntimeValue };
-  if (tagged.__psBig !== true) {
-    return undefined;
-  }
-  const encoded = tagged.v;
-  if (!hasPrimitiveConstructor(encoded, String) || encoded.length === 0) {
-    throw new Error("invalid tagged bigint");
-  }
-  try {
-    return BigInt(encoded);
-  } catch {
-    throw new Error("invalid tagged bigint");
-  }
 }
 
 export function decodeCell(value: NativeCell): SqliteValue {

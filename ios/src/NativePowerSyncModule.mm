@@ -1,5 +1,6 @@
 #import "NativePowerSyncModule.h"
 #import "NativeSyncHttp.h"
+#import "SyncHttpRequest.h"
 
 #include "ps_sql.h"
 
@@ -39,18 +40,6 @@ NSString* NSStringFromUtf8(const std::string& text) {
                                               length:text.size()
                                             encoding:NSUTF8StringEncoding];
   return result != nil ? result : @"";
-}
-
-std::string Utf8FromNSString(NSString* value) {
-  if (value == nil) {
-    return {};
-  }
-  NSData* data = [value dataUsingEncoding:NSUTF8StringEncoding];
-  if (data == nil || data.length == 0) {
-    return {};
-  }
-  const auto* bytes = static_cast<const char*>(data.bytes);
-  return std::string(bytes, bytes + data.length);
 }
 
 id CellToId(const Cell& cell) {

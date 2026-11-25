@@ -1,9 +1,3 @@
-export interface LynxGlobalProps {
-  device?: string;
-  demoApiUrl?: string;
-  powersyncUrl?: string;
-}
-
 export interface LynxStreamEventFields {
   event?: string;
   data?: string | Uint8Array | ArrayBuffer;
@@ -23,7 +17,6 @@ export interface LynxRuntime {
   getJSModule?(name: string): LynxGlobalEventEmitter | undefined;
   getApp?(): { GlobalEventEmitter?: LynxGlobalEventEmitter };
   GlobalEventEmitter?: LynxGlobalEventEmitter;
-  __globalProps?: LynxGlobalProps;
 }
 
 export interface LynxSystemInfo {

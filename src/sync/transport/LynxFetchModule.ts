@@ -1,6 +1,6 @@
 import { getLynxHost, hostIsAndroid } from "../../host.ts";
 import { isNonNullObject } from "../../type-guards.ts";
-import { copyHeaderRecord, encodeUtf8, toUint8 } from "./bytes.ts";
+import { encodeUtf8, toUint8 } from "./bytes.ts";
 import type { LynxFetchModule, LynxFetchRequest, LynxFetchSuccessPayload } from "./http-types.ts";
 import { syncStreamResponse } from "./response.ts";
 import type { SyncStreamRequest, SyncStreamTransport } from "./SyncStreamTransport.ts";
@@ -33,7 +33,7 @@ export function responseFromLynxFetchSuccess(result: LynxFetchSuccessPayload) {
   return syncStreamResponse({
     status: Number(payload.status ?? 0),
     statusText: String(payload.statusText ?? ""),
-    headers: copyHeaderRecord(payload.headers),
+    headers: payload.headers,
     bytes: toUint8(payload.body),
   });
 }

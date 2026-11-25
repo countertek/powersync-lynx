@@ -1,28 +1,16 @@
 #import "NativeSyncHttp.h"
 #import "IdleCompleteHttp.h"
 #import "StreamingHttp.h"
+#import "SyncHttpRequest.h"
 
 #include "sync_http_policy.h"
 #include "sync_http_session.h"
 
 #include <atomic>
-#include <string>
 
 namespace {
 
 std::atomic_long g_stream_counter{0};
-
-std::string Utf8FromNSString(NSString* value) {
-  if (value == nil) {
-    return {};
-  }
-  NSData* data = [value dataUsingEncoding:NSUTF8StringEncoding];
-  if (data == nil || data.length == 0) {
-    return {};
-  }
-  const auto* bytes = static_cast<const char*>(data.bytes);
-  return std::string(bytes, bytes + data.length);
-}
 
 BOOL UrlLooksLikeSyncStream(NSDictionary* request) {
   id urlValue = request[@"url"];

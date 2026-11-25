@@ -1,4 +1,5 @@
 #import "StreamingHttp.h"
+#import "SyncHttpRequest.h"
 
 #include "sync_http_policy.h"
 #include "utf8_hold.h"
@@ -46,55 +47,14 @@ NSTimeInterval StreamReadTimeoutSec() {
 }
 
 - (void)start {
-  id urlValue = self.request[@"url"];
-  if (![urlValue isKindOfClass:[NSString class]] || [(NSString *)urlValue length] == 0) {
+  NSString *requestError = nil;
+  NSMutableURLRequest *urlRequest =
+      BuildSyncHttpURLRequest(self.request, StreamReadTimeoutSec(), &requestError);
+  if (urlRequest == nil) {
     if (self.onError) {
-      self.onError(@"httpFetch requires string url");
+      self.onError(requestError ?: @"httpFetch invalid url");
     }
     return;
-  }
-  NSURL *url = [NSURL URLWithString:(NSString *)urlValue];
-  if (url == nil) {
-    if (self.onError) {
-      self.onError(@"httpFetch invalid url");
-    }
-    return;
-  }
-
-  NSString *method = @"GET";
-  id methodValue = self.request[@"method"];
-  if ([methodValue isKindOfClass:[NSString class]] && [(NSString *)methodValue length] > 0) {
-    method = [(NSString *)methodValue uppercaseString];
-  }
-
-  NSDictionary *headers = nil;
-  id headersValue = self.request[@"headers"];
-  if ([headersValue isKindOfClass:[NSDictionary class]]) {
-    headers = (NSDictionary *)headersValue;
-  }
-
-  NSData *bodyData = nil;
-  id bodyValue = self.request[@"body"];
-  if ([bodyValue isKindOfClass:[NSString class]]) {
-    bodyData = [(NSString *)bodyValue dataUsingEncoding:NSUTF8StringEncoding];
-  }
-
-  NSMutableURLRequest *urlRequest = [NSMutableURLRequest requestWithURL:url];
-  urlRequest.HTTPMethod = method;
-  urlRequest.timeoutInterval = StreamReadTimeoutSec();
-  urlRequest.cachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
-  if (headers != nil) {
-    for (id key in headers) {
-      if (![key isKindOfClass:[NSString class]]) {
-        continue;
-      }
-      id value = headers[key];
-      NSString *headerValue = [value isKindOfClass:[NSString class]] ? (NSString *)value : [value description];
-      [urlRequest setValue:headerValue forHTTPHeaderField:(NSString *)key];
-    }
-  }
-  if (bodyData != nil && bodyData.length > 0) {
-    urlRequest.HTTPBody = bodyData;
   }
 
   NSURLSessionConfiguration *config = [NSURLSessionConfiguration ephemeralSessionConfiguration];

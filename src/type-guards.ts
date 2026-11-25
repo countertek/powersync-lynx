@@ -8,6 +8,14 @@ export function isNumber(value: unknown): value is number {
   return typeof value === "number";
 }
 
+export function isBoolean(value: unknown): value is boolean {
+  return typeof value === "boolean";
+}
+
+export function isBigInt(value: unknown): value is bigint {
+  return typeof value === "bigint";
+}
+
 export type HostCallable = (...args: never[]) => void;
 
 export function isFunction(value: unknown): value is HostCallable {

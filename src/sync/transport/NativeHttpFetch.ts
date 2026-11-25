@@ -1,12 +1,12 @@
 import { getLynxHost } from "../../host.ts";
-import { isNonNullObject, isString } from "../../type-guards.ts";
+import { isFunction, isNonNullObject, isString } from "../../type-guards.ts";
 import type {
   NativeHttpFetchEnvelope,
   NativeHttpFetchRequest,
   NativeSyncHttpModule,
 } from "./http-types.ts";
-import { decodeBase64, toUint8 } from "./bytes.ts";
-import { enterEarlyCapture } from "./events.ts";
+import { latin1Bytes, toUint8 } from "./bytes.ts";
+import { enterEarlyCapture, streamingReader } from "./events.ts";
 import { syncStreamResponse } from "./response.ts";
 import type { SyncStreamRequest, SyncStreamTransport } from "./SyncStreamTransport.ts";
 
@@ -60,19 +60,67 @@ function contentTypeFromEnvelope(result: NativeHttpFetchEnvelope): string {
   return "application/x-ndjson";
 }
 
+const BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+interface BufferGlobal {
+  Buffer?: {
+    from(value: string, encoding: string): Uint8Array;
+  };
+}
+
+function decodeBase64(text: string): Uint8Array {
+  if (text.length === 0) {
+    return new Uint8Array(0);
+  }
+  if (typeof atob !== "undefined" && isFunction(atob)) {
+    return latin1Bytes(atob(text));
+  }
+  // SAFETY: Node test runtime may expose Buffer on globalThis.
+  const Buf = (globalThis as BufferGlobal).Buffer;
+  if (Buf != null) {
+    return new Uint8Array(Buf.from(text, "base64"));
+  }
+  const clean = text.replace(/[^A-Za-z0-9+/]/g, "");
+  const out = new Uint8Array(Math.floor((clean.length * 3) / 4));
+  let outIndex = 0;
+  for (let i = 0; i < clean.length; i += 4) {
+    const a = BASE64_ALPHABET.indexOf(clean[i]!);
+    const b = BASE64_ALPHABET.indexOf(clean[i + 1] ?? "A");
+    const cChar = clean[i + 2];
+    const dChar = clean[i + 3];
+    const c = cChar == null ? 0 : BASE64_ALPHABET.indexOf(cChar);
+    const d = dChar == null ? 0 : BASE64_ALPHABET.indexOf(dChar);
+    const n = (a << 18) | (b << 12) | (c << 6) | d;
+    out[outIndex++] = (n >> 16) & 0xff;
+    if (cChar != null) {
+      out[outIndex++] = (n >> 8) & 0xff;
+    }
+    if (dChar != null) {
+      out[outIndex++] = n & 0xff;
+    }
+  }
+  return out.subarray(0, outIndex);
+}
+
 /** Native `httpFetch` envelope → finished Response. This adapter owns the wire shape. */
-export function responseFromNativeHttpEnvelope(result: NativeHttpFetchEnvelope) {
+export function responseFromNativeHttpEnvelope(
+  result: NativeHttpFetchEnvelope,
+  native?: NativeSyncHttpModule,
+) {
   const status = Number(result.status ?? 0);
   const statusText = String(result.statusText ?? "");
   const headers = { "content-type": contentTypeFromEnvelope(result) };
   const streamingId =
     isString(result.streamingId) && result.streamingId.length > 0 ? result.streamingId : undefined;
   if (streamingId != null) {
+    const reader = streamingReader(streamingId, () =>
+      requestNativeAbort(native ?? lookupNativeSyncHttp(), streamingId),
+    );
     return syncStreamResponse({
       status,
       statusText,
       headers,
-      streamingId,
+      reader,
     });
   }
   const bodyText = isString(result.body) ? result.body : "";
@@ -94,8 +142,11 @@ function abortError(): Error {
   return error;
 }
 
-function requestNativeAbort(native: NativeSyncHttpModule, streamId: string | undefined): void {
-  const abortFn = native.httpFetchAbort;
+function requestNativeAbort(
+  native: NativeSyncHttpModule | undefined,
+  streamId: string | undefined,
+): void {
+  const abortFn = native?.httpFetchAbort;
   if (abortFn == null || streamId == null) {
     return;
   }
@@ -193,7 +244,7 @@ function fetchViaNativeHttp(request: SyncStreamRequest): Promise<Response> {
           settleReject(new Error(result.message ?? "Native Module HTTP httpFetch failed"));
           return;
         }
-        settleResolve(responseFromNativeHttpEnvelope(result));
+        settleResolve(responseFromNativeHttpEnvelope(result, native));
       } catch (err) {
         settleReject(err instanceof Error ? err : new Error("Native Module HTTP httpFetch failed"));
       }

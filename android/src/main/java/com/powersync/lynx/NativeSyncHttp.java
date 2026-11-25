@@ -59,7 +59,7 @@ final class NativeSyncHttp {
     }
     boolean streaming =
         SyncHttpSession.route(
-                IdleCompleteHttp.isSyncStreamUrl(parsed.url), contextSource.lynxContext() != null)
+                SyncHttpSession.isSyncStreamUrl(parsed.url), contextSource.lynxContext() != null)
             == SyncHttpSession.ROUTE_STREAMING;
     if (streaming) {
       executor.execute(() -> fetchStreaming(parsed, callback));
@@ -232,7 +232,7 @@ final class NativeSyncHttp {
       ok.putString(
           "bodyBase64",
           android.util.Base64.encodeToString(result.body, android.util.Base64.NO_WRAP));
-      ok.putBoolean("idleComplete", IdleCompleteHttp.isSyncStreamUrl(parsed.url));
+      ok.putBoolean("idleComplete", SyncHttpSession.isSyncStreamUrl(parsed.url));
       return ok;
     } catch (Throwable t) {
       return fail(t.getMessage() != null ? t.getMessage() : "httpFetch failed");
