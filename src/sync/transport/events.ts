@@ -288,11 +288,11 @@ function createStreamingReader(
   return {
     async read() {
       for (;;) {
-        if (failure != null) {
-          throw failure;
-        }
         if (queue.length > 0) {
           return { done: false, value: queue.shift()! };
+        }
+        if (failure != null) {
+          throw failure;
         }
         if (finished) {
           return { done: true, value: undefined };
@@ -303,6 +303,7 @@ function createStreamingReader(
       }
     },
     cancel() {
+      queue.length = 0;
       finished = true;
       abortAttached();
       releaseAttached(true);

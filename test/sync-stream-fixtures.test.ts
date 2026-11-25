@@ -173,6 +173,9 @@ test("fixture error-then-end records onError then waits for onEnd", async () => 
         expectStreamingResponse: true,
       });
       const reader = response.body!.getReader();
+      const first = await reader.read();
+      assert.equal(first.done, false);
+      assert.equal(new TextDecoder().decode(first.value), errorThenEnd.chunks[0]);
       await assert.rejects(() => reader.read(), /stream reset/);
     },
   );

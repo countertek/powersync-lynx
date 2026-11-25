@@ -1104,6 +1104,59 @@ test("httpFetch streamingId onError then onEnd fails the reader", async () => {
   );
 });
 
+test("httpFetch streamingId drains queued onData before failing on onError", async () => {
+  const { emitter, listeners } = createFakeEmitter();
+  await withFakeLynxHost(
+    {
+      platform: "iOS",
+      emitter,
+      nativeModules: {
+        NativePowerSyncModule: nativeWithHttp({
+          httpFetch(_request, callback) {
+            const streamingId = "NativePowerSyncHttpStream-drain-before-err";
+            queueMicrotask(() => {
+              callback({
+                ok: true,
+                status: 200,
+                statusText: "OK",
+                contentType: "application/x-ndjson",
+                body: "",
+                streamingId,
+                idleComplete: false,
+              });
+              queueMicrotask(() => {
+                for (const fn of listeners.get(streamingId) ?? []) {
+                  fn({ event: "onData", data: '{"chunk":1}\n' });
+                  fn({ event: "onData", data: '{"chunk":2}\n' });
+                  fn({ event: "onError", error: "stream reset" });
+                  fn({ event: "onEnd" });
+                }
+              });
+            });
+          },
+        }),
+      },
+    },
+    async () => {
+      const remote = new LynxRemote(stubConnector(), silentLogger);
+      const response = await remote.fetch({
+        resource: "http://127.0.0.1:8080/sync/stream",
+        request: { method: "POST", body: "{}" },
+        expectStreamingResponse: true,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      const reader = response.body!.getReader();
+      const first = await reader.read();
+      assert.equal(first.done, false);
+      assert.equal(new TextDecoder().decode(first.value), '{"chunk":1}\n');
+      const second = await reader.read();
+      assert.equal(second.done, false);
+      assert.equal(new TextDecoder().decode(second.value), '{"chunk":2}\n');
+      await assert.rejects(() => reader.read(), /stream reset/);
+    },
+  );
+});
+
 test("httpFetch incremental fetchStream yields NDJSON lines as chunks arrive", async () => {
   const { emitter, listeners } = createFakeEmitter();
   await withFakeLynxHost(
