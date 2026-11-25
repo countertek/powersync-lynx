@@ -1,53 +1,163 @@
+:root {
+  --bg-canvas: #050910;
+  --bg-surface: #0c1422;
+  --bg-control: #132036;
+  --bg-control-hover: #1a2c4a;
+  --border-subtle: #24324a;
+  --border-control: #526a8e;
+  --text-primary: #e7eefc;
+  --text-secondary: #9fb0cc;
+  --accent: #2ee6d6;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
 html,
 body {
   margin: 0;
+  width: 100%;
   height: 100%;
-  background: #050910;
-  color: #e7eefc;
+  background: var(--bg-canvas);
+  color: var(--text-primary);
   font-family:
     ui-sans-serif,
     system-ui,
-    -apple-serif,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
     sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 body {
   display: flex;
   flex-direction: column;
+  height: 100dvh;
+  overflow: hidden;
 }
 
 .chrome {
-  padding: 16px 20px 12px;
-  border-bottom: 1px solid #24324a;
+  flex-shrink: 0;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
+  padding: 10px 16px;
+}
+
+.chrome-inner {
+  max-width: 780px;
+  margin-inline: auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
+
+.chrome-brand {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 10px;
+  min-width: 0;
 }
 
 .eyebrow {
-  margin: 0;
-  color: #2ee6d6;
-  font-size: 12px;
-  letter-spacing: 0.08em;
+  color: var(--accent);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  line-height: 1.3;
   text-transform: uppercase;
 }
 
 h1 {
-  margin: 6px 0 8px;
-  font-size: 22px;
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.3;
+  color: var(--text-primary);
 }
 
-.lede,
-.note {
-  margin: 0 0 8px;
-  color: #93a0b8;
-  font-size: 14px;
-  line-height: 1.45;
+.meta {
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  line-height: 1.4;
 }
 
 code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  color: #e7eefc;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.8125rem;
+  color: var(--text-primary);
+}
+
+.chrome-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.nav-label {
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+
+.device-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-control);
+  background: var(--bg-control);
+  color: var(--text-primary);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.2;
+  text-decoration: none;
+  transition:
+    background-color 150ms ease-out,
+    border-color 150ms ease-out,
+    color 150ms ease-out;
+}
+
+.device-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (hover: hover) {
+  .device-link:hover {
+    background: var(--bg-control-hover);
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .device-link {
+    transition: none;
+  }
+}
+
+.stage {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
 }
 
 lynx-view {
   flex: 1;
   min-height: 0;
+  width: 100%;
+  display: block;
 }

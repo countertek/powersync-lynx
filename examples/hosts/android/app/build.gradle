@@ -27,6 +27,12 @@ android {
       assets.srcDirs += ["${layout.buildDirectory.get().asFile}/lynx-assets"]
     }
   }
+
+  packaging {
+    jniLibs {
+      pickFirsts += ['lib/*/libc++_shared.so']
+    }
+  }
 }
 
 tasks.register('copyLynxBundle', Copy) {
@@ -44,21 +50,21 @@ tasks.named('preBuild').configure { dependsOn('copyLynxBundle') }
 
 configurations.configureEach {
   resolutionStrategy {
-    force 'org.lynxsdk.lynx:lynx:4.0.3'
-    force 'org.lynxsdk.lynx:primjs:4.0.0'
+    force 'org.lynxsdk.lynx:lynx:4.2.0'
+    force 'org.lynxsdk.lynx:primjs:4.2.1'
   }
 }
 
 dependencies {
   implementation 'androidx.annotation:annotation:1.9.1'
-  implementation 'org.lynxsdk.lynx:lynx:4.0.3'
-  implementation 'org.lynxsdk.lynx:lynx-jssdk:4.0.3'
-  implementation 'org.lynxsdk.lynx:lynx-trace:4.0.3'
-  implementation 'org.lynxsdk.lynx:lynx-service-image:4.0.3'
-  implementation 'org.lynxsdk.lynx:lynx-service-log:4.0.3'
-  implementation 'org.lynxsdk.lynx:lynx-service-http:4.0.3'
-  implementation 'org.lynxsdk.lynx:xelement:4.0.3'
-  implementation 'org.lynxsdk.lynx:xelement-input:4.0.3'
+  implementation 'org.lynxsdk.lynx:lynx:4.2.0'
+  implementation 'org.lynxsdk.lynx:lynx-jssdk:4.2.0'
+  implementation 'org.lynxsdk.lynx:lynx-trace:4.2.0'
+  implementation 'org.lynxsdk.lynx:lynx-service-image:4.2.0'
+  implementation 'org.lynxsdk.lynx:lynx-service-log:4.2.0'
+  implementation 'org.lynxsdk.lynx:lynx-service-http:4.2.0'
+  implementation 'org.lynxsdk.lynx:xelement:4.2.0'
+  implementation 'org.lynxsdk.lynx:xelement-input:4.2.0'
   implementation 'com.facebook.fresco:fresco:2.3.0'
   implementation 'com.facebook.fresco:animated-gif:2.3.0'
   implementation 'com.facebook.fresco:animated-webp:2.3.0'

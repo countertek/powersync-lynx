@@ -1,4 +1,22 @@
-page {
+/* Palette tokens (Lynx-safe explicit hex values)
+ * Canvas:         #050910
+ * Surface:        #0c1422
+ * Surface inset:  #08101c
+ * Surface active: #172742
+ * Border subtle:  #1c2940
+ * Border card:    #24324a
+ * Border control: #526a8e (>= 3.3:1 against #0c1422 / #08101c)
+ * Ink primary:    #e7eefc (15.8:1 on #0c1422)
+ * Ink secondary:  #9fb0cc (8.3:1 on #0c1422)
+ * Ink muted:      #8b9cb8 (6.6:1 on #0c1422)
+ * Accent fill:    #2ee6d6 (ink #04221f, 10.6:1)
+ * Status ok:      #34d399
+ * Status pending: #fbbf24
+ * Status danger:  #f87171 (bg #1c1016, border #4c232d)
+ */
+
+page,
+.PageRoot {
   width: 100%;
   height: 100%;
   background-color: #050910;
@@ -7,184 +25,603 @@ page {
 .Page {
   width: 100%;
   height: 100%;
-  min-height: 100%;
-  padding: 20px;
   background-color: #050910;
+  box-sizing: border-box;
 }
 
+.PageFrame {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 20px 16px 32px 16px;
+  box-sizing: border-box;
+}
+
+.Container {
+  width: 100%;
+  max-width: 680px;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+}
+
+/* Hero */
 .Hero {
-  margin-bottom: 16px;
+  margin-bottom: 20px;
 }
 
 .Eyebrow {
   color: #2ee6d6;
   font-size: 12px;
-  letter-spacing: 0.08em;
+  line-height: 16px;
+  font-weight: 600;
+  letter-spacing: 1px;
 }
 
 .Title {
   color: #e7eefc;
   font-size: 28px;
+  line-height: 34px;
   font-weight: 700;
+  letter-spacing: -0.5px;
   margin-top: 4px;
 }
 
 .Sub {
-  color: #93a0b8;
+  color: #9fb0cc;
   font-size: 14px;
+  line-height: 20px;
   margin-top: 6px;
-  line-height: 1.4;
 }
 
-.Row {
-  display: flex;
-  flex-direction: row;
-  flex-wrap: wrap;
-  margin-bottom: 12px;
-}
-
-.Pill {
-  background-color: #0c1422;
-  border-color: #24324a;
-  border-width: 1px;
-  border-radius: 999px;
-  padding: 6px 12px;
-  margin-right: 8px;
-  margin-bottom: 8px;
-}
-
-.PillLabel {
-  color: #e7eefc;
-  font-size: 12px;
-}
-
-.LinkWrap {
-  padding: 8px 0;
-  margin-bottom: 12px;
-}
-
-.Link {
-  color: #2ee6d6;
-  font-size: 14px;
-  font-weight: 600;
-}
-
+/* Banners */
 .Banner {
   background-color: #0c1422;
-  border-radius: 12px;
-  padding: 12px;
+  border-width: 1px;
+  border-style: solid;
+  border-color: #24324a;
+  border-radius: 14px;
+  padding: 16px;
   margin-bottom: 16px;
+  box-sizing: border-box;
 }
 
 .Banner--error {
-  background-color: #3a1518;
+  background-color: #2d1217;
+  border-color: #7f1d1d;
 }
 
 .BannerText {
-  color: #e7eefc;
-  font-size: 13px;
-  line-height: 1.4;
+  color: #fecaca;
+  font-size: 14px;
+  line-height: 20px;
 }
 
-.Card {
+/* Status card */
+.StatusCard {
   background-color: #0c1422;
+  border-width: 1px;
+  border-style: solid;
+  border-color: #24324a;
   border-radius: 16px;
   padding: 16px;
   margin-bottom: 16px;
+  box-sizing: border-box;
+}
+
+.StatusHeader {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 12px;
+  border-bottom-width: 1px;
+  border-bottom-style: solid;
+  border-bottom-color: #1c2940;
+}
+
+.StatusBadges {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-right: 12px;
+}
+
+.StatusChip {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  background-color: #08101c;
+  border-width: 1px;
+  border-style: solid;
+  border-color: #24324a;
+  border-radius: 999px;
+  padding: 6px 12px;
+  margin-right: 8px;
+  margin-top: 4px;
+  margin-bottom: 4px;
+  box-sizing: border-box;
+}
+
+.StatusChip--last {
+  margin-right: 0;
+}
+
+.StatusDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  margin-right: 8px;
+  flex-shrink: 0;
+}
+
+.StatusDot--ok {
+  background-color: #34d399;
+}
+
+.StatusDot--pending {
+  background-color: #fbbf24;
+}
+
+.StatusDot--idle {
+  background-color: #8b9cb8;
+}
+
+.StatusChipText {
+  color: #e7eefc;
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 600;
+}
+
+.ActionBtn {
+  min-height: 44px;
+  padding: 0 16px;
+  border-radius: 10px;
+  background-color: #132036;
+  border-width: 1px;
+  border-style: solid;
+  border-color: #526a8e;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  margin-top: 4px;
+  margin-bottom: 4px;
+  box-sizing: border-box;
+}
+
+.ActionBtn--accent {
+  background-color: #0a2a2d;
+  border-color: #2ee6d6;
+}
+
+.ActionBtnLabel {
+  color: #e7eefc;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+}
+
+.ActionBtnLabel--accent {
+  color: #2ee6d6;
+}
+
+.StatusMeta {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  padding-top: 12px;
+}
+
+.StatusItem {
+  flex-grow: 1;
+  flex-shrink: 0;
+  flex-basis: 128px;
+  min-width: 128px;
+  padding-right: 12px;
+  margin-bottom: 8px;
+  box-sizing: border-box;
+}
+
+.StatusItem--last {
+  padding-right: 0;
+}
+
+.StatusKey {
+  color: #8b9cb8;
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+.StatusVal {
+  color: #e7eefc;
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 500;
+  margin-top: 2px;
+}
+
+/* Main cards */
+.Card {
+  background-color: #0c1422;
+  border-width: 1px;
+  border-style: solid;
+  border-color: #24324a;
+  border-radius: 16px;
+  padding: 16px;
+  margin-bottom: 16px;
+  box-sizing: border-box;
+}
+
+.Card--last {
+  margin-bottom: 0;
+}
+
+.CardHeader {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
 }
 
 .CardTitle {
   color: #e7eefc;
   font-size: 16px;
+  line-height: 22px;
   font-weight: 600;
-  margin-bottom: 8px;
 }
 
-.CardHint {
-  color: #93a0b8;
-  font-size: 12px;
-  margin-bottom: 8px;
+.CardMeta {
+  color: #9fb0cc;
+  font-size: 13px;
+  line-height: 18px;
 }
 
+/* Composer */
 .Composer {
   display: flex;
   flex-direction: row;
+  align-items: center;
   margin-bottom: 12px;
 }
 
 .Field {
   flex: 1;
-  height: 36px;
-  padding: 0 10px;
-  margin-right: 8px;
+  min-width: 0;
+  height: 44px;
+  padding: 0 14px;
+  margin-right: 10px;
   color: #e7eefc;
-  background-color: #050910;
-  border-color: #24324a;
+  font-size: 16px;
+  line-height: 22px;
+  background-color: #08101c;
   border-width: 1px;
-  border-radius: 8px;
+  border-style: solid;
+  border-color: #526a8e;
+  border-radius: 10px;
+  box-sizing: border-box;
 }
 
-.Btn {
+.Field::placeholder {
+  color: #8b9cb8;
+}
+
+.PrimaryBtn {
+  height: 44px;
+  min-width: 72px;
+  padding: 0 18px;
   background-color: #2ee6d6;
-  border-radius: 8px;
-  padding: 8px 12px;
-  margin-right: 8px;
-  margin-bottom: 8px;
-}
-
-.Btn--ghost {
-  background-color: transparent;
-  border-color: #24324a;
   border-width: 1px;
+  border-style: solid;
+  border-color: #2ee6d6;
+  border-radius: 10px;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  box-sizing: border-box;
 }
 
-.BtnLabel {
+.PrimaryBtn--disabled {
+  background-color: #132036;
+  border-color: #24324a;
+}
+
+.PrimaryBtnLabel {
   color: #04221f;
-  font-size: 13px;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 700;
+}
+
+.PrimaryBtnLabel--disabled {
+  color: #8b9cb8;
+}
+
+/* Segmented filter control (outer radius 12px = inner 8px + padding 4px) */
+.Segmented {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  background-color: #08101c;
+  border-width: 1px;
+  border-style: solid;
+  border-color: #24324a;
+  border-radius: 12px;
+  padding: 4px;
+  margin-bottom: 12px;
+  box-sizing: border-box;
+}
+
+.Segment {
+  flex: 1;
+  min-height: 40px;
+  padding: 0 8px;
+  margin-right: 4px;
+  border-radius: 8px;
+  border-width: 1px;
+  border-style: solid;
+  border-color: transparent;
+  background-color: transparent;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+}
+
+.Segment--last {
+  margin-right: 0;
+}
+
+.Segment--active {
+  background-color: #172742;
+  border-color: #526a8e;
+}
+
+.SegmentLabel {
+  color: #9fb0cc;
+  font-size: 14px;
+  line-height: 20px;
   font-weight: 600;
 }
 
-.Btn--ghost .BtnLabel {
+.SegmentLabel--active {
   color: #e7eefc;
+}
+
+.SegmentCount {
+  color: #8b9cb8;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 600;
+  margin-left: 6px;
+}
+
+.SegmentCount--active {
+  color: #2ee6d6;
+}
+
+/* Empty state */
+.EmptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 28px 16px 20px 16px;
+  box-sizing: border-box;
+}
+
+.EmptyTitle {
+  color: #e7eefc;
+  font-size: 15px;
+  line-height: 22px;
+  font-weight: 600;
+}
+
+.EmptyBody {
+  color: #9fb0cc;
+  font-size: 13px;
+  line-height: 20px;
+  margin-top: 6px;
+  text-align: center;
+}
+
+.EmptyAction {
+  margin-top: 14px;
+}
+
+/* Todo list */
+.List {
+  display: flex;
+  flex-direction: column;
 }
 
 .Item {
   display: flex;
   flex-direction: row;
   align-items: center;
-  padding: 8px 0;
-  border-bottom-color: #24324a;
+  min-height: 52px;
+  padding: 6px 0;
   border-bottom-width: 1px;
+  border-bottom-style: solid;
+  border-bottom-color: #1c2940;
+  box-sizing: border-box;
+}
+
+.Item--last {
+  border-bottom-width: 0;
+  padding-bottom: 2px;
 }
 
 .ItemMain {
   flex: 1;
-  padding-right: 8px;
+  min-width: 0;
+  min-height: 44px;
+  padding-right: 12px;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  box-sizing: border-box;
+}
+
+.Checkbox {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border-width: 2px;
+  border-style: solid;
+  border-color: #526a8e;
+  background-color: #08101c;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-right: 12px;
+  box-sizing: border-box;
+}
+
+.Checkbox--checked {
+  background-color: #2ee6d6;
+  border-color: #2ee6d6;
+}
+
+.CheckboxMark {
+  color: #04221f;
+  font-size: 14px;
+  line-height: 18px;
+  font-weight: 700;
 }
 
 .ItemTitle {
+  flex: 1;
+  min-width: 0;
   color: #e7eefc;
   font-size: 15px;
+  line-height: 22px;
+  font-weight: 400;
 }
 
 .ItemTitle--done {
-  color: #93a0b8;
+  color: #8b9cb8;
+  text-decoration: line-through;
 }
 
+.DeleteBtn {
+  min-height: 44px;
+  min-width: 68px;
+  padding: 0 12px;
+  border-radius: 8px;
+  background-color: #1c1016;
+  border-width: 1px;
+  border-style: solid;
+  border-color: #4c232d;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  box-sizing: border-box;
+}
+
+.DeleteBtnLabel {
+  color: #f87171;
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 600;
+}
+
+/* Sync log */
 .LogHead {
-  margin-bottom: 8px;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 44px;
+}
+
+.LogHeadLeft {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+}
+
+.CountBadge {
+  background-color: #08101c;
+  border-width: 1px;
+  border-style: solid;
+  border-color: #24324a;
+  border-radius: 999px;
+  padding: 2px 10px;
+  margin-left: 10px;
+  box-sizing: border-box;
+}
+
+.CountBadgeText {
+  color: #9fb0cc;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
+}
+
+.LogToggle {
+  color: #9fb0cc;
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 600;
+}
+
+.LogBody {
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top-width: 1px;
+  border-top-style: solid;
+  border-top-color: #1c2940;
+}
+
+.LogEmpty {
+  color: #8b9cb8;
+  font-size: 13px;
+  line-height: 20px;
+  padding: 6px 0;
 }
 
 .LogRow {
-  margin-bottom: 8px;
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  padding: 6px 0;
+  border-bottom-width: 1px;
+  border-bottom-style: solid;
+  border-bottom-color: #141f33;
+}
+
+.LogRow--last {
+  border-bottom-width: 0;
+  padding-bottom: 0;
 }
 
 .LogAt {
-  color: #93a0b8;
-  font-size: 11px;
+  width: 68px;
+  flex-shrink: 0;
+  color: #8b9cb8;
+  font-size: 12px;
+  line-height: 18px;
+  margin-right: 10px;
 }
 
 .LogMsg {
+  flex: 1;
+  min-width: 0;
   color: #e7eefc;
   font-size: 13px;
+  line-height: 18px;
 }
