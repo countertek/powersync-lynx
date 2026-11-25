@@ -1,8 +1,15 @@
 package com.powersync.lynx.showcase;
 
 import android.app.Activity;
+import android.graphics.Color;
+import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.Window;
+import android.view.WindowInsets;
+import android.widget.FrameLayout;
 import com.lynx.tasm.LynxError;
 import com.lynx.tasm.LynxLoadMeta;
 import com.lynx.tasm.LynxView;
@@ -40,7 +47,40 @@ public class MainActivity extends Activity {
                 + " size=" + lynxView.getWidth() + "x" + lynxView.getHeight());
           }
         });
-    setContentView(lynxView);
+    Window window = getWindow();
+    int canvasColor = Color.parseColor("#050910");
+
+    FrameLayout container = new FrameLayout(this);
+    container.setBackgroundColor(canvasColor);
+    container.addView(
+        lynxView,
+        new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+    container.setOnApplyWindowInsetsListener(
+        (View view, WindowInsets insets) -> {
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            android.graphics.Insets bars =
+                insets.getInsets(
+                    WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+            view.setPadding(bars.left, bars.top, bars.right, bars.bottom);
+          } else {
+            view.setPadding(
+                insets.getSystemWindowInsetLeft(),
+                insets.getSystemWindowInsetTop(),
+                insets.getSystemWindowInsetRight(),
+                insets.getSystemWindowInsetBottom());
+          }
+          return insets;
+        });
+    setContentView(container);
+    window.setStatusBarColor(canvasColor);
+    window.setNavigationBarColor(canvasColor);
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && window.getInsetsController() != null) {
+      window.getInsetsController().setSystemBarsAppearance(
+          0,
+          android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+              | android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);
+    }
     Map<String, String> pageConfig = new HashMap<>();
     pageConfig.put("enableFetchAPIStandardStreaming", "true");
     LynxLoadMeta.Builder meta = new LynxLoadMeta.Builder();

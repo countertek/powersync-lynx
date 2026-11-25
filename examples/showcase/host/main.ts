@@ -8,11 +8,22 @@ if (view == null) {
 
 const params = new URLSearchParams(window.location.search);
 const device = params.get("device")?.trim() || "web";
-const globalProps = JSON.stringify({ device });
+const props: { device: string; demoApiUrl?: string; powersyncUrl?: string } = { device };
+const demoApiUrl = params.get("demoApiUrl")?.trim();
+const powersyncUrl = params.get("powersyncUrl")?.trim();
+if (demoApiUrl) {
+  props.demoApiUrl = demoApiUrl;
+}
+if (powersyncUrl) {
+  props.powersyncUrl = powersyncUrl;
+}
+const globalProps = JSON.stringify(props);
 view.setAttribute("global-props", globalProps);
 
-const host = view as LynxViewHost & { globalProps?: { device: string } };
-host.globalProps = { device };
+const host = view as LynxViewHost & {
+  globalProps?: { device: string; demoApiUrl?: string; powersyncUrl?: string };
+};
+host.globalProps = props;
 
 // attach must run before url/start so lynx-bg sees NativePowerSyncModule.
 attach(host);

@@ -8,21 +8,22 @@
   </head>
   <body>
     <header class="chrome">
-      <p class="eyebrow">Lynx-for-Web host</p>
-      <h1>PowerSync Lynx TODO</h1>
-      <p class="lede">
-        This page calls <code>attach()</code> on <code>&lt;lynx-view&gt;</code> before the bundle
-        starts, mapping Native Module SQL RPC onto WASQLite. Open
-        <code>?device=a</code> and <code>?device=b</code> in two windows for the cross-device money
-        shot — each device id gets its own local DB.
-      </p>
-      <p class="note">
-        Direct-wires to a local compose stack at <code>127.0.0.1:8080</code> (PowerSync) and
-        <code>127.0.0.1:8081</code> (demo token + upload). If that stack is down, the app stays a
-        local offline queue. See <code>examples/README.md</code> for what is and is not verified.
-      </p>
+      <div class="chrome-inner">
+        <div class="chrome-brand">
+          <span class="eyebrow">Lynx-for-Web</span>
+          <h1>PowerSync TODO</h1>
+          <span class="meta">WASQLite host · <code>127.0.0.1:8080</code></span>
+        </div>
+        <nav class="chrome-nav" aria-label="Demo devices">
+          <span class="nav-label">Open device:</span>
+          <a class="device-link" href="?device=a">Device A</a>
+          <a class="device-link" href="?device=b">Device B</a>
+        </nav>
+      </div>
     </header>
-    <lynx-view id="ps-lynx" style="width: 100%; height: 100%"></lynx-view>
+    <main class="stage">
+      <lynx-view id="ps-lynx"></lynx-view>
+    </main>
     <script type="module" src="./main.ts"></script>
   </body>
 </html>
