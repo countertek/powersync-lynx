@@ -106,3 +106,24 @@ test("fake emitter runtime is stable across LynxHost lookups", () => {
   assert.equal(host.runtime()?.getJSModule?.("GlobalEventEmitter"), emitter);
   assert.deepEqual(host.globalEventEmitters(), [emitter]);
 });
+
+test("PrimJSLynxHost.nativeModules handles sql-only, empty, and unset NativeModules", () => {
+  const previousModules = globalThis.NativeModules;
+  const host = new PrimJSLynxHost();
+  try {
+    const sqlModule = nativeWithHttp({});
+    globalThis.NativeModules = { NativePowerSyncModule: sqlModule };
+    const sqlOnly = host.nativeModules();
+    assert.equal(sqlOnly?.NativePowerSyncModule, sqlModule);
+    assert.equal(sqlOnly?.LynxFetchModule, undefined);
+    assert.deepEqual(sqlOnly, { NativePowerSyncModule: sqlModule });
+
+    globalThis.NativeModules = {};
+    assert.deepEqual(host.nativeModules(), {});
+
+    globalThis.NativeModules = undefined;
+    assert.equal(host.nativeModules(), undefined);
+  } finally {
+    globalThis.NativeModules = previousModules;
+  }
+});

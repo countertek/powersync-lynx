@@ -166,6 +166,7 @@ $(IOS_TEST_BIN): deps ios/tests/ios_module_rpc_test.mm ios/tests/ios_sync_http_f
 		ios/src/NativePowerSyncModule.h ios/src/NativeSyncHttp.mm ios/src/NativeSyncHttp.h \
 		ios/src/IdleCompleteHttp.mm ios/src/IdleCompleteHttp.h \
 		ios/src/StreamingHttp.mm ios/src/StreamingHttp.h \
+		ios/src/SyncHttpRequest.h \
 		shared/sync_http_policy.h shared/utf8_hold.h shared/sync_http_session.h \
 		shared/sync_stream_fixtures.h \
 		shared/tests/ndjson_http_replay.h shared/fixtures/sync-stream.json \
@@ -178,6 +179,7 @@ $(IOS_TEST_BIN): deps ios/tests/ios_module_rpc_test.mm ios/tests/ios_sync_http_f
 	cp ios/src/NativeSyncHttp.h ios/src/NativeSyncHttp.mm shared/build/ios-src/
 	cp ios/src/IdleCompleteHttp.h ios/src/IdleCompleteHttp.mm shared/build/ios-src/
 	cp ios/src/StreamingHttp.h ios/src/StreamingHttp.mm shared/build/ios-src/
+	cp ios/src/SyncHttpRequest.h shared/build/ios-src/
 	clang++ -std=c++17 -fPIC -O2 -fobjc-arc -fblocks \
 		-Ishared/build/ios-src -Iios/tests -Iios/tests/stubs -Ishared -Ishared/tests -I$(SQLITE_DIR) \
 		$(SQLITE_FLAGS) -DPS_SQL_LINK_CORE=1 \

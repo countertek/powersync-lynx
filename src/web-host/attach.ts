@@ -1,6 +1,6 @@
 import {
   MODULE_NAME,
-  createOnNativeModulesCall,
+  WebHostSqlBridge,
   type AttachOptions,
   type NativeModulesCallHandler,
 } from "./page-rpc.ts";
@@ -38,7 +38,8 @@ export function attach(lynxView: LynxViewHost, options?: AttachOptions): AttachH
   lynxView.nativeModulesMap = nextMap;
 
   const previousCall = lynxView.onNativeModulesCall;
-  const wrapped = createOnNativeModulesCall(previousCall, options, loadWeb);
+  const bridge = new WebHostSqlBridge(options, loadWeb);
+  const wrapped = bridge.createHandler(previousCall);
   lynxView.onNativeModulesCall = wrapped;
 
   return {

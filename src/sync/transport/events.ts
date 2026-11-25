@@ -99,25 +99,6 @@ function releaseStream(name: string, retire: boolean): void {
   }
 }
 
-function retireNames(names: readonly string[]): void {
-  for (const name of names) {
-    earlyEvents.delete(name);
-    retireStream(name);
-  }
-}
-
-function abortNativeHttp(streamId: string): void {
-  const abortFn = getLynxHost().nativeModules()?.NativePowerSyncModule?.httpFetchAbort;
-  if (abortFn == null) {
-    return;
-  }
-  try {
-    abortFn(streamId, () => {});
-  } catch {
-    // Presence-only; PrimJS host methods may throw on unused abort.
-  }
-}
-
 function drainEarly(name: string, deliver: (payload: LynxStreamEventPayload) => void): void {
   const pending = earlyEvents.get(name);
   earlyEvents.delete(name);
@@ -242,11 +223,14 @@ function handlerStillAttached(
   return false;
 }
 
-function createStreamingReader(eventName: string): ReadableStreamDefaultReader<Uint8Array> {
+function createStreamingReader(
+  eventName: string,
+  onCancel?: () => void,
+): ReadableStreamDefaultReader<Uint8Array> {
   const queue: Uint8Array[] = [];
   let finished = false;
   let released = false;
-  let nativeAborted = false;
+  let cancelNotified = false;
   let failure: Error | undefined;
   let wake: (() => void) | undefined;
   wrapLynxGetJSModule();
@@ -255,24 +239,21 @@ function createStreamingReader(eventName: string): ReadableStreamDefaultReader<U
     throw new Error("GlobalEventEmitter is not registered");
   }
   const releaseAttached = (retire: boolean): void => {
-    if (retire) {
-      retireNames([eventName]);
-    }
     // Always drop handlers. A buffered onEnd can set released before every
     // emitter is bound; cancel must still strip a later stray attachment.
     for (const emitter of emitters) {
       const handlers = streamHandlers.get(emitter);
       handlers?.delete(eventName);
-      releaseStream(eventName, false);
     }
+    releaseStream(eventName, retire);
     released = true;
   };
   const abortAttached = (): void => {
-    if (nativeAborted) {
+    if (cancelNotified) {
       return;
     }
-    nativeAborted = true;
-    abortNativeHttp(eventName);
+    cancelNotified = true;
+    onCancel?.();
   };
   const onEvent = (payload: LynxStreamEventPayload) => {
     const eventPayload = unwrapStreamPayload(payload);
@@ -333,6 +314,9 @@ function createStreamingReader(eventName: string): ReadableStreamDefaultReader<U
   } as ReadableStreamDefaultReader<Uint8Array>;
 }
 
-export function streamingReader(eventName: string): ReadableStreamDefaultReader<Uint8Array> {
-  return createStreamingReader(eventName);
+export function streamingReader(
+  eventName: string,
+  onCancel?: () => void,
+): ReadableStreamDefaultReader<Uint8Array> {
+  return createStreamingReader(eventName, onCancel);
 }

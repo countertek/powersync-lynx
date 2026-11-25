@@ -4,7 +4,7 @@ import {
   encodeCloneable,
   type Cloneable,
 } from "./cloneable.ts";
-import { errorCode } from "../values.ts";
+import { failEnvelopeFromError } from "../values.ts";
 import type { NativeWireEnvelope } from "../adapter/native.ts";
 
 type NativeModulesCall = (name: string, data: Cloneable) => Cloneable | Promise<Cloneable>;
@@ -14,25 +14,6 @@ interface LynxNativeModulesBag {
 }
 
 type FactoryCallback = (envelope: NativeWireEnvelope) => void;
-
-interface HopErrorFields {
-  message?: string;
-  code?: number;
-}
-
-function hopMessage(err: Error | HopErrorFields | string): string {
-  if (err instanceof Error) {
-    return err.message;
-  }
-  if (err instanceof Object && err.message != null) {
-    return String(err.message);
-  }
-  return String(err);
-}
-
-function hopCode(err: Error | HopErrorFields | string): number | undefined {
-  return err instanceof Object ? errorCode(err) : undefined;
-}
 
 function hop(
   NativeModulesCall: NativeModulesCall,
@@ -45,13 +26,8 @@ function hop(
       // SAFETY: NativeModulesCall returns a Cloneable envelope for this module's SQL RPC.
       callback(decodeCloneable(result) as NativeWireEnvelope);
     })
-    .catch((err: Error | HopErrorFields | string) => {
-      const envelope: NativeWireEnvelope = { ok: false, message: hopMessage(err) };
-      const code = hopCode(err);
-      if (code !== undefined) {
-        envelope.code = code;
-      }
-      callback(envelope);
+    .catch((cause: unknown) => {
+      callback(failEnvelopeFromError(cause));
     });
 }
 

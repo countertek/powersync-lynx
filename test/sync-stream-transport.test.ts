@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { LynxRemote } from "../src/sync/LynxRemote.ts";
-import { headerMap, preferNdjsonAccept } from "../src/sync/transport/bytes.ts";
 import { responseFromLynxFetchSuccess } from "../src/sync/transport/LynxFetchModule.ts";
 import { responseFromNativeHttpEnvelope } from "../src/sync/transport/NativeHttpFetch.ts";
+import { syncStreamResponse } from "../src/sync/transport/response.ts";
 import {
+  headerMap,
   pickSyncStreamTransport,
+  preferNdjsonAccept,
   syncStreamRequestFromFetch,
 } from "../src/sync/transport/SyncStreamTransport.ts";
 import {
@@ -324,6 +326,56 @@ test("HostFetch returns a finished Response from the Fetch body without sniffing
       const first = await response.body!.getReader().read();
       assert.equal(new TextDecoder().decode(first.value), '{"ok":1}\n');
       assert.equal(sawStreamingIdSniff, false);
+    },
+  );
+});
+
+test("syncStreamResponse accepts a caller-owned reader without GlobalEventEmitter", async () => {
+  const reader = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('{"ok":1}\n'));
+      controller.close();
+    },
+  }).getReader();
+  const response = syncStreamResponse({
+    status: 200,
+    statusText: "OK",
+    headers: { "Content-Type": "application/x-ndjson" },
+    reader,
+  });
+  assert.equal(response.ok, true);
+  assert.equal(response.headers.get("content-type"), "application/x-ndjson");
+  const first = await response.body!.getReader().read();
+  assert.equal(first.done, false);
+  assert.equal(new TextDecoder().decode(first.value), '{"ok":1}\n');
+});
+
+test("responseFromNativeHttpEnvelope cancels via the supplied native module once", async () => {
+  const abortIds: string[] = [];
+  await withFakeLynxHost(
+    {
+      emitter: { addListener() {} },
+    },
+    async () => {
+      const response = responseFromNativeHttpEnvelope(
+        {
+          ok: true,
+          status: 200,
+          streamingId: "NativePowerSyncHttpStream-cancel-once",
+          body: "",
+        },
+        {
+          httpFetch() {},
+          httpFetchAbort(streamId, callback) {
+            abortIds.push(streamId);
+            callback({ ok: true });
+          },
+        },
+      );
+      const reader = response.body!.getReader();
+      await reader.cancel();
+      await reader.cancel();
+      assert.deepEqual(abortIds, ["NativePowerSyncHttpStream-cancel-once"]);
     },
   );
 });

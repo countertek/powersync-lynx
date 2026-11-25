@@ -31,7 +31,10 @@ function globalProps(): {
   powersyncUrl?: string;
 } {
   try {
-    return lynx.__globalProps ?? {};
+    const runtime = lynx as {
+      __globalProps?: { device?: string; demoApiUrl?: string; powersyncUrl?: string };
+    };
+    return runtime.__globalProps ?? {};
   } catch {
     return {};
   }
@@ -96,8 +99,9 @@ type LynxFetchNative = {
 
 function lynxFetchNative(): LynxFetchNative | undefined {
   try {
-    const fromGlobal = (globalThis as unknown as { NativeModules?: { LynxFetchModule?: LynxFetchNative } })
-      .NativeModules?.LynxFetchModule;
+    const fromGlobal = (
+      globalThis as unknown as { NativeModules?: { LynxFetchModule?: LynxFetchNative } }
+    ).NativeModules?.LynxFetchModule;
     if (fromGlobal != null) {
       return fromGlobal;
     }
@@ -174,13 +178,13 @@ export async function demoFetch(url: string, init: RequestInit = {}): Promise<Re
   if (typeof init.body === "string") {
     payload.body = encodeUtf8(init.body);
   }
-  const result = await new Promise<{ status?: number; body?: ArrayBuffer | Uint8Array | string }>((resolve, reject) => {
-    native.fetch(
-      payload,
-      resolve,
-      (error) => reject(new Error(error?.message ?? "LynxFetchModule.fetch failed")),
-    );
-  });
+  const result = await new Promise<{ status?: number; body?: ArrayBuffer | Uint8Array | string }>(
+    (resolve, reject) => {
+      native.fetch(payload, resolve, (error) =>
+        reject(new Error(error?.message ?? "LynxFetchModule.fetch failed")),
+      );
+    },
+  );
   const status = Number(result.status ?? 0);
   const textBody = decodeBody(result.body);
   return {

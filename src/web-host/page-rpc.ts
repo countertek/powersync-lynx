@@ -5,12 +5,8 @@ import {
   type Cloneable,
   type CloneableObject,
 } from "./cloneable.ts";
-import {
-  copyToArrayBuffer,
-  errorCode,
-  hasPrimitiveConstructor,
-  type RuntimeValue,
-} from "../values.ts";
+import { isBoolean, isNumber, isString } from "../type-guards.ts";
+import { copyToArrayBuffer, failEnvelopeFromError } from "../values.ts";
 import type { NativeEnvelope, NativeFailEnvelope, NativeOkEnvelope } from "../adapter/native.ts";
 
 export const MODULE_NAME = "NativePowerSyncModule";
@@ -113,50 +109,8 @@ interface ConnectionEntry {
   tail: Promise<void>;
 }
 
-const files = new Map<string, FileEntry>();
-const connections = new Map<string, ConnectionEntry>();
-let nextDbId = 0;
-
 export function fileKey(dbFilename: string, dbLocation?: string): string {
   return `${dbFilename}\0${dbLocation ?? ""}`;
-}
-
-export function resetWebHostMapping(): void {
-  files.clear();
-  connections.clear();
-  nextDbId = 0;
-}
-
-export interface MappingStats {
-  files: number;
-  connections: number;
-}
-
-export function mappingStats(): MappingStats {
-  return {
-    files: files.size,
-    connections: connections.size,
-  };
-}
-
-interface CatchErrorFields {
-  message?: string;
-  code?: number;
-}
-
-function failure(err: Error | CatchErrorFields | string): NativeFailEnvelope {
-  const message =
-    err instanceof Error
-      ? err.message
-      : err instanceof Object && err.message != null
-        ? String(err.message)
-        : String(err);
-  const result: NativeFailEnvelope = { ok: false, message };
-  if (err instanceof Object) {
-    const code = errorCode(err);
-    if (code !== undefined) result.code = code;
-  }
-  return result;
 }
 
 function pickAttachOpenFields(attachOptions?: AttachOptions): AttachOptions {
@@ -180,37 +134,33 @@ function assignAttachOption(
 ): void {
   switch (key) {
     case "vfs":
-      if (hasPrimitiveConstructor(value, String)) open.vfs = value;
+      if (isString(value)) open.vfs = value;
       break;
     case "useWebWorker":
-      if (hasPrimitiveConstructor(value, Boolean)) open.useWebWorker = value;
+      if (isBoolean(value)) open.useWebWorker = value;
       break;
     case "enableMultiTabs":
-      if (hasPrimitiveConstructor(value, Boolean)) open.enableMultiTabs = value;
+      if (isBoolean(value)) open.enableMultiTabs = value;
       break;
     case "worker":
-      if (
-        value !== undefined &&
-        !hasPrimitiveConstructor(value, Boolean) &&
-        !hasPrimitiveConstructor(value, Number)
-      ) {
+      if (value !== undefined && !isBoolean(value) && !isNumber(value)) {
         open.worker = value;
       }
       break;
     case "additionalReaders":
-      if (hasPrimitiveConstructor(value, Number)) open.additionalReaders = value;
+      if (isNumber(value)) open.additionalReaders = value;
       break;
     case "temporaryStorage":
-      if (hasPrimitiveConstructor(value, String)) open.temporaryStorage = value;
+      if (isString(value)) open.temporaryStorage = value;
       break;
     case "cacheSizeKb":
-      if (hasPrimitiveConstructor(value, Number)) open.cacheSizeKb = value;
+      if (isNumber(value)) open.cacheSizeKb = value;
       break;
     case "databaseWorkerLogLevel":
-      if (hasPrimitiveConstructor(value, Number)) open.databaseWorkerLogLevel = value;
+      if (isNumber(value)) open.databaseWorkerLogLevel = value;
       break;
     case "disableSSRWarning":
-      if (hasPrimitiveConstructor(value, Boolean)) open.disableSSRWarning = value;
+      if (isBoolean(value)) open.disableSSRWarning = value;
       break;
   }
 }
@@ -225,7 +175,7 @@ interface SafariWindow {
  */
 function sharesFileBetweenTabs(attachOptions: AttachOptions | undefined): boolean {
   const requested = attachOptions?.enableMultiTabs;
-  if (hasPrimitiveConstructor(requested, Boolean)) {
+  if (isBoolean(requested)) {
     return requested;
   }
   if (globalThis.navigator == null || globalThis.SharedWorker == null) {
@@ -303,66 +253,6 @@ async function loadWebModule(loadWeb: LoadWeb): Promise<PowerSyncWebModule> {
   return web;
 }
 
-async function openFile(
-  fileKeyValue: string,
-  dbFilename: string,
-  dbLocation: string | undefined,
-  attachOptions: AttachOptions | undefined,
-  loadWeb: LoadWeb,
-): Promise<FileEntry> {
-  let entry = files.get(fileKeyValue);
-  if (entry?.pending) {
-    await entry.pending;
-    entry = files.get(fileKeyValue);
-  }
-  if (entry?.adapter) {
-    entry.refCount += 1;
-    return entry;
-  }
-
-  entry = { refCount: 0, adapter: null, pending: null, pendingTables: [] };
-  files.set(fileKeyValue, entry);
-  const opening = entry;
-  opening.pending = (async () => {
-    const web = await loadWebModule(loadWeb);
-    const logger =
-      web.createConsoleLogger instanceof Function
-        ? web.createConsoleLogger({ prefix: "powersync-lynx" })
-        : { log() {} };
-    const open: WASQLiteOpenFields = {
-      dbFilename,
-      ...pickAttachOpenFields(attachOptions),
-    };
-    if (dbLocation != null && dbLocation !== "") {
-      open.dbLocation = dbLocation;
-    }
-    const factory = new web.WASQLiteOpenFactory({ open, logger });
-    let adapter: WASQLiteAdapter | Promise<WASQLiteAdapter> = factory.openDB();
-    if (adapter instanceof Promise) {
-      adapter = await adapter;
-    }
-    opening.adapter = adapter;
-  })();
-  try {
-    await opening.pending;
-  } catch (err) {
-    if (files.get(fileKeyValue) === opening) {
-      files.delete(fileKeyValue);
-    }
-    throw err;
-  } finally {
-    opening.pending = null;
-  }
-  if (!opening.adapter) {
-    if (files.get(fileKeyValue) === opening) {
-      files.delete(fileKeyValue);
-    }
-    throw new Error(`WASQLite open failed for ${dbFilename}`);
-  }
-  opening.refCount += 1;
-  return opening;
-}
-
 interface OpenRequest {
   dbFilename?: string;
   dbLocation?: string;
@@ -376,99 +266,21 @@ interface ExecuteRequest {
   params?: Cloneable;
 }
 
+interface ResolvedExecute {
+  ok: true;
+  conn: ConnectionEntry;
+  entry: FileEntry;
+  adapter: WASQLiteAdapter;
+  sql: string;
+  params: WASQLiteBindValue;
+}
+
 function asOpenRequest(data: Cloneable): OpenRequest {
   if (data instanceof Object && !Array.isArray(data) && !(data instanceof ArrayBuffer)) {
     // SAFETY: Native Module open/close payloads are JSON-like OpenRequest records.
     return data as OpenRequest;
   }
   return {};
-}
-
-async function dispatchOpen(
-  data: Cloneable,
-  attachOptions: AttachOptions | undefined,
-  loadWeb: LoadWeb,
-): Promise<NativeEnvelope> {
-  const request = asOpenRequest(data);
-  const dbFilename = request.dbFilename;
-  if (!hasPrimitiveConstructor(dbFilename, String) || dbFilename.length === 0) {
-    return { ok: false, message: "open requires dbFilename" };
-  }
-  const dbLocation = hasPrimitiveConstructor(request.dbLocation, String)
-    ? request.dbLocation
-    : undefined;
-  const key = fileKey(dbFilename, dbLocation);
-  await openFile(key, dbFilename, dbLocation, attachOptions, loadWeb);
-  const dbId = `ps-${++nextDbId}`;
-  connections.set(dbId, {
-    fileKey: key,
-    readOnly: request.readOnly === true,
-    lease: null,
-    tail: Promise.resolve(),
-  });
-  if (sharesFileBetweenTabs(attachOptions)) {
-    return { ok: true, dbId, multiTab: true };
-  }
-  return { ok: true, dbId };
-}
-
-async function dispatchClose(data: Cloneable): Promise<NativeEnvelope> {
-  const request = asOpenRequest(data);
-  const dbId = hasPrimitiveConstructor(data, String)
-    ? data
-    : hasPrimitiveConstructor(request.dbId, String)
-      ? request.dbId
-      : undefined;
-  if (!hasPrimitiveConstructor(dbId, String) || !connections.has(dbId)) {
-    return { ok: false, message: `unknown dbId: ${dbId}` };
-  }
-  const conn = connections.get(dbId);
-  if (conn == null) {
-    return { ok: false, message: `unknown dbId: ${dbId}` };
-  }
-  return enqueueConnection(conn, async () => {
-    if (connections.get(dbId) !== conn) {
-      return { ok: false, message: `unknown dbId: ${dbId}` };
-    }
-    await abortHeldLease(conn);
-    const entry = files.get(conn.fileKey);
-    if (entry == null) {
-      connections.delete(dbId);
-      return { ok: true };
-    }
-    if (entry.refCount > 1) {
-      connections.delete(dbId);
-      entry.refCount -= 1;
-      return { ok: true };
-    }
-    const adapter = entry.adapter;
-    if (adapter == null) {
-      dropClosedFile(dbId, conn, entry);
-      return { ok: true };
-    }
-    const closing = Promise.resolve(adapter.close()).then(() => undefined);
-    entry.pending = closing;
-    try {
-      await closing;
-      dropClosedFile(dbId, conn, entry);
-      return { ok: true };
-    } catch (err) {
-      return failure(err instanceof Error || err instanceof Object ? err : String(err));
-    } finally {
-      if (entry.pending === closing) {
-        entry.pending = null;
-      }
-    }
-  });
-}
-
-function dropClosedFile(dbId: string, conn: ConnectionEntry, entry: FileEntry): void {
-  connections.delete(dbId);
-  entry.refCount -= 1;
-  entry.adapter = null;
-  if (files.get(conn.fileKey) === entry && entry.refCount <= 0 && entry.adapter == null) {
-    files.delete(conn.fileKey);
-  }
 }
 
 function isUpdateHooksGet(sql: string): boolean {
@@ -486,10 +298,8 @@ function tablesFromJsonCell(cell: Cloneable | undefined): string[] {
     }
     const tables: string[] = [];
     for (const item of parsed) {
-      // SAFETY: powersync_update_hooks('get') JSON is a list of primitive table names.
-      const value = item as RuntimeValue;
-      if (hasPrimitiveConstructor(value, String)) {
-        tables.push(value);
+      if (isString(item)) {
+        tables.push(item);
       }
     }
     return tables;
@@ -665,147 +475,6 @@ async function abortHeldLease(conn: ConnectionEntry): Promise<void> {
   await lease.release();
 }
 
-async function executeOnHeldOrLock(
-  adapter: WASQLiteAdapter,
-  conn: ConnectionEntry,
-  sql: string,
-  params: WASQLiteBindValue,
-): Promise<NativeOkEnvelope> {
-  const entry = files.get(conn.fileKey);
-  const control = transactionControl(sql);
-  let envelope: NativeOkEnvelope;
-  if (control === "begin") {
-    const started = conn.lease == null;
-    if (started) {
-      conn.lease = await acquireHeldLease(adapter, conn.readOnly, entry);
-    }
-    const lease = conn.lease;
-    if (lease == null) {
-      throw new Error("failed to acquire WASQLite lease");
-    }
-    try {
-      const result = await lease.tx.executeRaw(sql, params);
-      envelope = toNativeEnvelope(result);
-    } catch (failure) {
-      if (started) {
-        await abortHeldLease(conn);
-      }
-      throw failure;
-    }
-  } else if (control === "commit" || control === "rollback") {
-    const lease = conn.lease;
-    if (lease == null) {
-      const result = await withLock(
-        adapter,
-        conn.readOnly,
-        (tx) => tx.executeRaw(sql, params),
-        entry,
-      );
-      envelope = toNativeEnvelope(result);
-    } else {
-      try {
-        const result = await lease.tx.executeRaw(sql, params);
-        envelope = toNativeEnvelope(result);
-      } finally {
-        conn.lease = null;
-        await lease.release();
-      }
-    }
-  } else if (conn.lease != null) {
-    const result = await conn.lease.tx.executeRaw(sql, params);
-    envelope = toNativeEnvelope(result);
-  } else {
-    const result = await withLock(
-      adapter,
-      conn.readOnly,
-      (tx) => tx.executeRaw(sql, params),
-      entry,
-    );
-    envelope = toNativeEnvelope(result);
-  }
-  if (isUpdateHooksGet(sql) && conn.readOnly !== true) {
-    return mergeHookGetEnvelope(entry, envelope);
-  }
-  return envelope;
-}
-
-async function dispatchExecute(data: Cloneable): Promise<NativeEnvelope> {
-  const request = asExecuteRequest(data);
-  const dbId = request.dbId;
-  if (!hasPrimitiveConstructor(dbId, String)) {
-    return { ok: false, message: `unknown dbId: ${dbId}` };
-  }
-  const conn = connections.get(dbId);
-  if (!conn) {
-    return { ok: false, message: `unknown dbId: ${dbId}` };
-  }
-  const entry = files.get(conn.fileKey);
-  if (!entry?.adapter) {
-    return { ok: false, message: `closed dbId: ${dbId}` };
-  }
-  const sql = request.sql;
-  if (!hasPrimitiveConstructor(sql, String)) {
-    return { ok: false, message: "execute requires sql" };
-  }
-  const adapter = entry.adapter;
-  const params = toSqliteParams(request.params ?? []);
-  return enqueueConnection(conn, () => executeOnHeldOrLock(adapter, conn, sql, params));
-}
-
-async function dispatchExecuteBatch(data: Cloneable): Promise<NativeEnvelope> {
-  const request = asExecuteRequest(data);
-  const dbId = request.dbId;
-  if (!hasPrimitiveConstructor(dbId, String)) {
-    return { ok: false, message: `unknown dbId: ${dbId}` };
-  }
-  const conn = connections.get(dbId);
-  if (!conn) {
-    return { ok: false, message: `unknown dbId: ${dbId}` };
-  }
-  const entry = files.get(conn.fileKey);
-  if (!entry?.adapter) {
-    return { ok: false, message: `closed dbId: ${dbId}` };
-  }
-  const sql = request.sql;
-  if (!hasPrimitiveConstructor(sql, String)) {
-    return { ok: false, message: "executeBatch requires sql" };
-  }
-  const adapter = entry.adapter;
-  const params = toSqliteParams(request.params ?? []);
-  return enqueueConnection(conn, async () => {
-    if (conn.lease != null) {
-      const result = conn.readOnly
-        ? await conn.lease.tx.executeRaw(sql, params)
-        : await conn.lease.tx.executeBatch(sql, params);
-      return toNativeEnvelope(result);
-    }
-    const result = await withLock(
-      adapter,
-      conn.readOnly,
-      async (tx) => {
-        if (conn.readOnly) {
-          return tx.executeRaw(sql, params);
-        }
-        await tx.executeRaw("BEGIN IMMEDIATE", []);
-        try {
-          const batchResult = await tx.executeBatch(sql, params);
-          await tx.executeRaw("COMMIT", []);
-          return batchResult;
-        } catch (failure) {
-          try {
-            await tx.executeRaw("ROLLBACK", []);
-          } catch {
-            // Batch already failed; keep the original error.
-          }
-          throw failure;
-        }
-      },
-      entry,
-    );
-    return toNativeEnvelope(result);
-  });
-}
-
 function envelopeToCloneable(result: NativeEnvelope): Cloneable {
   if (result.ok === false) {
     if (result.code === undefined) {
@@ -813,9 +482,6 @@ function envelopeToCloneable(result: NativeEnvelope): Cloneable {
     }
     return { ok: false, message: result.message, code: result.code };
   }
-  const rawRows = result.rawRows?.map((row) =>
-    row.map((cell) => (cell instanceof Uint8Array ? copyToArrayBuffer(cell) : cell)),
-  );
   return {
     ok: true,
     dbId: result.dbId,
@@ -823,45 +489,8 @@ function envelopeToCloneable(result: NativeEnvelope): Cloneable {
     insertId: result.insertId,
     rowsAffected: result.rowsAffected,
     columnNames: result.columnNames,
-    rawRows,
+    rawRows: result.rawRows,
   };
-}
-
-export async function handleNativeCall(
-  name: string,
-  encodedData: Cloneable,
-  attachOptions: AttachOptions | undefined,
-  loadWeb: LoadWeb,
-): Promise<Cloneable> {
-  try {
-    const data = decodeCloneable(encodedData);
-    let result: NativeEnvelope;
-    switch (name) {
-      case "open":
-        result = await dispatchOpen(data, attachOptions, loadWeb);
-        break;
-      case "close":
-        result = await dispatchClose(data);
-        break;
-      case "execute":
-        result = await dispatchExecute(data);
-        break;
-      case "executeBatch":
-        result = await dispatchExecuteBatch(data);
-        break;
-      default:
-        result = { ok: false, message: `unknown method: ${name}` };
-    }
-    return encodeCloneable(envelopeToCloneable(result));
-  } catch (err) {
-    if (err instanceof Error) {
-      return encodeCloneable(envelopeToCloneable(failure(err)));
-    }
-    if (err instanceof Object) {
-      return encodeCloneable(envelopeToCloneable(failure(err)));
-    }
-    return encodeCloneable(envelopeToCloneable(failure(String(err))));
-  }
 }
 
 export type NativeModulesCallHandler = (
@@ -870,15 +499,330 @@ export type NativeModulesCallHandler = (
   moduleName: string,
 ) => Cloneable | Promise<Cloneable | undefined> | undefined;
 
-export function createOnNativeModulesCall(
-  previous: NativeModulesCallHandler | null | undefined,
-  attachOptions: AttachOptions | undefined,
-  loadWeb: LoadWeb,
-): NativeModulesCallHandler {
-  return async function onNativeModulesCall(name, data, moduleName) {
-    if (moduleName !== MODULE_NAME) {
-      return previous?.(name, data, moduleName);
+export class WebHostSqlBridge {
+  private readonly files = new Map<string, FileEntry>();
+  private readonly connections = new Map<string, ConnectionEntry>();
+  private nextDbId = 0;
+  private readonly attachOptions: AttachOptions | undefined;
+  private readonly loadWeb: LoadWeb;
+
+  constructor(attachOptions: AttachOptions | undefined, loadWeb: LoadWeb) {
+    this.attachOptions = attachOptions;
+    this.loadWeb = loadWeb;
+  }
+
+  async handleCall(name: string, encodedData: Cloneable): Promise<Cloneable> {
+    try {
+      const data = decodeCloneable(encodedData);
+      let result: NativeEnvelope;
+      switch (name) {
+        case "open":
+          result = await this.dispatchOpen(data);
+          break;
+        case "close":
+          result = await this.dispatchClose(data);
+          break;
+        case "execute":
+          result = await this.dispatchExecute(data);
+          break;
+        case "executeBatch":
+          result = await this.dispatchExecuteBatch(data);
+          break;
+        default:
+          result = { ok: false, message: `unknown method: ${name}` };
+      }
+      return encodeCloneable(envelopeToCloneable(result));
+    } catch (err) {
+      return encodeCloneable(envelopeToCloneable(failEnvelopeFromError(err)));
     }
-    return handleNativeCall(name, data, attachOptions, loadWeb);
-  };
+  }
+
+  createHandler(previous?: NativeModulesCallHandler | null): NativeModulesCallHandler {
+    return async (name, data, moduleName) => {
+      if (moduleName !== MODULE_NAME) {
+        return previous?.(name, data, moduleName);
+      }
+      return this.handleCall(name, data);
+    };
+  }
+
+  private async openFile(
+    fileKeyValue: string,
+    dbFilename: string,
+    dbLocation: string | undefined,
+  ): Promise<FileEntry> {
+    let entry = this.files.get(fileKeyValue);
+    if (entry?.pending) {
+      await entry.pending;
+      entry = this.files.get(fileKeyValue);
+    }
+    if (entry?.adapter) {
+      entry.refCount += 1;
+      return entry;
+    }
+
+    entry = { refCount: 0, adapter: null, pending: null, pendingTables: [] };
+    this.files.set(fileKeyValue, entry);
+    const opening = entry;
+    opening.pending = (async () => {
+      const web = await loadWebModule(this.loadWeb);
+      const logger =
+        web.createConsoleLogger instanceof Function
+          ? web.createConsoleLogger({ prefix: "powersync-lynx" })
+          : { log() {} };
+      const open: WASQLiteOpenFields = {
+        dbFilename,
+        ...pickAttachOpenFields(this.attachOptions),
+      };
+      if (dbLocation != null && dbLocation !== "") {
+        open.dbLocation = dbLocation;
+      }
+      const factory = new web.WASQLiteOpenFactory({ open, logger });
+      let adapter: WASQLiteAdapter | Promise<WASQLiteAdapter> = factory.openDB();
+      if (adapter instanceof Promise) {
+        adapter = await adapter;
+      }
+      opening.adapter = adapter;
+    })();
+    try {
+      await opening.pending;
+    } catch (err) {
+      if (this.files.get(fileKeyValue) === opening) {
+        this.files.delete(fileKeyValue);
+      }
+      throw err;
+    } finally {
+      opening.pending = null;
+    }
+    if (!opening.adapter) {
+      if (this.files.get(fileKeyValue) === opening) {
+        this.files.delete(fileKeyValue);
+      }
+      throw new Error(`WASQLite open failed for ${dbFilename}`);
+    }
+    opening.refCount += 1;
+    return opening;
+  }
+
+  private async dispatchOpen(data: Cloneable): Promise<NativeEnvelope> {
+    const request = asOpenRequest(data);
+    const dbFilename = request.dbFilename;
+    if (!isString(dbFilename) || dbFilename.length === 0) {
+      return { ok: false, message: "open requires dbFilename" };
+    }
+    const dbLocation = isString(request.dbLocation) ? request.dbLocation : undefined;
+    const key = fileKey(dbFilename, dbLocation);
+    await this.openFile(key, dbFilename, dbLocation);
+    const dbId = `ps-${++this.nextDbId}`;
+    this.connections.set(dbId, {
+      fileKey: key,
+      readOnly: request.readOnly === true,
+      lease: null,
+      tail: Promise.resolve(),
+    });
+    if (sharesFileBetweenTabs(this.attachOptions)) {
+      return { ok: true, dbId, multiTab: true };
+    }
+    return { ok: true, dbId };
+  }
+
+  private async dispatchClose(data: Cloneable): Promise<NativeEnvelope> {
+    const request = asOpenRequest(data);
+    const dbId = isString(data) ? data : isString(request.dbId) ? request.dbId : undefined;
+    if (!isString(dbId) || !this.connections.has(dbId)) {
+      return { ok: false, message: `unknown dbId: ${dbId}` };
+    }
+    const conn = this.connections.get(dbId);
+    if (conn == null) {
+      return { ok: false, message: `unknown dbId: ${dbId}` };
+    }
+    return enqueueConnection(conn, async () => {
+      if (this.connections.get(dbId) !== conn) {
+        return { ok: false, message: `unknown dbId: ${dbId}` };
+      }
+      await abortHeldLease(conn);
+      const entry = this.files.get(conn.fileKey);
+      if (entry == null) {
+        this.connections.delete(dbId);
+        return { ok: true };
+      }
+      if (entry.refCount > 1) {
+        this.connections.delete(dbId);
+        entry.refCount -= 1;
+        return { ok: true };
+      }
+      const adapter = entry.adapter;
+      if (adapter == null) {
+        this.dropClosedFile(dbId, conn, entry);
+        return { ok: true };
+      }
+      const closing = Promise.resolve(adapter.close()).then(() => undefined);
+      entry.pending = closing;
+      try {
+        await closing;
+        this.dropClosedFile(dbId, conn, entry);
+        return { ok: true };
+      } catch (err) {
+        return failEnvelopeFromError(err);
+      } finally {
+        if (entry.pending === closing) {
+          entry.pending = null;
+        }
+      }
+    });
+  }
+
+  private dropClosedFile(dbId: string, conn: ConnectionEntry, entry: FileEntry): void {
+    this.connections.delete(dbId);
+    entry.refCount -= 1;
+    entry.adapter = null;
+    if (this.files.get(conn.fileKey) === entry && entry.refCount <= 0 && entry.adapter == null) {
+      this.files.delete(conn.fileKey);
+    }
+  }
+
+  private resolveExecute(
+    data: Cloneable,
+    method: "execute" | "executeBatch",
+  ): ResolvedExecute | NativeFailEnvelope {
+    const request = asExecuteRequest(data);
+    const dbId = request.dbId;
+    if (!isString(dbId)) {
+      return { ok: false, message: `unknown dbId: ${dbId}` };
+    }
+    const conn = this.connections.get(dbId);
+    if (!conn) {
+      return { ok: false, message: `unknown dbId: ${dbId}` };
+    }
+    const entry = this.files.get(conn.fileKey);
+    if (!entry?.adapter) {
+      return { ok: false, message: `closed dbId: ${dbId}` };
+    }
+    const sql = request.sql;
+    if (!isString(sql)) {
+      return { ok: false, message: `${method} requires sql` };
+    }
+    return {
+      ok: true,
+      conn,
+      entry,
+      adapter: entry.adapter,
+      sql,
+      params: toSqliteParams(request.params ?? []),
+    };
+  }
+
+  private async executeOnHeldOrLock(
+    adapter: WASQLiteAdapter,
+    conn: ConnectionEntry,
+    sql: string,
+    params: WASQLiteBindValue,
+  ): Promise<NativeOkEnvelope> {
+    const entry = this.files.get(conn.fileKey);
+    const control = transactionControl(sql);
+    let envelope: NativeOkEnvelope;
+    if (control === "begin") {
+      const started = conn.lease == null;
+      if (started) {
+        conn.lease = await acquireHeldLease(adapter, conn.readOnly, entry);
+      }
+      const lease = conn.lease;
+      if (lease == null) {
+        throw new Error("failed to acquire WASQLite lease");
+      }
+      try {
+        const result = await lease.tx.executeRaw(sql, params);
+        envelope = toNativeEnvelope(result);
+      } catch (failure) {
+        if (started) {
+          await abortHeldLease(conn);
+        }
+        throw failure;
+      }
+    } else if (control === "commit" || control === "rollback") {
+      const lease = conn.lease;
+      if (lease == null) {
+        const result = await withLock(
+          adapter,
+          conn.readOnly,
+          (tx) => tx.executeRaw(sql, params),
+          entry,
+        );
+        envelope = toNativeEnvelope(result);
+      } else {
+        try {
+          const result = await lease.tx.executeRaw(sql, params);
+          envelope = toNativeEnvelope(result);
+        } finally {
+          conn.lease = null;
+          await lease.release();
+        }
+      }
+    } else if (conn.lease != null) {
+      const result = await conn.lease.tx.executeRaw(sql, params);
+      envelope = toNativeEnvelope(result);
+    } else {
+      const result = await withLock(
+        adapter,
+        conn.readOnly,
+        (tx) => tx.executeRaw(sql, params),
+        entry,
+      );
+      envelope = toNativeEnvelope(result);
+    }
+    if (isUpdateHooksGet(sql) && conn.readOnly !== true) {
+      return mergeHookGetEnvelope(entry, envelope);
+    }
+    return envelope;
+  }
+
+  private async dispatchExecute(data: Cloneable): Promise<NativeEnvelope> {
+    const resolved = this.resolveExecute(data, "execute");
+    if (!resolved.ok) {
+      return resolved;
+    }
+    return enqueueConnection(resolved.conn, () =>
+      this.executeOnHeldOrLock(resolved.adapter, resolved.conn, resolved.sql, resolved.params),
+    );
+  }
+
+  private async dispatchExecuteBatch(data: Cloneable): Promise<NativeEnvelope> {
+    const resolved = this.resolveExecute(data, "executeBatch");
+    if (!resolved.ok) {
+      return resolved;
+    }
+    const { conn, entry, adapter, sql, params } = resolved;
+    return enqueueConnection(conn, async () => {
+      if (conn.lease != null) {
+        const result = conn.readOnly
+          ? await conn.lease.tx.executeRaw(sql, params)
+          : await conn.lease.tx.executeBatch(sql, params);
+        return toNativeEnvelope(result);
+      }
+      const result = await withLock(
+        adapter,
+        conn.readOnly,
+        async (tx) => {
+          if (conn.readOnly) {
+            return tx.executeRaw(sql, params);
+          }
+          await tx.executeRaw("BEGIN IMMEDIATE", []);
+          try {
+            const batchResult = await tx.executeBatch(sql, params);
+            await tx.executeRaw("COMMIT", []);
+            return batchResult;
+          } catch (failure) {
+            try {
+              await tx.executeRaw("ROLLBACK", []);
+            } catch {
+              // Batch already failed; keep the original error.
+            }
+            throw failure;
+          }
+        },
+        entry,
+      );
+      return toNativeEnvelope(result);
+    });
+  }
 }

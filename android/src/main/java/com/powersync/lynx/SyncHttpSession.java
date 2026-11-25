@@ -3,7 +3,8 @@ package com.powersync.lynx;
 import androidx.annotation.Keep;
 
 /**
- * JNI wrapper for {@code shared/sync_http_session.h} (FM-PS-LYNX-014 N3).
+ * JNI wrapper for {@code shared/sync_http_session.h} (FM-PS-LYNX-014 N3) and
+ * {@code shared/sync_http_policy.h} URL / long-lived response predicates.
  *
  * <p>Decision bits only. HTTP I/O stays in {@link StreamingHttp} / {@link IdleCompleteHttp}.
  * Library load is {@link PsSqlEngine#ensureLoaded}.
@@ -32,6 +33,15 @@ final class SyncHttpSession {
 
   static int route(boolean syncStreamUrl, boolean hasEventSender) {
     return nativeRoute(syncStreamUrl, hasEventSender);
+  }
+
+  static boolean isSyncStreamUrl(String url) {
+    return nativeIsSyncStreamUrl(url);
+  }
+
+  static boolean looksLikeLongLived(
+      String transferEncoding, String contentLength, String contentType) {
+    return nativeLooksLikeLongLived(transferEncoding, contentLength, contentType);
   }
 
   synchronized int onHeaders() {
@@ -82,6 +92,11 @@ final class SyncHttpSession {
   private static native void nativeDestroy(long handle);
 
   private static native int nativeRoute(boolean syncStreamUrl, boolean hasEventSender);
+
+  private static native boolean nativeIsSyncStreamUrl(String url);
+
+  private static native boolean nativeLooksLikeLongLived(
+      String transferEncoding, String contentLength, String contentType);
 
   private static native int nativeOnHeaders(long handle);
 

@@ -9,13 +9,7 @@ import { PowerSyncDatabase } from "../src/PowerSyncDatabase.ts";
 import { attach } from "../src/web-host/index.ts";
 import { decodeCloneable, encodeCloneable } from "../src/web-host/cloneable.ts";
 import createFactory from "../src/web-host/factory.ts";
-import {
-  MODULE_NAME,
-  createOnNativeModulesCall,
-  handleNativeCall,
-  mappingStats,
-  resetWebHostMapping,
-} from "../src/web-host/page-rpc.ts";
+import { MODULE_NAME, WebHostSqlBridge } from "../src/web-host/page-rpc.ts";
 import { resetLynxHost } from "../src/host.ts";
 import { installFakeLynxHost } from "./fake-lynx-host.ts";
 import { FakeTabHub } from "./fake-tabs.ts";
@@ -29,7 +23,6 @@ interface WebCalls {
 }
 
 afterEach(() => {
-  resetWebHostMapping();
   delete globalThis.NativeModules;
 });
 
@@ -184,10 +177,10 @@ function leaseRecoveringLoadWeb() {
   return async () => ({ WASQLiteOpenFactory });
 }
 
-function installHostHelper(handleSql) {
+function installHostHelper(handleSql, options) {
   const calls = {};
-  const loadWeb = loadMock(calls, handleSql);
-  const hop = (name, data) => handleNativeCall(name, data, undefined, loadWeb);
+  const bridge = new WebHostSqlBridge(undefined, loadMock(calls, handleSql, options));
+  const hop = (name, data) => bridge.handleCall(name, data);
   globalThis.NativeModules = {
     NativePowerSyncModule: createFactory({}, hop),
   };
@@ -362,19 +355,13 @@ test("detach unwraps only when still current; reverse order restores", () => {
 });
 
 test("one WASQLiteOpenFactory per dbFilename+dbLocation; extra opens refcount", async () => {
-  const { handleNativeCall } = await import("../src/web-host/page-rpc.ts");
   const calls = {};
-  const loadWeb = loadMock(calls);
   const options = { vfs: "IDBBatchAtomicVFS", additionalReaders: 4 };
+  const bridge = new WebHostSqlBridge(options, loadMock(calls));
 
   const ids = [];
   for (let i = 0; i < 6; i++) {
-    const open = await handleNativeCall(
-      "open",
-      { dbFilename: "app.db", readOnly: i !== 0 },
-      options,
-      loadWeb,
-    );
+    const open = await bridge.handleCall("open", { dbFilename: "app.db", readOnly: i !== 0 });
     assert.equal(open.ok, true);
     ids.push(open.dbId);
   }
@@ -386,34 +373,121 @@ test("one WASQLiteOpenFactory per dbFilename+dbLocation; extra opens refcount", 
   assert.equal("encryptionKey" in calls.constructs[0].open, false);
   assert.equal("ssrMode" in calls.constructs[0].open, false);
   assert.equal(new Set(ids).size, 6);
-  assert.equal(mappingStats().files, 1);
-  assert.equal(mappingStats().connections, 6);
 
-  const other = await handleNativeCall(
-    "open",
-    { dbFilename: "app.db", dbLocation: "other" },
-    options,
-    loadWeb,
-  );
+  const other = await bridge.handleCall("open", { dbFilename: "app.db", dbLocation: "other" });
   assert.equal(other.ok, true);
   assert.equal(calls.constructs.length, 2);
 
   for (let i = 0; i < 5; i++) {
-    const closed = await handleNativeCall("close", ids[i], null, loadWeb);
+    const closed = await bridge.handleCall("close", ids[i]);
     assert.equal(closed.ok, true);
   }
   assert.equal(calls.closes.length, 0);
-  assert.equal(mappingStats().files, 2);
+  const closedExec = await bridge.handleCall("execute", {
+    dbId: ids[0],
+    sql: "select 1",
+    params: [],
+  });
+  assert.equal(closedExec.ok, false);
+  assert.match(closedExec.message, /unknown dbId/);
 
-  await handleNativeCall("close", ids[5], null, loadWeb);
+  const stillOpen = await bridge.handleCall("execute", {
+    dbId: ids[5],
+    sql: "select 1",
+    params: [],
+  });
+  assert.equal(stillOpen.ok, true);
+
+  await bridge.handleCall("close", ids[5]);
   assert.equal(calls.closes.length, 1);
-  assert.equal(mappingStats().connections, 1);
+  const afterLastClose = await bridge.handleCall("execute", {
+    dbId: ids[5],
+    sql: "select 1",
+    params: [],
+  });
+  assert.equal(afterLastClose.ok, false);
+  assert.match(afterLastClose.message, /unknown dbId/);
+
+  const otherExec = await bridge.handleCall("execute", {
+    dbId: other.dbId,
+    sql: "select 1",
+    params: [],
+  });
+  assert.equal(otherExec.ok, true);
+  const otherClosed = await bridge.handleCall("close", other.dbId);
+  assert.equal(otherClosed.ok, true);
+  assert.equal(calls.closes.length, 2);
+});
+
+test("separate WebHostSqlBridge and attach instances isolate state and AttachOptions", async () => {
+  const callsA = {};
+  const callsB = {};
+  const bridgeA = new WebHostSqlBridge(
+    { vfs: "IDBBatchAtomicVFS", enableMultiTabs: true },
+    loadMock(callsA),
+  );
+  const bridgeB = new WebHostSqlBridge(
+    { vfs: "OPFSCoopSyncVFS", enableMultiTabs: false },
+    loadMock(callsB),
+  );
+
+  const openA = await bridgeA.handleCall("open", { dbFilename: "shared.db" });
+  const openB1 = await bridgeB.handleCall("open", { dbFilename: "shared.db" });
+  const openB2 = await bridgeB.handleCall("open", { dbFilename: "shared.db", readOnly: true });
+
+  assert.equal(openA.ok, true);
+  assert.equal(openB1.ok, true);
+  assert.equal(openB2.ok, true);
+  assert.equal(openA.dbId, "ps-1");
+  assert.equal(openB1.dbId, "ps-1");
+  assert.equal(openB2.dbId, "ps-2");
+  assert.equal(openA.multiTab, true);
+  assert.equal(openB1.multiTab, undefined);
+  assert.equal(callsA.constructs.length, 1);
+  assert.equal(callsB.constructs.length, 1);
+  assert.equal(callsA.constructs[0].open.vfs, "IDBBatchAtomicVFS");
+  assert.equal(callsB.constructs[0].open.vfs, "OPFSCoopSyncVFS");
+
+  // Bridge A cannot see connections opened on Bridge B.
+  const crossLookup = await bridgeA.handleCall("execute", {
+    dbId: openB2.dbId,
+    sql: "select 1",
+    params: [],
+  });
+  assert.equal(crossLookup.ok, false);
+  assert.match(crossLookup.message, /unknown dbId/);
+
+  // Closing Bridge A does not close or affect Bridge B.
+  const closedA = await bridgeA.handleCall("close", openA.dbId);
+  assert.equal(closedA.ok, true);
+  assert.equal(callsA.closes.length, 1);
+  assert.equal(callsB.closes.length, 0);
+
+  const execB = await bridgeB.handleCall("execute", {
+    dbId: openB1.dbId,
+    sql: "select 1",
+    params: [42],
+  });
+  assert.equal(execB.ok, true);
+  assert.deepEqual(execB.rawRows, [[42]]);
+
+  // Two attached views receive distinct handlers and detach independently.
+  const viewA = { nativeModulesMap: {}, onNativeModulesCall: undefined };
+  const viewB = { nativeModulesMap: {}, onNativeModulesCall: undefined };
+  const handleA = attach(viewA, { enableMultiTabs: true });
+  const handleB = attach(viewB, { enableMultiTabs: false });
+  assert.notEqual(viewA.onNativeModulesCall, viewB.onNativeModulesCall);
+  handleA.detach();
+  assert.equal(viewA.onNativeModulesCall, undefined);
+  assert.ok(viewB.onNativeModulesCall instanceof Function);
+  handleB.detach();
 });
 
 test("open tells the Adapter when WASQLite shares the file between tabs", async (context) => {
   const loadWeb = loadMock({});
   const openWith = async (options) => {
-    const open = await handleNativeCall("open", { dbFilename: "app.db" }, options, loadWeb);
+    const bridge = new WebHostSqlBridge(options, loadWeb);
+    const open = await bridge.handleCall("open", { dbFilename: "app.db" });
     assert.equal(open.ok, true);
     return open.multiTab;
   };
@@ -434,8 +508,11 @@ test("open tells the Adapter when WASQLite shares the file between tabs", async 
 
 test("an Adapter opened through a multi-tab Host helper exchanges table changes with other tabs", async (context) => {
   const hub = new FakeTabHub();
-  const loadWeb = loadMock({}, hookTrackingSqlHandler());
-  const hop = (name, data) => handleNativeCall(name, data, { enableMultiTabs: true }, loadWeb);
+  const bridge = new WebHostSqlBridge(
+    { enableMultiTabs: true },
+    loadMock({}, hookTrackingSqlHandler()),
+  );
+  const hop = (name, data) => bridge.handleCall(name, data);
   installFakeLynxHost({
     nativeModules: { NativePowerSyncModule: createFactory({}, hop) },
     tabs: hub.tab(),
@@ -454,37 +531,20 @@ test("an Adapter opened through a multi-tab Host helper exchanges table changes 
 });
 
 test("readOnly routes execute to readLock+executeRaw; writes use writeLock", async () => {
-  const { handleNativeCall } = await import("../src/web-host/page-rpc.ts");
   const calls = {};
-  const loadWeb = loadMock(calls);
+  const bridge = new WebHostSqlBridge(undefined, loadMock(calls));
 
-  const write = await handleNativeCall("open", { dbFilename: "w.db" }, undefined, loadWeb);
-  const read = await handleNativeCall(
-    "open",
-    { dbFilename: "w.db", readOnly: true },
-    undefined,
-    loadWeb,
-  );
+  const write = await bridge.handleCall("open", { dbFilename: "w.db" });
+  const read = await bridge.handleCall("open", { dbFilename: "w.db", readOnly: true });
   assert.equal(calls.constructs.length, 1);
 
-  await handleNativeCall(
-    "execute",
-    { dbId: write.dbId, sql: "select 1", params: [1] },
-    undefined,
-    loadWeb,
-  );
-  await handleNativeCall(
-    "execute",
-    { dbId: read.dbId, sql: "select 1", params: [2] },
-    undefined,
-    loadWeb,
-  );
-  await handleNativeCall(
-    "executeBatch",
-    { dbId: write.dbId, sql: "insert", params: [[1], [2]] },
-    undefined,
-    loadWeb,
-  );
+  await bridge.handleCall("execute", { dbId: write.dbId, sql: "select 1", params: [1] });
+  await bridge.handleCall("execute", { dbId: read.dbId, sql: "select 1", params: [2] });
+  await bridge.handleCall("executeBatch", {
+    dbId: write.dbId,
+    sql: "insert",
+    params: [[1], [2]],
+  });
 
   assert.deepEqual(calls.locks, ["write", "read", "write"]);
   assert.equal(calls.executeRaw.filter((call) => call.sql === "select 1").length, 2);
@@ -511,164 +571,137 @@ test("page catch returns ok:false envelope with optional code", async () => {
       return { log() {} };
     },
   });
-  const opened = await handleNativeCall("open", { dbFilename: "x.db" }, undefined, loadWeb);
-  const result = await handleNativeCall(
-    "execute",
-    { dbId: opened.dbId, sql: "x", params: [] },
-    undefined,
-    loadWeb,
-  );
+  const bridge = new WebHostSqlBridge(undefined, loadWeb);
+  const opened = await bridge.handleCall("open", { dbFilename: "x.db" });
+  const result = await bridge.handleCall("execute", { dbId: opened.dbId, sql: "x", params: [] });
   assert.equal(result.ok, false);
   assert.equal(result.message, "boom");
   assert.equal(result.code, 19);
 });
 
 test("JS BEGIN/INSERT/COMMIT RPCs keep one WASQLite lease so COMMIT is active", async () => {
-  const loadWeb = leaseRecoveringLoadWeb();
-  const opened = await handleNativeCall("open", { dbFilename: "txn.db" }, undefined, loadWeb);
+  const bridge = new WebHostSqlBridge(undefined, leaseRecoveringLoadWeb());
+  const opened = await bridge.handleCall("open", { dbFilename: "txn.db" });
   assert.equal(opened.ok, true);
 
-  const created = await handleNativeCall(
-    "execute",
-    { dbId: opened.dbId, sql: "CREATE TABLE t(x INTEGER)", params: [] },
-    undefined,
-    loadWeb,
-  );
+  const created = await bridge.handleCall("execute", {
+    dbId: opened.dbId,
+    sql: "CREATE TABLE t(x INTEGER)",
+    params: [],
+  });
   assert.equal(created.ok, true);
 
-  const begin = await handleNativeCall(
-    "execute",
-    { dbId: opened.dbId, sql: "BEGIN IMMEDIATE", params: [] },
-    undefined,
-    loadWeb,
-  );
+  const begin = await bridge.handleCall("execute", {
+    dbId: opened.dbId,
+    sql: "BEGIN IMMEDIATE",
+    params: [],
+  });
   assert.equal(begin.ok, true);
 
-  const inserted = await handleNativeCall(
-    "execute",
-    { dbId: opened.dbId, sql: "INSERT INTO t VALUES (1)", params: [] },
-    undefined,
-    loadWeb,
-  );
+  const inserted = await bridge.handleCall("execute", {
+    dbId: opened.dbId,
+    sql: "INSERT INTO t VALUES (1)",
+    params: [],
+  });
   assert.equal(inserted.ok, true);
 
-  const committed = await handleNativeCall(
-    "execute",
-    { dbId: opened.dbId, sql: "COMMIT", params: [] },
-    undefined,
-    loadWeb,
-  );
+  const committed = await bridge.handleCall("execute", {
+    dbId: opened.dbId,
+    sql: "COMMIT",
+    params: [],
+  });
   assert.equal(committed.ok, true, committed.message);
 
-  const selected = await handleNativeCall(
-    "execute",
-    { dbId: opened.dbId, sql: "SELECT x FROM t", params: [] },
-    undefined,
-    loadWeb,
-  );
+  const selected = await bridge.handleCall("execute", {
+    dbId: opened.dbId,
+    sql: "SELECT x FROM t",
+    params: [],
+  });
   assert.equal(selected.ok, true);
   assert.deepEqual(selected.rawRows, [[1]]);
 });
 
 test("JS BEGIN/INSERT/ROLLBACK RPCs roll the insert back", async () => {
-  const loadWeb = leaseRecoveringLoadWeb();
-  const opened = await handleNativeCall("open", { dbFilename: "rollback.db" }, undefined, loadWeb);
+  const bridge = new WebHostSqlBridge(undefined, leaseRecoveringLoadWeb());
+  const opened = await bridge.handleCall("open", { dbFilename: "rollback.db" });
   assert.equal(opened.ok, true);
-  const created = await handleNativeCall(
-    "execute",
-    { dbId: opened.dbId, sql: "CREATE TABLE t(x INTEGER)", params: [] },
-    undefined,
-    loadWeb,
-  );
+  const created = await bridge.handleCall("execute", {
+    dbId: opened.dbId,
+    sql: "CREATE TABLE t(x INTEGER)",
+    params: [],
+  });
   assert.equal(created.ok, true);
-  const begin = await handleNativeCall(
-    "execute",
-    { dbId: opened.dbId, sql: "BEGIN IMMEDIATE", params: [] },
-    undefined,
-    loadWeb,
-  );
+  const begin = await bridge.handleCall("execute", {
+    dbId: opened.dbId,
+    sql: "BEGIN IMMEDIATE",
+    params: [],
+  });
   assert.equal(begin.ok, true);
-  const inserted = await handleNativeCall(
-    "execute",
-    { dbId: opened.dbId, sql: "INSERT INTO t VALUES (1)", params: [] },
-    undefined,
-    loadWeb,
-  );
+  const inserted = await bridge.handleCall("execute", {
+    dbId: opened.dbId,
+    sql: "INSERT INTO t VALUES (1)",
+    params: [],
+  });
   assert.equal(inserted.ok, true);
-  const rolledBack = await handleNativeCall(
-    "execute",
-    { dbId: opened.dbId, sql: "ROLLBACK", params: [] },
-    undefined,
-    loadWeb,
-  );
+  const rolledBack = await bridge.handleCall("execute", {
+    dbId: opened.dbId,
+    sql: "ROLLBACK",
+    params: [],
+  });
   assert.equal(rolledBack.ok, true, rolledBack.message);
-  const selected = await handleNativeCall(
-    "execute",
-    { dbId: opened.dbId, sql: "SELECT x FROM t", params: [] },
-    undefined,
-    loadWeb,
-  );
+  const selected = await bridge.handleCall("execute", {
+    dbId: opened.dbId,
+    sql: "SELECT x FROM t",
+    params: [],
+  });
   assert.equal(selected.ok, true);
   assert.deepEqual(selected.rawRows, []);
 });
 
 test("executeBatch rolls back earlier rows on the first error", async () => {
-  const loadWeb = leaseRecoveringLoadWeb();
-  const opened = await handleNativeCall("open", { dbFilename: "batch.db" }, undefined, loadWeb);
+  const bridge = new WebHostSqlBridge(undefined, leaseRecoveringLoadWeb());
+  const opened = await bridge.handleCall("open", { dbFilename: "batch.db" });
   assert.equal(opened.ok, true);
-  const created = await handleNativeCall(
-    "execute",
-    { dbId: opened.dbId, sql: "CREATE TABLE ids(id INTEGER PRIMARY KEY)", params: [] },
-    undefined,
-    loadWeb,
-  );
+  const created = await bridge.handleCall("execute", {
+    dbId: opened.dbId,
+    sql: "CREATE TABLE ids(id INTEGER PRIMARY KEY)",
+    params: [],
+  });
   assert.equal(created.ok, true);
-  const batched = await handleNativeCall(
-    "executeBatch",
-    { dbId: opened.dbId, sql: "INSERT INTO ids(id) VALUES(?)", params: [[1], [1]] },
-    undefined,
-    loadWeb,
-  );
+  const batched = await bridge.handleCall("executeBatch", {
+    dbId: opened.dbId,
+    sql: "INSERT INTO ids(id) VALUES(?)",
+    params: [[1], [1]],
+  });
   assert.equal(batched.ok, false);
-  const selected = await handleNativeCall(
-    "execute",
-    { dbId: opened.dbId, sql: "SELECT count(*) FROM ids", params: [] },
-    undefined,
-    loadWeb,
-  );
+  const selected = await bridge.handleCall("execute", {
+    dbId: opened.dbId,
+    sql: "SELECT count(*) FROM ids",
+    params: [],
+  });
   assert.equal(selected.ok, true);
   assert.deepEqual(selected.rawRows, [[0]]);
 });
 
 test("malformed tagged bigint resolves ok:false instead of rejecting", async () => {
-  const loadWeb = loadMock({});
-  const result = await handleNativeCall(
-    "execute",
-    { __psBig: true, v: "invalid" },
-    undefined,
-    loadWeb,
-  );
+  const bridge = new WebHostSqlBridge(undefined, loadMock({}));
+  const result = await bridge.handleCall("execute", { __psBig: true, v: "invalid" });
   assert.equal(result.ok, false);
   assert.equal(result.message.constructor, String);
   assert.ok(result.message.length > 0);
 });
 
 test("malformed tagged ArrayBuffer resolves ok:false instead of rejecting", async () => {
-  const loadWeb = loadMock({});
-  const result = await handleNativeCall(
-    "execute",
-    { __psAb: true, u8: ["nope"] },
-    undefined,
-    loadWeb,
-  );
+  const bridge = new WebHostSqlBridge(undefined, loadMock({}));
+  const result = await bridge.handleCall("execute", { __psAb: true, u8: ["nope"] });
   assert.equal(result.ok, false);
   assert.equal(result.message.constructor, String);
 });
 
 test("factory encodes params and decodes envelopes; Adapter sees ArrayBuffer/bigint", async () => {
   const calls = {};
-  const loadWeb = loadMock(calls);
-  const handler = async (name, data) => handleNativeCall(name, data, undefined, loadWeb);
+  const bridge = new WebHostSqlBridge(undefined, loadMock(calls));
+  const handler = async (name, data) => bridge.handleCall(name, data);
   const methods = createFactory({}, handler);
 
   const opened = await new Promise((resolve) => methods.open({ dbFilename: "c.db" }, resolve));
@@ -689,8 +722,8 @@ test("factory encodes params and decodes envelopes; Adapter sees ArrayBuffer/big
 
 test("factory methods return immediately and invoke the callback later", async () => {
   const calls = {};
-  const loadWeb = loadMock(calls);
-  const handler = (name, data) => handleNativeCall(name, data, undefined, loadWeb);
+  const bridge = new WebHostSqlBridge(undefined, loadMock(calls));
+  const handler = (name, data) => bridge.handleCall(name, data);
   const methods = createFactory({}, handler);
 
   let callbackRan = false;
@@ -710,7 +743,8 @@ test("factory methods return immediately and invoke the callback later", async (
 test("wrapped onNativeModulesCall dispatches NativePowerSyncModule and falls through", async () => {
   const calls = {};
   const previous = async () => ({ from: "prev" });
-  const handler = createOnNativeModulesCall(previous, undefined, loadMock(calls));
+  const bridge = new WebHostSqlBridge(undefined, loadMock(calls));
+  const handler = bridge.createHandler(previous);
 
   const opened = await handler("open", { dbFilename: "wrap.db" }, MODULE_NAME);
   assert.equal(opened.ok, true);
@@ -721,29 +755,35 @@ test("wrapped onNativeModulesCall dispatches NativePowerSyncModule and falls thr
 });
 
 test("unknown method and missing dbFilename return ok:false envelopes", async () => {
-  const loadWeb = loadMock({});
-  const missing = await handleNativeCall("open", {}, undefined, loadWeb);
+  const bridge = new WebHostSqlBridge(undefined, loadMock({}));
+  const missing = await bridge.handleCall("open", {});
   assert.equal(missing.ok, false);
   assert.match(missing.message, /dbFilename/);
 
-  const unknown = await handleNativeCall("vacuum", {}, undefined, loadWeb);
+  const unknown = await bridge.handleCall("vacuum", {});
   assert.equal(unknown.ok, false);
   assert.match(unknown.message, /unknown method/);
 });
 
 test("last close then reopen constructs a new WASQLiteOpenFactory", async () => {
   const calls = {};
-  const loadWeb = loadMock(calls);
-  const first = await handleNativeCall("open", { dbFilename: "reopen.db" }, undefined, loadWeb);
+  const bridge = new WebHostSqlBridge(undefined, loadMock(calls));
+  const first = await bridge.handleCall("open", { dbFilename: "reopen.db" });
   assert.equal(first.ok, true);
   assert.equal(calls.constructs.length, 1);
 
-  const closed = await handleNativeCall("close", first.dbId, undefined, loadWeb);
+  const closed = await bridge.handleCall("close", first.dbId);
   assert.equal(closed.ok, true);
   assert.equal(calls.closes.length, 1);
-  assert.equal(mappingStats().files, 0);
+  const stale = await bridge.handleCall("execute", {
+    dbId: first.dbId,
+    sql: "select 1",
+    params: [],
+  });
+  assert.equal(stale.ok, false);
+  assert.match(stale.message, /unknown dbId/);
 
-  const second = await handleNativeCall("open", { dbFilename: "reopen.db" }, undefined, loadWeb);
+  const second = await bridge.handleCall("open", { dbFilename: "reopen.db" });
   assert.equal(second.ok, true);
   assert.equal(calls.constructs.length, 2);
   assert.notEqual(second.dbId, first.dbId);
@@ -758,7 +798,7 @@ test("Lynx-bundle Adapter runs SQL RPC through the Host helper factory", async (
   assert.equal(calls.constructs.length, 1);
   assert.equal(calls.constructs[0].open.dbFilename, "app.db");
   assert.equal(calls.constructs[0].open.dbLocation, "/tmp/ps");
-  assert.equal(mappingStats().connections, 6);
+  assert.equal(calls.closes.length, 0);
 
   const inserted = await adapter.execute("INSERT INTO lists (id, name) VALUES (?, ?)", [
     "list-1",
@@ -777,12 +817,12 @@ test("Lynx-bundle Adapter runs SQL RPC through the Host helper factory", async (
   assert.equal(calls.executeBatch.length, 1);
 
   await adapter.close();
-  assert.equal(mappingStats().connections, 0);
   assert.equal(calls.closes.length, 1);
 });
 
 test("last close keeps dbId when adapter.close rejects so retry can finish", async () => {
   let closeAttempts = 0;
+  let constructCount = 0;
   const tx = {
     async executeRaw(sql, params) {
       return defaultSqlResult(sql, params);
@@ -793,6 +833,9 @@ test("last close keeps dbId when adapter.close rejects so retry can finish", asy
   };
   const loadWeb = async () => ({
     WASQLiteOpenFactory: class {
+      constructor() {
+        constructCount += 1;
+      }
       openDB() {
         return {
           async readLock(fn) {
@@ -815,47 +858,50 @@ test("last close keeps dbId when adapter.close rejects so retry can finish", asy
     },
   });
 
-  const opened = await handleNativeCall(
-    "open",
-    { dbFilename: "retry-close.db" },
-    undefined,
-    loadWeb,
-  );
+  const bridge = new WebHostSqlBridge(undefined, loadWeb);
+  const opened = await bridge.handleCall("open", { dbFilename: "retry-close.db" });
   assert.equal(opened.ok, true);
-  assert.equal(mappingStats().files, 1);
-  assert.equal(mappingStats().connections, 1);
+  assert.equal(constructCount, 1);
 
-  const first = await handleNativeCall("close", opened.dbId, undefined, loadWeb);
+  const first = await bridge.handleCall("close", opened.dbId);
   assert.equal(first.ok, false);
   assert.equal(first.message, "worker already dead");
-  assert.equal(mappingStats().files, 1);
-  assert.equal(mappingStats().connections, 1);
+  // dbId remains registered so caller can still observe it and retry close.
+  const stillReachable = await bridge.handleCall("execute", {
+    dbId: opened.dbId,
+    sql: "select 1",
+    params: [],
+  });
+  assert.equal(stillReachable.ok, true);
 
-  const retry = await handleNativeCall("close", opened.dbId, undefined, loadWeb);
+  const retry = await bridge.handleCall("close", opened.dbId);
   assert.equal(retry.ok, true, retry.message);
-  assert.equal(mappingStats().files, 0);
-  assert.equal(mappingStats().connections, 0);
   assert.equal(closeAttempts, 2);
+  const afterClose = await bridge.handleCall("execute", {
+    dbId: opened.dbId,
+    sql: "select 1",
+    params: [],
+  });
+  assert.equal(afterClose.ok, false);
+  assert.match(afterClose.message, /unknown dbId/);
+
+  const reopened = await bridge.handleCall("open", { dbFilename: "retry-close.db" });
+  assert.equal(reopened.ok, true);
+  assert.equal(constructCount, 2);
 });
 
 test("duplicate close of one dbId does not close a sibling file share", async () => {
   const calls = {};
-  const loadWeb = loadMock(calls);
-  const first = await handleNativeCall("open", { dbFilename: "share.db" }, undefined, loadWeb);
-  const sibling = await handleNativeCall(
-    "open",
-    { dbFilename: "share.db", readOnly: true },
-    undefined,
-    loadWeb,
-  );
+  const bridge = new WebHostSqlBridge(undefined, loadMock(calls));
+  const first = await bridge.handleCall("open", { dbFilename: "share.db" });
+  const sibling = await bridge.handleCall("open", { dbFilename: "share.db", readOnly: true });
   assert.equal(first.ok, true);
   assert.equal(sibling.ok, true);
-  assert.equal(mappingStats().files, 1);
-  assert.equal(mappingStats().connections, 2);
+  assert.equal(calls.constructs.length, 1);
 
   const [closeA, closeB] = await Promise.all([
-    handleNativeCall("close", first.dbId, undefined, loadWeb),
-    handleNativeCall("close", first.dbId, undefined, loadWeb),
+    bridge.handleCall("close", first.dbId),
+    bridge.handleCall("close", first.dbId),
   ]);
   const okCount = [closeA, closeB].filter((result) => result.ok === true).length;
   const failCount = [closeA, closeB].filter((result) => result.ok === false).length;
@@ -865,27 +911,42 @@ test("duplicate close of one dbId does not close a sibling file share", async ()
     [closeA, closeB].some((result) => result.ok === false && /unknown dbId/.test(result.message)),
   );
   assert.equal(calls.closes.length, 0);
-  assert.equal(mappingStats().files, 1);
-  assert.equal(mappingStats().connections, 1);
 
-  const executed = await handleNativeCall(
-    "execute",
-    { dbId: sibling.dbId, sql: "select 1", params: [1] },
-    undefined,
-    loadWeb,
-  );
+  const closedFirst = await bridge.handleCall("execute", {
+    dbId: first.dbId,
+    sql: "select 1",
+    params: [1],
+  });
+  assert.equal(closedFirst.ok, false);
+  assert.match(closedFirst.message, /unknown dbId/);
+
+  const executed = await bridge.handleCall("execute", {
+    dbId: sibling.dbId,
+    sql: "select 1",
+    params: [1],
+  });
   assert.equal(executed.ok, true, executed.message);
 
-  const siblingClosed = await handleNativeCall("close", sibling.dbId, undefined, loadWeb);
+  const siblingClosed = await bridge.handleCall("close", sibling.dbId);
   assert.equal(siblingClosed.ok, true, siblingClosed.message);
   assert.equal(calls.closes.length, 1);
-  assert.equal(mappingStats().files, 0);
-  assert.equal(mappingStats().connections, 0);
+
+  const closedSibling = await bridge.handleCall("execute", {
+    dbId: sibling.dbId,
+    sql: "select 1",
+    params: [1],
+  });
+  assert.equal(closedSibling.ok, false);
+  assert.match(closedSibling.message, /unknown dbId/);
+
+  const reopened = await bridge.handleCall("open", { dbFilename: "share.db" });
+  assert.equal(reopened.ok, true);
+  assert.equal(calls.constructs.length, 2);
 });
 
 test("Lynx-bundle PowerSyncDatabase works through the Host helper", async () => {
   const store = { lists: [] };
-  installHostHelper(appSqlHandler(store));
+  const calls = installHostHelper(appSqlHandler(store));
   const db = new PowerSyncDatabase({
     schema: new Schema({
       lists: new Table({ name: column.text }),
@@ -902,7 +963,7 @@ test("Lynx-bundle PowerSyncDatabase works through the Host helper", async () => 
     const rows = await db.getAll("SELECT id, name FROM lists");
     assert.deepEqual(rows, [{ id: "list-1", name: "Groceries" }]);
     await db.close();
-    assert.equal(mappingStats().connections, 0);
+    assert.equal(calls.closes.length, 1);
   } finally {
     db.triggersImpl?.dispose();
   }
@@ -910,12 +971,7 @@ test("Lynx-bundle PowerSyncDatabase works through the Host helper", async () => 
 
 test("watch refreshes after writeTransaction when WASQLite writeLock consumes hooks", async () => {
   const store = { lists: [] };
-  const calls = {};
-  const loadWeb = loadMock(calls, hookTrackingSqlHandler(store), { consumeWriteHooks: true });
-  const hop = (name, data) => handleNativeCall(name, data, undefined, loadWeb);
-  globalThis.NativeModules = {
-    NativePowerSyncModule: createFactory({}, hop),
-  };
+  installHostHelper(hookTrackingSqlHandler(store), { consumeWriteHooks: true });
   const db = new PowerSyncDatabase({
     schema: new Schema({
       lists: new Table({ name: column.text }),

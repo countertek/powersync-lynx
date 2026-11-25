@@ -2,7 +2,7 @@ import { DBAdapter } from "@powersync/common";
 import type { DBLockOptions, LockContext, QueryResult } from "@powersync/common";
 import { timeoutSignal, Semaphore } from "@powersync/shared-internals";
 import { getLynxHost } from "../host.ts";
-import { announceSharedTabs, type TabChannel, type TabPrimitives } from "../tabs.ts";
+import { TabCoordinator } from "../tabs.ts";
 import { LynxConnection } from "./LynxConnection.ts";
 import { nativeSql, type BindValueRows, type OpenPayload } from "./native.ts";
 import { DEFAULT_SQLITE_OPTIONS, READ_CONNECTIONS } from "./sqlite-options.ts";
@@ -10,10 +10,6 @@ import { DEFAULT_SQLITE_OPTIONS, READ_CONNECTIONS } from "./sqlite-options.ts";
 export interface LynxAdapterOpenOptions {
   name: string;
   dbLocation?: string;
-}
-
-interface TableChange {
-  tables: string[];
 }
 
 interface NestedAbortSignal {
@@ -28,37 +24,22 @@ export class LynxDBAdapter extends DBAdapter {
   writeConnection: Semaphore<LynxConnection> | null = null;
   abortController: AbortController;
   options: LynxAdapterOpenOptions;
-  /** Set by `open` when the web Host helper shares this file with other tabs. */
-  sharedWithTabs = false;
-  /** Carries table changes to and from the other tabs' Adapters of this file. */
-  tableChanges: TabChannel<TableChange> | null = null;
-  withdrawSharedTabs: () => void;
+  private readonly tabs: TabCoordinator;
 
-  constructor(options: LynxAdapterOpenOptions) {
+  constructor(options: LynxAdapterOpenOptions, tabs?: TabCoordinator) {
     super();
     this.options = options;
     this.name = options.name;
+    this.tabs = tabs ?? new TabCoordinator(options);
     this.abortController = new AbortController();
     this.initialized = this.init();
-    this.withdrawSharedTabs = announceSharedTabs(
-      this.name,
-      this.initialized.then(
-        () => this.joinTabs(),
-        () => undefined,
-      ),
+    this.tabs.attachAdapter(
+      this.initialized,
+      () => getLynxHost().tabs(),
+      (change) => {
+        this.iterateListeners((l) => l.tablesUpdated?.(change));
+      },
     );
-  }
-
-  joinTabs(): TabPrimitives | undefined {
-    const tabs = this.sharedWithTabs ? getLynxHost().tabs() : undefined;
-    if (tabs == null) {
-      return undefined;
-    }
-    const file = `${this.options.name}:${this.options.dbLocation ?? ""}`;
-    this.tableChanges = tabs.channel<TableChange>(`powersync-lynx:tables:${file}`, (change) => {
-      this.iterateListeners((l) => l.tablesUpdated?.(change));
-    });
-    return tabs;
   }
 
   async init(): Promise<void> {
@@ -133,7 +114,7 @@ export class LynxDBAdapter extends DBAdapter {
       throw new Error("NativePowerSyncModule.open did not return dbId");
     }
     if (multiTab === true) {
-      this.sharedWithTabs = true;
+      this.tabs.markShared();
     }
     return new LynxConnection(dbId);
   }
@@ -157,9 +138,7 @@ export class LynxDBAdapter extends DBAdapter {
   async close(): Promise<void> {
     await this.initialized;
     this.abortController.abort();
-    this.withdrawSharedTabs();
-    this.tableChanges?.close();
-    this.tableChanges = null;
+    this.tabs.closeTables();
 
     const writeSemaphore = this.writeConnection;
     const readSemaphore = this.readConnections;
@@ -268,7 +247,7 @@ export class LynxDBAdapter extends DBAdapter {
         const notification = { tables };
         if (notification.tables.length) {
           this.iterateListeners((l) => l.tablesUpdated?.(notification));
-          this.tableChanges?.post(notification);
+          this.tabs.postTableChange(notification);
         }
       } finally {
         release();

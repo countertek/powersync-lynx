@@ -185,9 +185,19 @@ test("packed tarball ships iOS build inputs and omits host/build residue", async
       "iOS incremental /sync/stream needs StreamingHttp.mm",
     );
     assert.equal(
+      has("ios/src/SyncHttpRequest.h"),
+      true,
+      "iOS shared request builder header must ship",
+    );
+    assert.equal(
       has("android/src/main/java/com/powersync/lynx/StreamingHttp.java"),
       true,
       "Android incremental /sync/stream needs StreamingHttp.java",
+    );
+    assert.equal(
+      has("android/src/main/java/com/powersync/lynx/SyncHttpConnection.java"),
+      true,
+      "Android shared HttpURLConnection helper must ship",
     );
     assert.equal(
       has("ios/src/NativePowerSyncModule.mm"),
@@ -266,7 +276,11 @@ test("iOS podspec compiles shared/ps_sql via src/ps_sql_engine.cc; test-ios uses
   );
 
   const engineUnit = readFileSync(path.join(root, "ios/src/ps_sql_engine.cc"), "utf8");
-  assert.match(engineUnit, /#include "ps_sql\.cc"/, "pod compile unit must include canonical shared/ps_sql.cc");
+  assert.match(
+    engineUnit,
+    /#include "ps_sql\.cc"/,
+    "pod compile unit must include canonical shared/ps_sql.cc",
+  );
   assert.doesNotMatch(
     engineUnit,
     /namespace\s+ps_sql/,

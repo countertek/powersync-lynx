@@ -17,7 +17,7 @@ import type {
 import { resetLynxHost } from "../src/host.ts";
 import { LynxRemote } from "../src/sync/LynxRemote.ts";
 import { LynxStreamingSyncImplementation } from "../src/sync/LynxStreamingSyncImplementation.ts";
-import { sharedTabs } from "../src/tabs.ts";
+import { TabCoordinator } from "../src/tabs.ts";
 import { installFakeLynxHost } from "./fake-lynx-host.ts";
 import { FakeTabHub, type FakeTab } from "./fake-tabs.ts";
 import { silentLogger, stubConnector } from "./remote-harness.ts";
@@ -132,7 +132,7 @@ interface Browser {
   hub: FakeTabHub;
   database: SharedDatabase;
   uploads: Upload[];
-  open(label: string): Promise<Tab>;
+  open(label: string, dbLocation?: string): Promise<Tab>;
 }
 
 /** A browser whose tabs are closed again when the test ends, pass or fail. */
@@ -147,32 +147,37 @@ function browser(context: TestContext, multiTab: boolean): Browser {
     hub,
     database,
     uploads,
-    async open(label) {
+    async open(label, dbLocation) {
       const tabs = hub.tab();
       installFakeLynxHost({ nativeModules: { NativePowerSyncModule: database.native }, tabs });
       const firstConnection = database.opened.length;
-      const adapter = new LynxDBAdapter({ name: DATABASE });
+      const openOptions = dbLocation == null ? { name: DATABASE } : { name: DATABASE, dbLocation };
+      const coordinator = new TabCoordinator(openOptions);
+      const adapter = new LynxDBAdapter(openOptions, coordinator);
       await adapter.initialized;
       const storage = new SqliteBucketStorage(adapter, logger);
-      const sync = new StatusSync({
-        adapter: storage,
-        subscriptions: [],
-        connector: {
-          ...stubConnector(),
-          async uploadCrud() {
-            const next = await storage.nextCrudItem();
-            if (next == null) {
-              return;
-            }
-            uploads.push({ tab: label, crudId: next.clientId });
-            await adapter.execute("DELETE FROM ps_crud WHERE id <= ?", [next.clientId]);
+      const sync = new StatusSync(
+        {
+          adapter: storage,
+          subscriptions: [],
+          connector: {
+            ...stubConnector(),
+            async uploadCrud() {
+              const next = await storage.nextCrudItem();
+              if (next == null) {
+                return;
+              }
+              uploads.push({ tab: label, crudId: next.clientId });
+              await adapter.execute("DELETE FROM ps_crud WHERE id <= ?", [next.clientId]);
+            },
           },
+          identifier: DATABASE,
+          logger,
+          remote: new LynxRemote(stubConnector(), logger),
+          serializedSchema: null,
         },
-        identifier: DATABASE,
-        logger,
-        remote: new LynxRemote(stubConnector(), logger),
-        serializedSchema: null,
-      });
+        coordinator,
+      );
       const tab = {
         label,
         tabs,
@@ -199,7 +204,7 @@ interface ConnectAttempt {
 /** Starts this tab's sync client and waits until it has asked for its locks. */
 async function connect(tab: Tab): Promise<ConnectAttempt> {
   const connected = tab.sync.connect(syncOptions);
-  await sharedTabs(DATABASE);
+  await tab.adapter.initialized;
   await settle();
   return { connected };
 }
@@ -423,4 +428,93 @@ test("without a shared database, clients of one identifier still exclude each ot
   finishFirst();
   await Promise.all([firstRuns, secondRuns]);
   assert.deepEqual(order, ["first starts", "first ends", "second starts"]);
+});
+
+test("databases with the same name and different dbLocations do not collide on tables or locks", async (context) => {
+  const { database, open } = browser(context, true);
+  // Open both tabs before connecting to verify per-instance coordinator wiring.
+  const tabA = await open("a", "/dir-a");
+  const tabB = await open("b", "/dir-b");
+
+  const seenByA: string[][] = [];
+  const seenByB: string[][] = [];
+  tabA.adapter.registerListener({ tablesUpdated: ({ tables }) => seenByA.push(tables) });
+  tabB.adapter.registerListener({ tablesUpdated: ({ tables }) => seenByB.push(tables) });
+
+  await insertList(tabA);
+  await settle();
+  assert.deepEqual(seenByA, [["lists", "ps_crud"]]);
+  assert.deepEqual(seenByB, []);
+
+  await connect(tabA);
+  await connect(tabB);
+  await until("tab a started syncing", () => database.syncStarts.includes(tabA.writeConnection));
+  await until("tab b started syncing", () => database.syncStarts.includes(tabB.writeConnection));
+
+  let releaseCrudA = (): void => {};
+  let crudAStarted = false;
+  let crudBFinished = false;
+  const crudA = tabA.sync.obtainLock({
+    type: LockType.CRUD,
+    callback: () =>
+      new Promise<void>((resolve) => {
+        crudAStarted = true;
+        releaseCrudA = resolve;
+      }),
+  });
+  await until("tab a acquired its crud lock", () => crudAStarted);
+
+  await tabB.sync.obtainLock({
+    type: LockType.CRUD,
+    callback: async () => {
+      crudBFinished = true;
+    },
+  });
+  assert.equal(crudBFinished, true);
+
+  releaseCrudA();
+  await crudA;
+});
+
+test("single-tab clients with the same name and different dbLocations do not collide in-process", async () => {
+  const options = {
+    adapter: new SqliteBucketStorage(new LynxDBAdapter({ name: "unopened.db" }), silentLogger),
+    subscriptions: [],
+    connector: { ...stubConnector(), uploadCrud: async () => {} },
+    identifier: "same-name.db",
+    logger: silentLogger,
+    remote: new LynxRemote(stubConnector(), silentLogger),
+    serializedSchema: null,
+  };
+  const first = new LynxStreamingSyncImplementation(
+    options,
+    new TabCoordinator({ name: "same-name.db", dbLocation: "/dir-a" }),
+  );
+  const second = new LynxStreamingSyncImplementation(
+    options,
+    new TabCoordinator({ name: "same-name.db", dbLocation: "/dir-b" }),
+  );
+  let finishFirst = (): void => {};
+  let firstStarted = false;
+  let secondFinished = false;
+  const firstRuns = first.obtainLock({
+    type: LockType.SYNC,
+    callback: () =>
+      new Promise<void>((resolve) => {
+        firstStarted = true;
+        finishFirst = resolve;
+      }),
+  });
+  await until("first client acquired its sync lock", () => firstStarted);
+
+  await second.obtainLock({
+    type: LockType.SYNC,
+    callback: async () => {
+      secondFinished = true;
+    },
+  });
+  assert.equal(secondFinished, true);
+
+  finishFirst();
+  await firstRuns;
 });

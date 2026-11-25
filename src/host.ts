@@ -1,6 +1,5 @@
 import { installAbortControllerPolyfill } from "./abort-controller.ts";
-import type { NativeModulesHost, NativePowerSyncModule } from "./adapter/native.ts";
-import type { LynxFetchModule } from "./sync/transport/http-types.ts";
+import type { NativeModulesHost } from "./adapter/native.ts";
 import type {
   LynxGlobalEventEmitter,
   LynxRuntime,
@@ -132,10 +131,6 @@ function evalBinding<T>(source: string): T | undefined {
   }
 }
 
-function tableHasModules(host: NativeModulesHost | undefined): host is NativeModulesHost {
-  return host != null && (host.NativePowerSyncModule != null || host.LynxFetchModule != null);
-}
-
 function nativeModulesFromGlobalThis(): NativeModulesHost | undefined {
   const table = primJSGlobalThis().NativeModules;
   if (!isNonNullObject(table)) {
@@ -160,26 +155,26 @@ function nativeModulesFromBareIdentifier(): NativeModulesHost | undefined {
   }
 }
 
-function nativeModuleField<K extends "NativePowerSyncModule" | "LynxFetchModule">(
-  table: NativeModulesHost | undefined,
-  field: K,
-): NativeModulesHost[K] {
-  if (table == null) {
-    return undefined;
-  }
-  return table[field];
-}
-
 /**
  * Production adapter. Each method preserves the PrimJS lookup order for that
  * binding (globalThis, bare identifier, eval) so bundlers keep `lynx` / `fetch`.
  */
 export class PrimJSLynxHost implements LynxHost {
   nativeModules(): NativeModulesHost | undefined {
-    const sql = this.lookupNativePowerSyncModule();
-    const fetchMod = this.lookupLynxFetchModule();
+    const fromGlobalThis = nativeModulesFromGlobalThis();
+    const fromBinding = nativeModulesFromBareIdentifier();
+    let sql = fromGlobalThis?.NativePowerSyncModule ?? fromBinding?.NativePowerSyncModule;
+    let fetchMod = fromGlobalThis?.LynxFetchModule ?? fromBinding?.LynxFetchModule;
+    let fromEval: NativeModulesHost | undefined;
+    if (sql == null && fetchMod == null && fromBinding == null) {
+      fromEval = evalBinding<NativeModulesHost>(
+        "typeof NativeModules === 'undefined' ? undefined : NativeModules",
+      );
+      sql = fromEval?.NativePowerSyncModule;
+      fetchMod = fromEval?.LynxFetchModule;
+    }
     if (sql == null && fetchMod == null) {
-      return this.lookupNativeModulesTable();
+      return fromBinding ?? fromEval ?? fromGlobalThis;
     }
     const host: NativeModulesHost = {};
     if (sql != null) {
@@ -267,63 +262,6 @@ export class PrimJSLynxHost implements LynxHost {
 
   tabs(): TabPrimitives | undefined {
     return browserTabPrimitives();
-  }
-
-  private lookupNativeModulesTable(): NativeModulesHost | undefined {
-    const fromGlobalThis = nativeModulesFromGlobalThis();
-    if (tableHasModules(fromGlobalThis)) {
-      return fromGlobalThis;
-    }
-    const fromBinding = nativeModulesFromBareIdentifier();
-    if (tableHasModules(fromBinding)) {
-      return fromBinding;
-    }
-    if (fromBinding != null) {
-      return fromBinding;
-    }
-    const fromEval = evalBinding<NativeModulesHost>(
-      "typeof NativeModules === 'undefined' ? undefined : NativeModules",
-    );
-    if (fromEval != null) {
-      return fromEval;
-    }
-    return fromGlobalThis;
-  }
-
-  private lookupNativePowerSyncModule(): NativePowerSyncModule | undefined {
-    const fromGlobalThis = nativeModuleField(
-      nativeModulesFromGlobalThis(),
-      "NativePowerSyncModule",
-    );
-    if (fromGlobalThis != null) {
-      return fromGlobalThis;
-    }
-    const fromBinding = nativeModuleField(
-      nativeModulesFromBareIdentifier(),
-      "NativePowerSyncModule",
-    );
-    if (fromBinding != null) {
-      return fromBinding;
-    }
-    const table = evalBinding<NativeModulesHost>(
-      "typeof NativeModules === 'undefined' ? undefined : NativeModules",
-    );
-    return nativeModuleField(table, "NativePowerSyncModule");
-  }
-
-  private lookupLynxFetchModule(): LynxFetchModule | undefined {
-    const fromGlobalThis = nativeModuleField(nativeModulesFromGlobalThis(), "LynxFetchModule");
-    if (fromGlobalThis != null) {
-      return fromGlobalThis;
-    }
-    const fromBinding = nativeModuleField(nativeModulesFromBareIdentifier(), "LynxFetchModule");
-    if (fromBinding != null) {
-      return fromBinding;
-    }
-    const table = evalBinding<NativeModulesHost>(
-      "typeof NativeModules === 'undefined' ? undefined : NativeModules",
-    );
-    return nativeModuleField(table, "LynxFetchModule");
   }
 }
 

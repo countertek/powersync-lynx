@@ -1,18 +1,36 @@
-import { isFunction, isString } from "../../type-guards.ts";
+import { isFunction, isNonNullObject, isString } from "../../type-guards.ts";
 import { copyToArrayBuffer } from "../../values.ts";
 import { gunzipSync, isGzip } from "../gunzip.ts";
-import { copyHeaderRecord, decodeUtf8, isParsedJsonValue, parseJsonText } from "./bytes.ts";
-import { streamingReader } from "./events.ts";
+import { decodeUtf8, latin1Bytes } from "./bytes.ts";
+
+interface HeaderFields {
+  readonly [name: string]: string | undefined;
+}
+
+function copyHeaderRecord(headers: HeaderFields | undefined) {
+  const lower: Record<string, string> = {};
+  if (headers == null) {
+    return lower;
+  }
+  for (const key of Object.keys(headers)) {
+    const value = headers[key];
+    if (value == null) {
+      continue;
+    }
+    lower[key.toLowerCase()] = String(value);
+  }
+  return lower;
+}
 
 /**
  * One internal Response constructor. Adapters interpret their own wire shape
- * and pass either buffered bytes or a GlobalEventEmitter streamingId.
+ * and pass either buffered bytes or a stream reader.
  */
 export type SyncStreamResponseInit = {
   status?: number;
   statusText?: string;
-  headers?: Record<string, string>;
-} & ({ bytes: Uint8Array } | { streamingId: string });
+  headers?: HeaderFields;
+} & ({ bytes: Uint8Array } | { reader: ReadableStreamDefaultReader<Uint8Array> });
 
 function readerFromChunks(chunks: Uint8Array[]): ReadableStreamDefaultReader<Uint8Array> {
   let i = 0;
@@ -36,11 +54,8 @@ function readerFromChunks(chunks: Uint8Array[]): ReadableStreamDefaultReader<Uin
 }
 
 function readerForInit(init: SyncStreamResponseInit): ReadableStreamDefaultReader<Uint8Array> {
-  if ("streamingId" in init) {
-    if (init.streamingId.length > 0) {
-      return streamingReader(init.streamingId);
-    }
-    return readerFromChunks([]);
+  if ("reader" in init) {
+    return init.reader;
   }
   if (init.bytes.byteLength > 0) {
     return readerFromChunks([init.bytes]);
@@ -102,7 +117,7 @@ class SyncStreamBodyResponse {
 }
 
 /**
- * Finished `/sync/stream` Response from adapter-owned bytes or streamingId.
+ * Finished `/sync/stream` Response from adapter-owned bytes or stream reader.
  */
 export function syncStreamResponse(init: SyncStreamResponseInit): Response {
   // SAFETY: SyncStreamBodyResponse implements the Response fields AbstractRemote
@@ -151,6 +166,45 @@ export function stabilizeJsonResponse(response: Response): Response {
     text: () => response.text(),
     json: () => decodeIdentifierJson(response),
   } as Response;
+}
+
+function stripBom(text: string): string {
+  if (text.length > 0 && text.charCodeAt(0) === 0xfeff) {
+    return text.slice(1);
+  }
+  return text;
+}
+
+interface ParsedJsonValue {
+  readonly [key: string]: ParsedJsonValue | string | number | boolean | null | undefined;
+}
+
+function isParsedJsonValue(value: unknown): value is ParsedJsonValue {
+  if (!isNonNullObject(value)) {
+    return false;
+  }
+  if (Array.isArray(value)) {
+    return false;
+  }
+  if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
+    return false;
+  }
+  return true;
+}
+
+function parseJsonText(text: string) {
+  const trimmed = stripBom(text).trim();
+  if (trimmed.length === 0 || trimmed === "undefined") {
+    return { data: {} };
+  }
+  const raw = latin1Bytes(trimmed);
+  if (isGzip(raw)) {
+    const inflated = gunzipSync(raw);
+    // SAFETY: write-checkpoint / identifier JSON is an object after gunzip + UTF-8.
+    return JSON.parse(stripBom(decodeUtf8(copyToArrayBuffer(inflated))).trim()) as ParsedJsonValue;
+  }
+  // SAFETY: write-checkpoint / identifier JSON text parses to an object (empty already handled).
+  return JSON.parse(trimmed) as ParsedJsonValue;
 }
 
 interface IdentifierJsonObject {
