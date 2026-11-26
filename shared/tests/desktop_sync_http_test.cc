@@ -1,7 +1,7 @@
 #include "desktop_sync_http.h"
 #include "sync_stream_fixtures.h"
 
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(_WIN32)
 #include "ndjson_http_replay.h"
 #endif
 
@@ -201,8 +201,8 @@ int main() {
            "desktop missing-url emits zero stream events");
   }
 
-#if defined(__APPLE__)
-  // 4. macOS NSURLSession streaming replay: checkpoint-ops.
+#if defined(__APPLE__) || defined(_WIN32)
+  // 4. Desktop (macOS NSURLSession / Windows WinHTTP) streaming replay: checkpoint-ops.
   {
     ps_sync_fixtures::NdjsonReplayServer server;
     ps_sync_fixtures::ReplayConfig cfg;

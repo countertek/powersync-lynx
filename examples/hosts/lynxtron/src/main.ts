@@ -11,6 +11,7 @@ const entryDir =
 const config = resolveHostConfig(process.argv.slice(2), process.env, entryDir);
 
 let mainWindow: LynxWindow | null = null;
+let exitPollTimer: ReturnType<typeof setInterval> | null = null;
 
 function createWindow(): void {
   if (!fs.existsSync(config.bundlePath)) {
@@ -55,6 +56,25 @@ function createWindow(): void {
   if (!accepted) {
     console.error(`[powersync-lynxtron] LynxWindow.loadFile rejected ${config.bundlePath}`);
     app.exit(1);
+    return;
+  }
+
+  if (config.exitFile != null && exitPollTimer == null) {
+    const exitFile = config.exitFile;
+    exitPollTimer = setInterval(() => {
+      if (fs.existsSync(exitFile)) {
+        if (exitPollTimer != null) {
+          clearInterval(exitPollTimer);
+          exitPollTimer = null;
+        }
+        try {
+          mainWindow?.close();
+        } catch {
+          // ignore close errors on windowless shutdown
+        }
+        app.quit();
+      }
+    }, 200);
   }
 }
 

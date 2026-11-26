@@ -24,6 +24,7 @@
 namespace {
 
 constexpr UINT_PTR kSmokeTimerId = 1;
+constexpr UINT_PTR kExitPollTimerId = 2;
 constexpr int kInitialWidth = 520;
 constexpr int kInitialHeight = 820;
 
@@ -98,6 +99,7 @@ class ShowcaseViewClient final : public lynx::pub::LynxViewClient {
 struct WindowState {
   std::unique_ptr<lynx::pub::LynxView> lynx_view;
   std::shared_ptr<ShowcaseViewClient> view_client;
+  std::wstring exit_file_wide;
   int exit_code = 0;
   bool smoke_test = false;
 };
@@ -108,7 +110,7 @@ float WindowDpiScale(HWND hwnd) {
 }
 
 bool ReadFileBytesUtf8(const std::string& path, std::vector<uint8_t>* out) {
-  std::wstring wide = ps_win_utf8::Utf8ToWide(path);
+  std::wstring wide = ps_sql::Utf8ToWide(path);
   if (wide.empty()) {
     return false;
   }
@@ -146,7 +148,7 @@ std::string ResolveIcuDataPath() {
     return "";
   }
   std::string candidate = exe_dir + "\\data\\icudtl.dat";
-  std::wstring wide = ps_win_utf8::Utf8ToWide(candidate);
+  std::wstring wide = ps_sql::Utf8ToWide(candidate);
   DWORD attrs = GetFileAttributesW(wide.c_str());
   if (attrs != INVALID_FILE_ATTRIBUTES &&
       (attrs & FILE_ATTRIBUTE_DIRECTORY) == 0) {
@@ -177,8 +179,19 @@ LRESULT CALLBACK MainWindowProc(HWND hwnd,
       return 0;
     }
     case WM_TIMER: {
+      if (wparam == kExitPollTimerId && state && !state->exit_file_wide.empty()) {
+        if (GetFileAttributesW(state->exit_file_wide.c_str()) !=
+            INVALID_FILE_ATTRIBUTES) {
+          KillTimer(hwnd, kExitPollTimerId);
+          KillTimer(hwnd, kSmokeTimerId);
+          state->exit_code = 0;
+          DestroyWindow(hwnd);
+        }
+        return 0;
+      }
       if (wparam == kSmokeTimerId && state && state->smoke_test) {
         KillTimer(hwnd, kSmokeTimerId);
+        KillTimer(hwnd, kExitPollTimerId);
         bool ok = state->view_client &&
                   state->view_client->load_succeeded.load() &&
                   state->view_client->runtime_ready.load() &&
@@ -267,7 +280,7 @@ int main() {
     return 1;
   }
 
-  std::wstring title = ps_win_utf8::Utf8ToWide("PowerSync Lynx Showcase (" +
+  std::wstring title = ps_sql::Utf8ToWide("PowerSync Lynx Showcase (" +
                                                config.device + ")");
   HWND hwnd = CreateWindowExW(
       0, class_name, title.c_str(), WS_OVERLAPPEDWINDOW, CW_USEDEFAULT,
@@ -282,6 +295,9 @@ int main() {
 
   WindowState state;
   state.smoke_test = config.smoke_test;
+  if (!config.exit_file.empty()) {
+    state.exit_file_wide = ps_sql::Utf8ToWide(config.exit_file);
+  }
   SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&state));
 
   if (!config.headless) {
@@ -340,6 +356,9 @@ int main() {
       std::make_shared<lynx::pub::LynxTemplateData>(config.GlobalPropsJson()));
   state.lynx_view->LoadTemplate(load_meta);
 
+  if (!state.exit_file_wide.empty()) {
+    SetTimer(hwnd, kExitPollTimerId, 200, nullptr);
+  }
   if (config.smoke_test) {
     UINT timeout_ms = static_cast<UINT>(config.smoke_seconds * 1000.0);
     if (timeout_ms < 500) {

@@ -7,12 +7,15 @@ export interface HostConfig {
   powersyncUrl: string;
   bundlePath: string;
   windowless: boolean;
+  e2e: boolean;
+  exitFile?: string;
 }
 
 export interface ShowcaseGlobalProps {
   device: string;
   demoApiUrl: string;
   powersyncUrl: string;
+  e2e?: boolean;
 }
 
 const DEFAULT_DEVICE = "lynxtron";
@@ -114,6 +117,12 @@ export function resolveHostConfig(
       : defaultBundlePath(entryDir);
   const windowless =
     hasFlag(argv, ["--windowless", "--headless"]) || isTruthyEnv(env.LYNXTRON_WINDOWLESS);
+  const e2e = hasFlag(argv, ["--e2e"]) || isTruthyEnv(env.POWERSYNC_E2E);
+  const exitFileRaw = firstNonEmpty(
+    readArgValue(argv, ["--exit-file", "-ExitFile"]),
+    env.POWERSYNC_EXIT_FILE,
+  );
+  const exitFile = exitFileRaw.length > 0 ? path.resolve(process.cwd(), exitFileRaw) : undefined;
 
   return {
     device,
@@ -121,6 +130,8 @@ export function resolveHostConfig(
     powersyncUrl,
     bundlePath,
     windowless,
+    e2e,
+    ...(exitFile != null ? { exitFile } : {}),
   };
 }
 
@@ -129,5 +140,6 @@ export function toGlobalProps(config: HostConfig): ShowcaseGlobalProps {
     device: config.device,
     demoApiUrl: config.demoApiUrl,
     powersyncUrl: config.powersyncUrl,
+    ...(config.e2e ? { e2e: true } : {}),
   };
 }

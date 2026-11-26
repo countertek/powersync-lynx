@@ -61,7 +61,7 @@ std::vector<std::string> ProcessArgsUtf8() {
   }
   out.reserve(static_cast<size_t>(argc));
   for (int i = 0; i < argc; ++i) {
-    out.push_back(ps_win_utf8::WideToUtf8(argv[i]));
+    out.push_back(ps_sql::WideToUtf8(argv[i]));
   }
   LocalFree(argv);
   return out;
@@ -78,11 +78,11 @@ std::string GetEnvUtf8(const wchar_t* name) {
     return "";
   }
   buf.resize(written);
-  return ps_win_utf8::WideToUtf8(buf);
+  return ps_sql::WideToUtf8(buf);
 }
 
 bool FileExistsUtf8(const std::string& path) {
-  std::wstring wide = ps_win_utf8::Utf8ToWide(path);
+  std::wstring wide = ps_sql::Utf8ToWide(path);
   if (wide.empty()) {
     return false;
   }
@@ -152,7 +152,7 @@ std::string ExecutableDirectoryUtf8() {
   if (slash == std::wstring::npos) {
     return "";
   }
-  return ps_win_utf8::WideToUtf8(path.substr(0, slash));
+  return ps_sql::WideToUtf8(path.substr(0, slash));
 }
 
 HostConfig HostConfig::FromProcess() {
@@ -170,8 +170,11 @@ HostConfig HostConfig::FromProcess() {
   config.bundle_path =
       ReadOption(args, {"-BundlePath", "--bundle"}, L"LYNX_BUNDLE_PATH",
                  ResolveDefaultBundlePath());
+  config.exit_file =
+      ReadOption(args, {"-ExitFile", "--exit-file"}, L"POWERSYNC_EXIT_FILE", "");
   config.smoke_test = HasFlag(args, "--smoke-test", L"SMOKE_TEST");
   config.headless = HasFlag(args, "--headless", L"HEADLESS");
+  config.e2e = HasFlag(args, "--e2e", L"POWERSYNC_E2E");
 
   std::string seconds_str =
       ReadOption(args, {"--smoke-seconds"}, L"SMOKE_TEST_SECONDS", "");
@@ -188,6 +191,10 @@ std::string HostConfig::GlobalPropsJson() const {
   std::ostringstream oss;
   oss << "{\"device\":\"" << EscapeJson(device)
       << "\",\"demoApiUrl\":\"" << EscapeJson(demo_api_url)
-      << "\",\"powersyncUrl\":\"" << EscapeJson(powersync_url) << "\"}";
+      << "\",\"powersyncUrl\":\"" << EscapeJson(powersync_url) << "\"";
+  if (e2e) {
+    oss << ",\"e2e\":true";
+  }
+  oss << "}";
   return oss.str();
 }

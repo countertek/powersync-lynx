@@ -78,6 +78,29 @@ function materializeIosSqliteAmalgamation() {
   materializeRegularFile(path.join(sqliteDir, 'sqlite3.h'), path.join(iosSrc, 'sqlite3.h'));
 }
 
+function extractZip(zipPath, destDir) {
+  fs.mkdirSync(destDir, { recursive: true });
+  if (process.platform === 'win32') {
+    try {
+      execFileSync('tar', ['-xf', zipPath, '-C', destDir], { stdio: 'inherit' });
+      return;
+    } catch {
+      execFileSync(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          `Expand-Archive -LiteralPath '${zipPath.replaceAll("'", "''")}' -DestinationPath '${destDir.replaceAll("'", "''")}' -Force`,
+        ],
+        { stdio: 'inherit' },
+      );
+      return;
+    }
+  }
+  execFileSync('unzip', ['-o', zipPath, '-d', destDir], { stdio: 'inherit' });
+}
+
 async function ensureSqlite() {
   const dir = path.join(ROOT, 'third_party', 'sqlite');
   const header = path.join(dir, 'sqlite3.h');
@@ -92,9 +115,7 @@ async function ensureSqlite() {
   console.log(`downloading ${SQLITE_URL}`);
   await download(SQLITE_URL, zipPath);
   fs.mkdirSync(dir, { recursive: true });
-  execFileSync('unzip', ['-o', zipPath, '-d', path.join(ROOT, 'third_party')], {
-    stdio: 'inherit',
-  });
+  extractZip(zipPath, path.join(ROOT, 'third_party'));
   const extracted = path.join(ROOT, 'third_party', SQLITE_AMALGAMATION);
   fs.copyFileSync(path.join(extracted, 'sqlite3.c'), source);
   fs.copyFileSync(path.join(extracted, 'sqlite3.h'), header);

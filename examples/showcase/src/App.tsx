@@ -10,9 +10,10 @@ import {
 } from "./connector.ts";
 import { bootDemo } from "./boot.ts";
 import { getDb, setClientLog, waitForDemoReady } from "./database.ts";
+import { runShowcaseE2e } from "./e2e-driver.ts";
 import type { TodoRow } from "./schema.ts";
 import { createSessionSyncTracker, applyLocalReadySyncState } from "./session-sync.ts";
-import { deviceId, errorMessage, hostLabel, newId, nowIso, rowArray } from "./util.ts";
+import { deviceId, e2eMode, errorMessage, hostLabel, newId, nowIso, rowArray } from "./util.ts";
 
 import "./App.css";
 
@@ -127,6 +128,11 @@ export function App() {
           () => cancelled,
         );
         setReady(true);
+      },
+      onConnectSettled: () => {
+        if (e2eMode()) {
+          void runShowcaseE2e(getDb(), demoConnector, log);
+        }
       },
       log,
       isCancelled: () => cancelled,

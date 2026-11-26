@@ -579,7 +579,41 @@ int main(int argc, char** argv) {
       });
     }
 
-#if !defined(_WIN32)
+#if defined(_WIN32)
+    // 8. Live Windows %LOCALAPPDATA% default-path resolution & creation check
+    const std::string base_local_app_data = ps_sql::CurrentAppDataBaseDir();
+    expect(!base_local_app_data.empty(),
+           "db-location: Windows CurrentAppDataBaseDir resolves LOCALAPPDATA");
+    const std::string exe_stem = ps_sql::CurrentExecutableName();
+    expect(!exe_stem.empty(),
+           "db-location: Windows CurrentExecutableName resolves executable stem");
+    std::string live_err;
+    const std::string live_dir = ResolveAndCreateDefaultDbLocation(&live_err);
+    expect(!live_dir.empty() && live_err.empty(),
+           "db-location: Windows live ResolveAndCreateDefaultDbLocation succeeds");
+    expect(live_dir.rfind(base_local_app_data, 0) == 0,
+           "db-location: Windows live path rooted under LOCALAPPDATA");
+    expect(fs::is_directory(fs::u8path(live_dir), ec),
+           "db-location: Windows live LOCALAPPDATA directory exists on disk");
+    Envelope win_live_open = wait_for([&](ps_sql::Callback cb) {
+      OpenOptions opts;
+      opts.db_filename = "win-localappdata-test.db";
+      opts.db_location = live_dir;
+      engine.open(opts, std::move(cb));
+    });
+    expect(win_live_open.ok,
+           "db-location: open db in live Windows LOCALAPPDATA dir ok");
+    if (win_live_open.ok) {
+      wait_for([&](ps_sql::Callback cb) {
+        engine.close(win_live_open.db_id, std::move(cb));
+      });
+      const fs::path win_live_db =
+          fs::u8path(live_dir) / "win-localappdata-test.db";
+      expect(fs::is_regular_file(win_live_db, ec),
+             "db-location: db file persisted in live Windows LOCALAPPDATA dir");
+      fs::remove(win_live_db, ec);
+    }
+#else
     // 8. Live host resolution sanity check with isolated HOME
     const char* prev_home = std::getenv("HOME");
     std::string saved_home = prev_home != nullptr ? prev_home : "";

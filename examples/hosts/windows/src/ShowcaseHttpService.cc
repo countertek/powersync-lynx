@@ -88,7 +88,7 @@ void ExecuteWinHttpRequest(
                method.c_str(), url.c_str(), body.size());
   std::fflush(stderr);
 
-  std::wstring wide_url = ps_win_utf8::Utf8ToWide(url);
+  std::wstring wide_url = ps_sql::Utf8ToWide(url);
   if (wide_url.empty()) {
     FailResponse(response, method, url, "Invalid UTF-8 URL");
     return;
@@ -147,7 +147,7 @@ void ExecuteWinHttpRequest(
 
   DWORD flags =
       (components.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0;
-  std::wstring wide_method = ps_win_utf8::Utf8ToWide(method);
+  std::wstring wide_method = ps_sql::Utf8ToWide(method);
   WinHttpHandle req(WinHttpOpenRequest(
       connect.get(), wide_method.c_str(), path_and_query.c_str(), nullptr,
       WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags));
@@ -158,7 +158,7 @@ void ExecuteWinHttpRequest(
   }
 
   for (const auto& kv : request->GetHeaders()) {
-    std::wstring line = ps_win_utf8::Utf8ToWide(kv.first + ": " + kv.second);
+    std::wstring line = ps_sql::Utf8ToWide(kv.first + ": " + kv.second);
     if (!line.empty()) {
       WinHttpAddRequestHeaders(
           req.get(), line.c_str(), static_cast<DWORD>(line.size()),
@@ -209,7 +209,7 @@ void ExecuteWinHttpRequest(
       while (!wide_text.empty() && wide_text.back() == L'\0') {
         wide_text.pop_back();
       }
-      status_text = ps_win_utf8::WideToUtf8(wide_text);
+      status_text = ps_sql::WideToUtf8(wide_text);
     }
   }
 
@@ -225,7 +225,7 @@ void ExecuteWinHttpRequest(
     if (WinHttpQueryHeaders(req.get(), WINHTTP_QUERY_RAW_HEADERS_CRLF,
                             WINHTTP_HEADER_NAME_BY_INDEX, &wide_headers[0],
                             &raw_headers_bytes, WINHTTP_NO_HEADER_INDEX)) {
-      std::string headers_utf8 = ps_win_utf8::WideToUtf8(wide_headers);
+      std::string headers_utf8 = ps_sql::WideToUtf8(wide_headers);
       size_t pos = 0;
       bool first_line = true;
       while (pos < headers_utf8.size()) {

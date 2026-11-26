@@ -11,7 +11,7 @@
 namespace {
 
 bool ReadLocalFileUtf8(const std::string& path, std::vector<uint8_t>* out) {
-  std::wstring wide = ps_win_utf8::Utf8ToWide(path);
+  std::wstring wide = ps_sql::Utf8ToWide(path);
   if (wide.empty()) {
     return false;
   }

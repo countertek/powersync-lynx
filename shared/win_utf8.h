@@ -63,6 +63,13 @@ inline std::string WideToUtf8(const wchar_t* wide, int len = -1) {
   return utf8;
 }
 
+inline std::string WideToUtf8(const std::wstring& wide) {
+  if (wide.empty() || wide.size() > static_cast<std::size_t>(INT_MAX)) {
+    return {};
+  }
+  return WideToUtf8(wide.data(), static_cast<int>(wide.size()));
+}
+
 inline std::string GetModuleFilePathUtf8(HMODULE module) {
   constexpr std::size_t kMaxPathChars = 32768;
   std::size_t capacity = MAX_PATH;

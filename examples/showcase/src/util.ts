@@ -29,15 +29,25 @@ function globalProps(): {
   device?: string;
   demoApiUrl?: string;
   powersyncUrl?: string;
+  e2e?: boolean;
 } {
   try {
     const runtime = lynx as {
-      __globalProps?: { device?: string; demoApiUrl?: string; powersyncUrl?: string };
+      __globalProps?: {
+        device?: string;
+        demoApiUrl?: string;
+        powersyncUrl?: string;
+        e2e?: boolean;
+      };
     };
     return runtime.__globalProps ?? {};
   } catch {
     return {};
   }
+}
+
+export function e2eMode(): boolean {
+  return globalProps().e2e === true;
 }
 
 function defaultLoopbackHost(): string {

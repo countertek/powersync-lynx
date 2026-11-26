@@ -145,6 +145,7 @@ static void StopAppLoop(void) {
   std::shared_ptr<ShowcaseViewClient> _viewClient;
   std::shared_ptr<ShowcaseHttpService> _httpService;
   std::shared_ptr<ShowcaseResourceFetcher> _resourceFetcher;
+  NSTimer* _exitPollTimer;
   int _exitCode;
 }
 
@@ -206,9 +207,11 @@ static void StopAppLoop(void) {
   _contentView.wantsLayer = YES;
   _contentView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
   _window.contentView = _contentView;
-  [_window center];
-  [_window makeKeyAndOrderFront:nil];
-  [NSApp activateIgnoringOtherApps:YES];
+  if (!_config.headless) {
+    [_window center];
+    [_window makeKeyAndOrderFront:nil];
+    [NSApp activateIgnoringOtherApps:YES];
+  }
 
   CGFloat scale = _window.backingScaleFactor > 0.0 ? _window.backingScaleFactor : 2.0;
   _resourceFetcher = std::make_shared<ShowcaseResourceFetcher>();
@@ -256,11 +259,32 @@ static void StopAppLoop(void) {
       std::make_shared<lynx::pub::LynxTemplateData>(_config.GlobalPropsJson()));
   _lynxView->LoadTemplate(loadMeta);
 
+  if (!_config.exit_file.empty()) {
+    NSString* exitPath = [NSString stringWithUTF8String:_config.exit_file.c_str()];
+    __weak AppDelegate* weakSelf = self;
+    _exitPollTimer = [NSTimer scheduledTimerWithTimeInterval:0.2
+                                                     repeats:YES
+                                                       block:^(NSTimer* timer) {
+      if ([[NSFileManager defaultManager] fileExistsAtPath:exitPath]) {
+        [timer invalidate];
+        AppDelegate* strongSelf = weakSelf;
+        if (strongSelf != nil) {
+          strongSelf->_exitCode = 0;
+        }
+        StopAppLoop();
+      }
+    }];
+  }
+
   if (_config.smoke_test) {
     dispatch_after(
         dispatch_time(DISPATCH_TIME_NOW,
                       static_cast<int64_t>(_config.smoke_seconds * NSEC_PER_SEC)),
         dispatch_get_main_queue(), ^{
+          if (_exitPollTimer != nil) {
+            [_exitPollTimer invalidate];
+            _exitPollTimer = nil;
+          }
           bool ok = _viewClient->load_succeeded.load() &&
                     _viewClient->runtime_ready.load() &&
                     !_viewClient->had_error.load();
@@ -294,6 +318,10 @@ static void StopAppLoop(void) {
 
 - (void)applicationWillTerminate:(NSNotification*)notification {
   (void)notification;
+  if (_exitPollTimer != nil) {
+    [_exitPollTimer invalidate];
+    _exitPollTimer = nil;
+  }
   if (_lynxView && _viewClient) {
     _lynxView->RemoveClient(_viewClient);
   }

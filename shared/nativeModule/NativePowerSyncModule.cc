@@ -18,6 +18,7 @@
 #include "weak_napi_defines.h"
 #endif
 
+#include <atomic>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>

@@ -113,7 +113,11 @@ HostConfig HostConfig::FromProcess() {
   config.bundle_path = ReadOption(
       args, env, @[ @"-BundlePath", @"--bundle" ], @"LYNX_BUNDLE_PATH",
       ResolveDefaultBundlePath());
+  config.exit_file = ReadOption(
+      args, env, @[ @"-ExitFile", @"--exit-file" ], @"POWERSYNC_EXIT_FILE", "");
   config.smoke_test = HasFlag(args, env, @"--smoke-test", @"SMOKE_TEST");
+  config.headless = HasFlag(args, env, @"--headless", @"HEADLESS");
+  config.e2e = HasFlag(args, env, @"--e2e", @"POWERSYNC_E2E");
 
   std::string secondsStr = ReadOption(
       args, env, @[ @"--smoke-seconds" ], @"SMOKE_TEST_SECONDS", "");
@@ -130,6 +134,10 @@ std::string HostConfig::GlobalPropsJson() const {
   std::ostringstream oss;
   oss << "{\"device\":\"" << EscapeJson(device)
       << "\",\"demoApiUrl\":\"" << EscapeJson(demo_api_url)
-      << "\",\"powersyncUrl\":\"" << EscapeJson(powersync_url) << "\"}";
+      << "\",\"powersyncUrl\":\"" << EscapeJson(powersync_url) << "\"";
+  if (e2e) {
+    oss << ",\"e2e\":true";
+  }
+  oss << "}";
   return oss.str();
 }
