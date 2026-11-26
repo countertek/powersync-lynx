@@ -17,6 +17,7 @@ ifeq ($(UNAME_S),Linux)
 else ifeq ($(UNAME_S),Darwin)
   JNI_OS_INCLUDE := darwin
   JAVA_HOME ?= $(shell /usr/libexec/java_home 2>/dev/null)
+  MACOS_LDFLAGS := -framework CoreFoundation
   ifeq ($(UNAME_M),arm64)
     CORE_DYLIB := dist/macos/arm64/libpowersync_aarch64.macos.dylib
     FETCH_DEPS_FLAGS := --macos-arm64
@@ -29,6 +30,7 @@ else
   FETCH_DEPS_FLAGS := --macos-arm64
   JNI_OS_INCLUDE := darwin
   JAVA_HOME ?= $(shell /usr/libexec/java_home 2>/dev/null)
+  MACOS_LDFLAGS := -framework CoreFoundation
 endif
 TEST_BIN := shared/build/ps_sql_test
 FIXTURE_TEST_BIN := shared/build/sync_stream_fixtures_test
@@ -76,14 +78,14 @@ $(SQLITE_DIR)/sqlite3.c:
 $(SQLITE_DIR)/sqlite3.o: $(SQLITE_DIR)/sqlite3.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
-shared/build/ps_sql.o: shared/ps_sql.cc shared/ps_sql.h $(SQLITE_DIR)/sqlite3.h
+shared/build/ps_sql.o: shared/ps_sql.cc shared/ps_sql.h shared/win_utf8.h $(SQLITE_DIR)/sqlite3.h
 	mkdir -p shared/build
 	$(CXX) $(CXXFLAGS) $(SQLITE_FLAGS) -c shared/ps_sql.cc -o $@
 
-$(TEST_BIN): shared/build/ps_sql.o $(SQLITE_DIR)/sqlite3.o shared/tests/ps_sql_test.cc shared/nativeModule/core_path.h
+$(TEST_BIN): shared/build/ps_sql.o $(SQLITE_DIR)/sqlite3.o shared/tests/ps_sql_test.cc shared/nativeModule/core_path.h shared/nativeModule/db_location.h shared/win_utf8.h
 	mkdir -p shared/build
 	$(CXX) $(CXXFLAGS) $(SQLITE_FLAGS) shared/tests/ps_sql_test.cc \
-		shared/build/ps_sql.o $(SQLITE_DIR)/sqlite3.o $(LDFLAGS) -o $@
+		shared/build/ps_sql.o $(SQLITE_DIR)/sqlite3.o $(LDFLAGS) $(MACOS_LDFLAGS) -o $@
 
 $(FIXTURE_TEST_BIN): shared/tests/sync_stream_fixtures_test.cc \
 		shared/sync_stream_fixtures.h shared/tests/ndjson_http_replay.h \
@@ -229,7 +231,7 @@ shared/build/library_entry.o: lynxtron/library_entry.cc $(NODE_VENDOR_MARKER)
 	$(CXX) $(CXXFLAGS) $(NAPI_INCLUDE) -DNAPI_VERSION=8 \
 		-c lynxtron/library_entry.cc -o $@
 
-shared/build/NativePowerSyncModule.o: shared/nativeModule/NativePowerSyncModule.cc shared/nativeModule/NativePowerSyncModule.h shared/nativeModule/core_path.h $(NODE_VENDOR_MARKER)
+shared/build/NativePowerSyncModule.o: shared/nativeModule/NativePowerSyncModule.cc shared/nativeModule/NativePowerSyncModule.h shared/nativeModule/core_path.h shared/nativeModule/db_location.h shared/win_utf8.h $(NODE_VENDOR_MARKER)
 	mkdir -p shared/build
 	$(CXX) $(CXXFLAGS) $(SQLITE_FLAGS) $(NAPI_INCLUDE) -DNAPI_VERSION=8 \
 		-DUSE_WEAK_SUFFIX_NAPI -Ishared/nativeModule \
@@ -240,6 +242,6 @@ $(NODE): deps $(NODE_VENDOR_MARKER) shared/build/ps_sql.o shared/build/NativePow
 	$(CXX) -std=c++17 -fPIC -O2 -shared -Wl,-undefined,dynamic_lookup \
 		shared/build/NativePowerSyncModule.o shared/build/library_entry.o \
 		shared/build/ps_sql.o $(SQLITE_DIR)/sqlite3.o \
-		$(LDFLAGS) -o $@
+		$(LDFLAGS) $(MACOS_LDFLAGS) -o $@
 
 node: $(NODE)

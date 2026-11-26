@@ -89,11 +89,14 @@ target_compile_definitions(powersync_lynx_native
   PRIVATE
     POWERSYNC_NO_STATIC_REGISTRATION
 )
-if(WIN32)
+if(APPLE)
+  target_link_libraries(powersync_lynx_native PRIVATE "-framework CoreFoundation")
+elseif(WIN32)
   target_compile_definitions(powersync_lynx_native PRIVATE
     BUILDING_NODE_EXTENSION
     NOMINMAX
   )
+  target_link_libraries(powersync_lynx_native PRIVATE shell32 ole32)
 endif()
 
 # Stage powersync-sqlite-core alongside the consumer executable (or into Contents/Frameworks/
@@ -202,12 +205,14 @@ if(POWERSYNC_BUILD_LYNXTRON_NAPI)
   )
 
   if(APPLE)
+    target_link_libraries(powersync_lynx_napi PRIVATE "-framework CoreFoundation")
     target_link_options(powersync_lynx_napi PRIVATE "-Wl,-undefined,dynamic_lookup")
   elseif(WIN32)
     target_compile_definitions(powersync_lynx_napi PRIVATE
       BUILDING_NODE_EXTENSION
       NOMINMAX
     )
+    target_link_libraries(powersync_lynx_napi PRIVATE shell32 ole32)
     set(_ps_lynx_cmake "${_ps_lynx_headers_root}/cmake/lynx-library-headers.cmake")
     if(NOT EXISTS "${_ps_lynx_cmake}")
       message(FATAL_ERROR

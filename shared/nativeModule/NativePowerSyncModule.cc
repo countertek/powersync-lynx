@@ -7,6 +7,7 @@
 
 #include "NativePowerSyncModule.h"
 #include "core_path.h"
+#include "db_location.h"
 #include "ps_sql.h"
 
 #include "napi.h"
@@ -27,10 +28,7 @@
 #include <vector>
 
 #if defined(_WIN32)
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
+#include "win_utf8.h"
 #else
 #include <dlfcn.h>
 #include <sys/stat.h>
@@ -56,18 +54,16 @@ Engine& GetEngine() {
 std::string ModuleDirectory() {
 #if defined(_WIN32)
   HMODULE module = nullptr;
-  if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+  if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
                               GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                          reinterpret_cast<LPCSTR>(&ModuleDirectory),
+                          reinterpret_cast<LPCWSTR>(&ModuleDirectory),
                           &module)) {
     return ".";
   }
-  char path[MAX_PATH];
-  const DWORD n = GetModuleFileNameA(module, path, MAX_PATH);
-  if (n == 0 || n >= MAX_PATH) {
+  const std::string full = ps_sql::GetModuleFilePathUtf8(module);
+  if (full.empty()) {
     return ".";
   }
-  std::string full(path, n);
   const auto slash = full.find_last_of("\\/");
   return slash == std::string::npos ? std::string(".") : full.substr(0, slash);
 #else
@@ -102,25 +98,22 @@ std::string CoreFileName() {
 #endif
 }
 
-std::string ReadEnvVar(const char* name) {
-#if defined(_MSC_VER)
-  char* value = nullptr;
-  std::size_t len = 0;
-  if (_dupenv_s(&value, &len, name) != 0 || value == nullptr) {
-    return {};
-  }
-  std::string result(value);
-  std::free(value);
-  return result;
+std::string ReadCorePathEnv() {
+#if defined(_WIN32)
+  return ps_sql::ReadEnvVarUtf8(L"POWERSYNC_CORE_PATH");
 #else
-  const char* value = std::getenv(name);
+  const char* value = std::getenv("POWERSYNC_CORE_PATH");
   return value != nullptr ? std::string(value) : std::string();
 #endif
 }
 
 bool FileExists(const std::string& path) {
 #if defined(_WIN32)
-  const DWORD attrs = GetFileAttributesA(path.c_str());
+  const std::wstring wide = ps_sql::Utf8ToWide(path);
+  if (wide.empty()) {
+    return false;
+  }
+  const DWORD attrs = GetFileAttributesW(wide.c_str());
   return attrs != INVALID_FILE_ATTRIBUTES &&
          (attrs & FILE_ATTRIBUTE_DIRECTORY) == 0;
 #else
@@ -142,7 +135,7 @@ EngineConfig MakeConfig() {
   config.core_load = ps_sql::CoreLoad::kAutoExtension;
   path_options.platform = ps_sql::CorePlatform::kLinux;
 #endif
-  path_options.env_core_path = ReadEnvVar("POWERSYNC_CORE_PATH");
+  path_options.env_core_path = ReadCorePathEnv();
   path_options.module_dir = ModuleDirectory();
   path_options.core_filename = CoreFileName();
   path_options.file_exists = FileExists;
@@ -369,6 +362,20 @@ Napi::Value Open(const Napi::CallbackInfo& info) {
   }
   if (options.Has("readOnly") && options.Get("readOnly").IsBoolean()) {
     open_options.read_only = options.Get("readOnly").As<Napi::Boolean>();
+  }
+  if (!open_options.db_location.has_value() &&
+      ps_sql::NeedsDefaultDbLocation(open_options.db_filename,
+                                     ps_sql::CurrentDbLocationPlatform())) {
+    std::string dir_error;
+    std::string default_dir =
+        ps_sql::ResolveAndCreateDefaultDbLocation(&dir_error);
+    if (default_dir.empty()) {
+      InvokeJs(tsfn, ps_sql::fail(dir_error.empty()
+                                      ? "failed to resolve default dbLocation"
+                                      : dir_error));
+      return env.Undefined();
+    }
+    open_options.db_location = std::move(default_dir);
   }
   GetEngine().open(std::move(open_options),
                    [tsfn](Envelope envelope) { InvokeJs(tsfn, std::move(envelope)); });

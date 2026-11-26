@@ -16,6 +16,7 @@
 #include <utility>
 
 #if defined(_WIN32)
+#include "win_utf8.h"
 #include <io.h>
 #include <sys/stat.h>
 #else
@@ -45,8 +46,21 @@ using PowersyncInit = int (*)(sqlite3*, char**, const sqlite3_api_routines*);
 
 bool is_directory(const std::string& path) {
 #if defined(_WIN32)
+  if (path.empty()) {
+    return false;
+  }
+  std::wstring wide = Utf8ToWide(path);
+  if (wide.empty()) {
+    return false;
+  }
+  while (wide.size() > 1 && (wide.back() == L'\\' || wide.back() == L'/')) {
+    if (wide.size() == 3 && wide[1] == L':') {
+      break;
+    }
+    wide.pop_back();
+  }
   struct _stat st;
-  if (_stat(path.c_str(), &st) != 0) {
+  if (_wstat(wide.c_str(), &st) != 0) {
     return false;
   }
   return (st.st_mode & _S_IFDIR) != 0;
