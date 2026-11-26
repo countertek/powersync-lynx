@@ -17,7 +17,7 @@ The platform implementation of PowerSync’s `DBAdapter`: native SQLite plus the
 _Avoid_: native SDK, bridge (when meaning this)
 
 **Native Module**:
-The Lynx host hook the Adapter uses on the background thread. Passable values, not a live SQLite handle. SQL RPC is `open` / `close` / `execute` / `executeBatch`. On iOS/Android Autolink the same lookup also exposes Native Module HTTP (`httpFetch`) for `/sync/stream`; that is not Adapter SQL and is not public API. Desktop N-API is SQL-only.
+The Lynx host hook the Adapter uses on the background thread. Passable values, not a live SQLite handle. SQL RPC is `open` / `close` / `execute` / `executeBatch`. On iOS, Android, and Desktop (`macos/arm64`, `windows/x64`), the same lookup also exposes Native Module HTTP (`httpFetch` / `httpFetchAbort`) for `/sync/stream`; that is not Adapter SQL and is not public API.
 _Avoid_: JS facade, Client, NativeModules as app code, treating httpFetch as DBAdapter
 
 **Host helper**:
