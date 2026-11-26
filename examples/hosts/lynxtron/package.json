@@ -1,0 +1,28 @@
+{
+  "name": "powersync-lynx-lynxtron-showcase",
+  "version": "0.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/desktop/main.js",
+  "scripts": {
+    "build": "rsbuild build",
+    "dev": "rsbuild dev",
+    "start": "lynxtron ./dist/desktop/main.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@lynx-js/lynxtron": "0.0.31",
+    "powersync-lynx": "link:../../.."
+  },
+  "devDependencies": {
+    "@lynx-js/lynxtron-dev-plugins": "0.0.31",
+    "@rsbuild/core": "^2.3.4",
+    "@types/node": "26.4.1",
+    "typescript": "~6.0.3"
+  },
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "packageManager": "pnpm@12.3.4"
+}

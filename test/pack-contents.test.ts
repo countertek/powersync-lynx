@@ -226,6 +226,31 @@ test("packed tarball ships iOS build inputs and omits host/build residue", async
       false,
       "Autolink uses the first .podspec under ios/",
     );
+    const lynxtronTargets = packedLynxLib.platforms?.lynxtron?.targets ?? [];
+    assert.equal(
+      Array.isArray(lynxtronTargets) &&
+        lynxtronTargets.some(
+          (t) =>
+            t.os === "darwin" &&
+            t.arch === "arm64" &&
+            t.files?.includes("dist/macos/arm64/powersync-lynx.node") &&
+            t.files?.includes("dist/macos/arm64/libpowersync_aarch64.macos.dylib"),
+        ),
+      true,
+      "lynx.lib.json must declare darwin/arm64 Lynxtron Autolink target",
+    );
+    assert.equal(
+      Array.isArray(lynxtronTargets) &&
+        lynxtronTargets.some(
+          (t) =>
+            t.os === "win32" &&
+            t.arch === "x64" &&
+            t.files?.includes("dist/windows/x64/powersync-lynx.node") &&
+            t.files?.includes("dist/windows/x64/powersync_x64.dll"),
+        ),
+      true,
+      "lynx.lib.json must declare win32/x64 Lynxtron Autolink target",
+    );
 
     assert.equal(
       files.some((file) => file.startsWith("android/host/")),

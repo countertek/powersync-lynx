@@ -1,0 +1,9 @@
+# Separate pnpm project so Lynxtron desktop deps stay isolated from the
+# library root and from examples/showcase (which pulls @powersync/web).
+allowBuilds:
+  "@lynx-js/lynxtron": true
+  esbuild: true
+autoInstallPeers: false
+onlyBuiltDependencies:
+  - "@lynx-js/lynxtron"
+  - esbuild
