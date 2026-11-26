@@ -680,6 +680,7 @@ async function runTarget(target, { timeoutSec = 45 } = {}) {
     try {
       donePayload = await Promise.race([stack.donePromise, earlyExitPromise, timeoutPromise]);
     } catch (err) {
+      console.error(`[e2e] ${target} server stats: ${JSON.stringify(stack.stats)}`);
       console.error(`[e2e] ${target} host output (last 60 lines):`);
       console.error(outputLines.slice(-60).join("\n"));
       throw err;

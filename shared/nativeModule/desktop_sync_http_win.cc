@@ -295,8 +295,19 @@ class WinHttpStreamTask final
         FinishError(PS_SYNC_HTTP_ABORT_MESSAGE);
         return;
       }
+      DWORD avail = 0;
+      if (!WinHttpQueryDataAvailable(req, &avail)) {
+        FinishError(
+            FormatWinHttpError("WinHttpQueryDataAvailable", GetLastError()));
+        return;
+      }
+      if (avail == 0) {
+        break;
+      }
+      const DWORD to_read =
+          avail < sizeof(buf) ? avail : static_cast<DWORD>(sizeof(buf));
       DWORD bytes_read = 0;
-      if (!WinHttpReadData(req, buf, sizeof(buf), &bytes_read)) {
+      if (!WinHttpReadData(req, buf, to_read, &bytes_read)) {
         FinishError(FormatWinHttpError("WinHttpReadData", GetLastError()));
         return;
       }
@@ -423,8 +434,27 @@ HttpResponseEnvelope RunWinHttpIdleComplete(const HttpRequest& request,
   bool idle_completed = false;
 
   for (;;) {
+    DWORD avail = 0;
+    if (!WinHttpQueryDataAvailable(req.get(), &avail)) {
+      const DWORD err = GetLastError();
+      if (long_lived && !body.empty() && err == ERROR_WINHTTP_TIMEOUT) {
+        idle_completed = true;
+        break;
+      }
+      if (!body.empty() && is_sync_stream) {
+        idle_completed = true;
+        break;
+      }
+      return MakeIdleErrorEnvelope(
+          -1, FormatWinHttpError("WinHttpQueryDataAvailable", err));
+    }
+    if (avail == 0) {
+      break;
+    }
+    const DWORD to_read =
+        avail < sizeof(buf) ? avail : static_cast<DWORD>(sizeof(buf));
     DWORD bytes_read = 0;
-    if (!WinHttpReadData(req.get(), buf, sizeof(buf), &bytes_read)) {
+    if (!WinHttpReadData(req.get(), buf, to_read, &bytes_read)) {
       const DWORD err = GetLastError();
       if (long_lived && !body.empty() && err == ERROR_WINHTTP_TIMEOUT) {
         idle_completed = true;
