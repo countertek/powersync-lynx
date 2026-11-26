@@ -1,0 +1,2 @@
+# Preserve LF endings in pnpm patch files so Windows checkouts do not fail ERR_PNPM_INVALID_PATCH.
+*.patch text eol=lf
