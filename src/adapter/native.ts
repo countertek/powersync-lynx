@@ -1,4 +1,5 @@
-import type { SqliteValue } from "@powersync/common";
+import { queryResultWithoutRows } from "@powersync/common";
+import type { QueryResult, RawQueryResult, SqliteValue } from "@powersync/common";
 import { getLynxHost } from "../host.ts";
 import type { LynxFetchModule, NativeSyncHttpModule } from "../sync/transport/http-types.ts";
 import { isBigInt } from "../type-guards.ts";
@@ -65,6 +66,11 @@ export interface OpenPayload {
   dbLocation?: string;
 }
 
+export interface OpenedNativeConnection {
+  dbId: string;
+  multiTab: boolean;
+}
+
 export type NativeCallback = (envelope: NativeWireEnvelope) => void;
 
 export interface NativePowerSyncModule {
@@ -75,7 +81,7 @@ export interface NativePowerSyncModule {
 }
 
 export interface NativeModulesHost {
-  /** SQL RPC; iOS/Android Autolink may also carry NativeSyncHttp methods. */
+  /** SQL RPC; iOS/Android/Desktop hosts may also carry NativeSyncHttp methods. */
   NativePowerSyncModule?: NativePowerSyncModule & Partial<NativeSyncHttpModule>;
   LynxFetchModule?: LynxFetchModule;
 }
@@ -84,12 +90,8 @@ export class NativeModuleError extends Error {
   code?: number;
 }
 
-function nativeModulesHost(): NativeModulesHost | undefined {
-  return getLynxHost().nativeModules();
-}
-
 function getNativeModule(): NativePowerSyncModule {
-  const native = nativeModulesHost()?.NativePowerSyncModule;
+  const native = getLynxHost().nativeModules()?.NativePowerSyncModule;
   if (native == null) {
     throw new Error("NativePowerSyncModule is not registered");
   }
@@ -138,36 +140,7 @@ function withNativeCallback(run: (callback: NativeCallback) => void): Promise<Na
   });
 }
 
-type NativeSqlFn<T> = T extends (...args: [...infer Args, NativeCallback]) => void
-  ? (...args: Args) => Promise<NativeOkEnvelope>
-  : never;
-
-/**
- * Promise form of {@link NativePowerSyncModule} SQL RPC.
- * Wire methods stay callback-based (ADR-0001); this value wraps each op.
- */
-export type NativeSql = {
-  readonly [K in keyof NativePowerSyncModule]: NativeSqlFn<NativePowerSyncModule[K]>;
-};
-
-export const nativeSql: NativeSql = {
-  open(payload) {
-    return withNativeCallback((callback) => getNativeModule().open(payload, callback));
-  },
-  close(dbId) {
-    return withNativeCallback((callback) => getNativeModule().close(dbId, callback));
-  },
-  execute(dbId, sql, params) {
-    return withNativeCallback((callback) => getNativeModule().execute(dbId, sql, params, callback));
-  },
-  executeBatch(dbId, sql, params) {
-    return withNativeCallback((callback) =>
-      getNativeModule().executeBatch(dbId, sql, params, callback),
-    );
-  },
-};
-
-export function blobToArrayBuffer(value: BindValue): BindValue {
+function blobToArrayBuffer(value: BindValue): BindValue {
   if (value instanceof ArrayBuffer) {
     return value;
   }
@@ -180,7 +153,7 @@ export function blobToArrayBuffer(value: BindValue): BindValue {
   return value;
 }
 
-export function encodeBindParams(params: BindValues | null | undefined): BindValue[] {
+function encodeBindParams(params: BindValues | null | undefined): BindValue[] {
   if (params == null) {
     return [];
   }
@@ -192,14 +165,14 @@ export function encodeBindParams(params: BindValues | null | undefined): BindVal
   });
 }
 
-export function encodeBindParamRows(params: BindValueRows | null | undefined): BindValue[][] {
+function encodeBindParamRows(params: BindValueRows | null | undefined): BindValue[][] {
   if (params == null) {
     return [];
   }
   return params.map(encodeBindParams);
 }
 
-export function decodeCell(value: NativeCell): SqliteValue {
+function decodeCell(value: NativeCell): SqliteValue {
   if (value instanceof ArrayBuffer) {
     return new Uint8Array(value);
   }
@@ -211,6 +184,54 @@ export function decodeCell(value: NativeCell): SqliteValue {
   return value as SqliteValue;
 }
 
-export function decodeRawRows(rawRows: NativeCell[][] | null | undefined): SqliteValue[][] {
+function decodeRawRows(rawRows: NativeCell[][] | null | undefined): SqliteValue[][] {
   return (rawRows ?? []).map((row) => (row ?? []).map(decodeCell));
 }
+
+/**
+ * Deep SQL RPC seam over callback-based {@link NativePowerSyncModule} (ADR-0001).
+ * Owns envelope parsing, non-null `dbId` checks, bind-param encoding (blobs and
+ * tagged BigInts), and outbound row decoding.
+ */
+export interface NativeSql {
+  open(payload: OpenPayload): Promise<OpenedNativeConnection>;
+  close(dbId: string): Promise<void>;
+  execute(dbId: string, sql: string, params?: BindValues): Promise<RawQueryResult>;
+  executeBatch(dbId: string, sql: string, params?: BindValueRows): Promise<QueryResult<never>>;
+}
+
+export const nativeSql: NativeSql = {
+  async open(payload) {
+    const envelope = await withNativeCallback((callback) =>
+      getNativeModule().open(payload, callback),
+    );
+    if (envelope.dbId == null) {
+      throw new Error("NativePowerSyncModule.open did not return dbId");
+    }
+    return { dbId: envelope.dbId, multiTab: envelope.multiTab === true };
+  },
+  async close(dbId) {
+    await withNativeCallback((callback) => getNativeModule().close(dbId, callback));
+  },
+  async execute(dbId, sql, params) {
+    const encoded = encodeBindParams(params);
+    const envelope = await withNativeCallback((callback) =>
+      getNativeModule().execute(dbId, sql, encoded, callback),
+    );
+    return {
+      insertId: envelope.insertId,
+      rowsAffected: envelope.rowsAffected,
+      columnNames: envelope.columnNames ?? [],
+      rawRows: decodeRawRows(envelope.rawRows),
+    };
+  },
+  async executeBatch(dbId, sql, params) {
+    const encoded = encodeBindParamRows(params);
+    const envelope = await withNativeCallback((callback) =>
+      getNativeModule().executeBatch(dbId, sql, encoded, callback),
+    );
+    return queryResultWithoutRows({
+      rowsAffected: envelope.rowsAffected ?? 0,
+    });
+  },
+};

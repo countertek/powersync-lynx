@@ -1,11 +1,46 @@
-import { DBAdapter } from "@powersync/common";
-import type { DBLockOptions, LockContext, QueryResult } from "@powersync/common";
+import { DBAdapter, LockContext } from "@powersync/common";
+import type { DBLockOptions, QueryResult, RawQueryResult } from "@powersync/common";
 import { timeoutSignal, Semaphore } from "@powersync/shared-internals";
 import { getLynxHost } from "../host.ts";
 import { TabCoordinator } from "../tabs.ts";
-import { LynxConnection } from "./LynxConnection.ts";
-import { nativeSql, type BindValueRows, type OpenPayload } from "./native.ts";
-import { DEFAULT_SQLITE_OPTIONS, READ_CONNECTIONS } from "./sqlite-options.ts";
+import { nativeSql, type BindValueRows, type BindValues, type OpenPayload } from "./native.ts";
+
+/** Official OP-SQLite defaults (`DEFAULT_SQLITE_OPTIONS`), encryption omitted. */
+const DEFAULT_SQLITE_OPTIONS = {
+  journalMode: "WAL",
+  synchronous: "NORMAL",
+  journalSizeLimit: 6 * 1024 * 1024,
+  cacheSizeKb: 50 * 1024,
+  temporaryStorage: "memory",
+  lockTimeoutMs: 30000,
+} as const;
+
+const READ_CONNECTIONS = 5;
+
+class LynxConnection extends LockContext {
+  readonly dbId: string;
+
+  constructor(dbId: string) {
+    super();
+    this.dbId = dbId;
+  }
+
+  executeRaw(query: string, params?: BindValues): Promise<RawQueryResult> {
+    return nativeSql.execute(this.dbId, query, params);
+  }
+
+  executeNativeBatch(query: string, params?: BindValueRows): Promise<QueryResult<never>> {
+    return nativeSql.executeBatch(this.dbId, query, params);
+  }
+
+  async refreshSchema(): Promise<void> {
+    await this.get("PRAGMA table_info('sqlite_master')");
+  }
+
+  close(): Promise<void> {
+    return nativeSql.close(this.dbId);
+  }
+}
 
 export interface LynxAdapterOpenOptions {
   name: string;
@@ -104,22 +139,19 @@ export class LynxDBAdapter extends DBAdapter {
     }
   }
 
-  async openConnection(readOnly: boolean, dbFilename: string): Promise<LynxConnection> {
+  private async openConnection(readOnly: boolean, dbFilename: string): Promise<LynxConnection> {
     const payload: OpenPayload = { dbFilename, readOnly };
     if (this.options.dbLocation != null) {
       payload.dbLocation = this.options.dbLocation;
     }
     const { dbId, multiTab } = await nativeSql.open(payload);
-    if (dbId == null) {
-      throw new Error("NativePowerSyncModule.open did not return dbId");
-    }
-    if (multiTab === true) {
+    if (multiTab) {
       this.tabs.markShared();
     }
     return new LynxConnection(dbId);
   }
 
-  writers(): Semaphore<LynxConnection> {
+  private writers(): Semaphore<LynxConnection> {
     const writeConnection = this.writeConnection;
     if (writeConnection == null) {
       throw new Error("LynxDBAdapter write connection is not open");
@@ -127,7 +159,7 @@ export class LynxDBAdapter extends DBAdapter {
     return writeConnection;
   }
 
-  readers(): Semaphore<LynxConnection> {
+  private readers(): Semaphore<LynxConnection> {
     const readConnections = this.readConnections;
     if (readConnections == null) {
       throw new Error("LynxDBAdapter read connections are not open");
@@ -169,14 +201,14 @@ export class LynxDBAdapter extends DBAdapter {
     try {
       const outcomes = await Promise.allSettled(toClose.map((conn) => conn.close()));
       for (let i = 0; i < outcomes.length; i++) {
-        const outcome = outcomes[i];
+        const outcome = outcomes[i]!;
         if (outcome.status !== "rejected") {
           continue;
         }
         if (firstError === undefined) {
           firstError = outcome.reason;
         }
-        const conn = toClose[i];
+        const conn = toClose[i]!;
         if (conn === writeItem) {
           keepWrite = true;
         } else {
@@ -194,7 +226,7 @@ export class LynxDBAdapter extends DBAdapter {
     }
   }
 
-  generateNestedAbortSignal(options?: DBLockOptions): NestedAbortSignal {
+  private generateNestedAbortSignal(options?: DBLockOptions): NestedAbortSignal {
     const outerSignal = this.abortController.signal;
     let signal: AbortSignal;
     let cleanUpInnerSignal: (() => void) | undefined;
@@ -230,7 +262,10 @@ export class LynxDBAdapter extends DBAdapter {
     }
   }
 
-  async writeLock<T>(fn: (tx: LockContext) => Promise<T>, options?: DBLockOptions): Promise<T> {
+  private async withWriteConnection<T>(
+    fn: (conn: LynxConnection) => Promise<T>,
+    options?: DBLockOptions,
+  ): Promise<T> {
     await this.initialized;
     const { signal, cleanUpInnerSignal } = this.generateNestedAbortSignal(options);
     const { item, release } = await this.writers().requestOne(signal);
@@ -256,12 +291,13 @@ export class LynxDBAdapter extends DBAdapter {
     }
   }
 
+  writeLock<T>(fn: (tx: LockContext) => Promise<T>, options?: DBLockOptions): Promise<T> {
+    return this.withWriteConnection(fn, options);
+  }
+
   async refreshSchema(): Promise<void> {
     await this.initialized;
-    await this.writeLock((l) => {
-      // SAFETY: writeLock always yields a LynxConnection for this Adapter.
-      return (l as LynxConnection).refreshSchema();
-    });
+    await this.withWriteConnection((conn) => conn.refreshSchema());
     const { items, release } = await this.readers().requestAll();
     try {
       for (const readConnection of items) {
@@ -273,9 +309,6 @@ export class LynxDBAdapter extends DBAdapter {
   }
 
   executeBatch(query: string, params?: BindValueRows): Promise<QueryResult<never>> {
-    return this.writeLock((conn) => {
-      // SAFETY: writeLock always yields a LynxConnection for this Adapter.
-      return (conn as LynxConnection).executeNativeBatch(query, params);
-    });
+    return this.withWriteConnection((conn) => conn.executeNativeBatch(query, params));
   }
 }

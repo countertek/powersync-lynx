@@ -56,7 +56,8 @@ test("PrimJS adapter reads NativeModules, platform, text codec, and fetch from g
     assert.equal(host.fetchImpl(), fetchImpl);
     assert.equal(host.globalEventEmitters().includes(emitter), true);
     const opened = await nativeSql.open({ dbFilename: "host.db", readOnly: false });
-    assert.equal(opened.ok, true);
+    assert.equal(opened.dbId, "test");
+    assert.equal(opened.multiTab, false);
   } finally {
     globalThis.NativeModules = previousModules;
     globalThis.SystemInfo = previousInfo;
