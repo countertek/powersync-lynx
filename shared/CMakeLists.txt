@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.22)
 project(powersync_lynx_native LANGUAGES C CXX)
+if(APPLE)
+  enable_language(OBJCXX)
+endif()
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
@@ -60,16 +63,30 @@ if(DEFINED POWERSYNC_LYNX_INCLUDE_DIRS AND POWERSYNC_LYNX_INCLUDE_DIRS)
   list(APPEND _ps_native_includes ${POWERSYNC_LYNX_INCLUDE_DIRS})
 endif()
 
+set(_ps_http_sources
+  nativeModule/desktop_sync_http.cc
+)
+if(APPLE)
+  list(APPEND _ps_http_sources nativeModule/desktop_sync_http_macos.mm)
+  set_source_files_properties(nativeModule/desktop_sync_http_macos.mm PROPERTIES
+    COMPILE_OPTIONS "-fobjc-arc"
+  )
+elseif(WIN32)
+  list(APPEND _ps_http_sources nativeModule/desktop_sync_http_win.cc)
+endif()
+
 # Native CMake LynxView embedder library (no lynxtron/library_entry.cc, no native-vendor/).
 # When building standalone Lynxtron N-API without LYNX_SDK_DIR, keep powersync_lynx_native
 # out of ALL so `cmake --build` does not fail on missing desktop SDK headers.
 if(POWERSYNC_BUILD_LYNXTRON_NAPI AND NOT _ps_native_includes)
   add_library(powersync_lynx_native STATIC EXCLUDE_FROM_ALL
     nativeModule/NativePowerSyncModule.cc
+    ${_ps_http_sources}
   )
 else()
   add_library(powersync_lynx_native STATIC
     nativeModule/NativePowerSyncModule.cc
+    ${_ps_http_sources}
   )
 endif()
 target_link_libraries(powersync_lynx_native PRIVATE ps_sql)
@@ -90,13 +107,16 @@ target_compile_definitions(powersync_lynx_native
     POWERSYNC_NO_STATIC_REGISTRATION
 )
 if(APPLE)
-  target_link_libraries(powersync_lynx_native PRIVATE "-framework CoreFoundation")
+  target_link_libraries(powersync_lynx_native PRIVATE
+    "-framework CoreFoundation"
+    "-framework Foundation"
+  )
 elseif(WIN32)
   target_compile_definitions(powersync_lynx_native PRIVATE
     BUILDING_NODE_EXTENSION
     NOMINMAX
   )
-  target_link_libraries(powersync_lynx_native PRIVATE shell32 ole32)
+  target_link_libraries(powersync_lynx_native PRIVATE shell32 ole32 winhttp)
 endif()
 
 # Stage powersync-sqlite-core alongside the consumer executable (or into Contents/Frameworks/
@@ -175,6 +195,7 @@ if(POWERSYNC_BUILD_LYNXTRON_NAPI)
 
   add_library(powersync_lynx_napi MODULE
     nativeModule/NativePowerSyncModule.cc
+    ${_ps_http_sources}
     "${POWERSYNC_LYNX_ROOT}/lynxtron/library_entry.cc"
   )
   target_link_libraries(powersync_lynx_napi PRIVATE ps_sql)
@@ -205,14 +226,17 @@ if(POWERSYNC_BUILD_LYNXTRON_NAPI)
   )
 
   if(APPLE)
-    target_link_libraries(powersync_lynx_napi PRIVATE "-framework CoreFoundation")
+    target_link_libraries(powersync_lynx_napi PRIVATE
+      "-framework CoreFoundation"
+      "-framework Foundation"
+    )
     target_link_options(powersync_lynx_napi PRIVATE "-Wl,-undefined,dynamic_lookup")
   elseif(WIN32)
     target_compile_definitions(powersync_lynx_napi PRIVATE
       BUILDING_NODE_EXTENSION
       NOMINMAX
     )
-    target_link_libraries(powersync_lynx_napi PRIVATE shell32 ole32)
+    target_link_libraries(powersync_lynx_napi PRIVATE shell32 ole32 winhttp)
     set(_ps_lynx_cmake "${_ps_lynx_headers_root}/cmake/lynx-library-headers.cmake")
     if(NOT EXISTS "${_ps_lynx_cmake}")
       message(FATAL_ERROR

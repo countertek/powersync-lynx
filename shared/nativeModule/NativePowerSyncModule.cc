@@ -8,7 +8,9 @@
 #include "NativePowerSyncModule.h"
 #include "core_path.h"
 #include "db_location.h"
+#include "desktop_sync_http.h"
 #include "ps_sql.h"
+#include "sync_http_policy.h"
 
 #include "napi.h"
 
@@ -447,6 +449,321 @@ Napi::Value ExecuteBatch(const Napi::CallbackInfo& info) {
   return env.Undefined();
 }
 
+Napi::Object HttpEnvelopeToJs(
+    Napi::Env env, const ps_desktop_http::HttpResponseEnvelope& envelope) {
+  Napi::Object object = Napi::Object::New(env);
+  object.Set("ok", Napi::Boolean::New(env, envelope.ok));
+  object.Set("status", Napi::Number::New(env, envelope.status));
+  object.Set("statusText", Napi::String::New(env, envelope.status_text));
+  object.Set("body", Napi::String::New(env, envelope.body));
+  object.Set("idleComplete", Napi::Boolean::New(env, envelope.idle_complete));
+  if (!envelope.content_type.empty()) {
+    object.Set("contentType", Napi::String::New(env, envelope.content_type));
+  }
+  if (!envelope.streaming_id.empty()) {
+    object.Set("streamingId", Napi::String::New(env, envelope.streaming_id));
+  }
+  if (envelope.has_body_base64) {
+    object.Set("bodyBase64", Napi::String::New(env, envelope.body_base64));
+  }
+  if (!envelope.ok || !envelope.message.empty()) {
+    object.Set("message", Napi::String::New(env, envelope.message));
+  }
+  return object;
+}
+
+class OneShotHttpCallback {
+ public:
+  explicit OneShotHttpCallback(Napi::ThreadSafeFunction tsfn)
+      : tsfn_(std::move(tsfn)) {}
+
+  ~OneShotHttpCallback() {
+    if (!invoked_.test_and_set()) {
+      tsfn_.Release();
+    }
+  }
+
+  void Invoke(ps_desktop_http::HttpResponseEnvelope envelope) {
+    if (invoked_.test_and_set()) {
+      return;
+    }
+    auto* copy = new ps_desktop_http::HttpResponseEnvelope(std::move(envelope));
+    const napi_status status = tsfn_.NonBlockingCall(
+        copy, [](Napi::Env env, Napi::Function js_callback,
+                 ps_desktop_http::HttpResponseEnvelope* data) {
+          std::unique_ptr<ps_desktop_http::HttpResponseEnvelope> owned(data);
+          try {
+            js_callback.Call({HttpEnvelopeToJs(env, *owned)});
+          } catch (...) {
+          }
+        });
+    tsfn_.Release();
+    if (status != napi_ok) {
+      delete copy;
+    }
+  }
+
+ private:
+  Napi::ThreadSafeFunction tsfn_;
+  std::atomic_flag invoked_ = ATOMIC_FLAG_INIT;
+};
+
+struct ResolvedEmitter {
+  Napi::Object emitter;
+  Napi::Function fn;
+  bool is_trigger = false;
+};
+
+std::optional<ResolvedEmitter> ResolveGlobalEventEmitter(Napi::Env env) {
+  auto extract = [](const Napi::Value& candidate)
+      -> std::optional<ResolvedEmitter> {
+    if (!candidate.IsObject()) {
+      return std::nullopt;
+    }
+    Napi::Object obj = candidate.As<Napi::Object>();
+    // Prefer Lynx GlobalEventEmitter.trigger(name, payload), which invokes
+    // listener.call(ctx, payload). Fall back to emit(name, [payload]), which
+    // invokes listener.apply(ctx, argsArray) in lynx_core.js.
+    Napi::Value trigger_val = obj.Get("trigger");
+    if (trigger_val.IsFunction()) {
+      return ResolvedEmitter{obj, trigger_val.As<Napi::Function>(), true};
+    }
+    Napi::Value emit_val = obj.Get("emit");
+    if (emit_val.IsFunction()) {
+      return ResolvedEmitter{obj, emit_val.As<Napi::Function>(), false};
+    }
+    return std::nullopt;
+  };
+
+  try {
+    Napi::Object global = env.Global();
+    if (auto found = extract(global.Get("__psLynxGlobalEventEmitter"))) {
+      return found;
+    }
+    Napi::Value lynx_val = global.Get("lynx");
+    if (lynx_val.IsObject()) {
+      Napi::Object lynx_obj = lynx_val.As<Napi::Object>();
+      Napi::Value get_js_module = lynx_obj.Get("getJSModule");
+      if (get_js_module.IsFunction()) {
+        try {
+          Napi::Value mod = get_js_module.As<Napi::Function>().Call(
+              lynx_obj, {Napi::String::New(env, "GlobalEventEmitter")});
+          if (env.IsExceptionPending()) {
+            env.GetAndClearPendingException();
+          } else if (auto found = extract(mod)) {
+            return found;
+          }
+        } catch (...) {
+          if (env.IsExceptionPending()) {
+            env.GetAndClearPendingException();
+          }
+        }
+      }
+      Napi::Value get_app = lynx_obj.Get("getApp");
+      if (get_app.IsFunction()) {
+        try {
+          Napi::Value app = get_app.As<Napi::Function>().Call(lynx_obj, {});
+          if (env.IsExceptionPending()) {
+            env.GetAndClearPendingException();
+          } else if (app.IsObject()) {
+            if (auto found =
+                    extract(app.As<Napi::Object>().Get("GlobalEventEmitter"))) {
+              return found;
+            }
+          }
+        } catch (...) {
+          if (env.IsExceptionPending()) {
+            env.GetAndClearPendingException();
+          }
+        }
+      }
+      if (auto found = extract(lynx_obj.Get("GlobalEventEmitter"))) {
+        return found;
+      }
+    }
+    if (auto found = extract(global.Get("GlobalEventEmitter"))) {
+      return found;
+    }
+  } catch (...) {
+    if (env.IsExceptionPending()) {
+      env.GetAndClearPendingException();
+    }
+  }
+  return std::nullopt;
+}
+
+class NapiStreamEventSender {
+ public:
+  explicit NapiStreamEventSender(Napi::ThreadSafeFunction tsfn)
+      : tsfn_(std::move(tsfn)) {}
+
+  ~NapiStreamEventSender() { Release(); }
+
+  void Send(const ps_desktop_http::StreamEvent& ev) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (released_) {
+      return;
+    }
+    auto* copy = new ps_desktop_http::StreamEvent(ev);
+    const napi_status status = tsfn_.NonBlockingCall(
+        copy, [](Napi::Env env, Napi::Function fallback_fn,
+                 ps_desktop_http::StreamEvent* data) {
+          std::unique_ptr<ps_desktop_http::StreamEvent> owned(data);
+          try {
+            Napi::Object payload = Napi::Object::New(env);
+            payload.Set("event", Napi::String::New(env, owned->event));
+            if (owned->event == PS_SYNC_HTTP_EVENT_ON_DATA) {
+              payload.Set("data", Napi::String::New(env, owned->data));
+            } else if (owned->event == PS_SYNC_HTTP_EVENT_ON_ERROR) {
+              payload.Set("error", Napi::String::New(env, owned->error));
+            }
+            Napi::String event_name = Napi::String::New(env, owned->stream_id);
+            auto resolved = ResolveGlobalEventEmitter(env);
+            if (resolved.has_value()) {
+              if (resolved->is_trigger) {
+                resolved->fn.Call(resolved->emitter, {event_name, payload});
+              } else {
+                Napi::Array params = Napi::Array::New(env, 1);
+                params.Set(static_cast<uint32_t>(0), payload);
+                resolved->fn.Call(resolved->emitter, {event_name, params});
+              }
+            } else if (!fallback_fn.IsEmpty()) {
+              fallback_fn.Call({event_name, payload});
+            }
+          } catch (...) {
+            if (env.IsExceptionPending()) {
+              env.GetAndClearPendingException();
+            }
+          }
+        });
+    if (status != napi_ok) {
+      delete copy;
+    }
+  }
+
+  void Release() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!released_) {
+      released_ = true;
+      tsfn_.Release();
+    }
+  }
+
+ private:
+  std::mutex mutex_;
+  Napi::ThreadSafeFunction tsfn_;
+  bool released_ = false;
+};
+
+bool ParseHttpRequest(const Napi::Value& value,
+                      ps_desktop_http::HttpRequest* out, std::string* error) {
+  if (!value.IsObject()) {
+    *error = "httpFetch request must be an object";
+    return false;
+  }
+  Napi::Object obj = value.As<Napi::Object>();
+  if (!obj.Has("url") || !obj.Get("url").IsString()) {
+    *error = "httpFetch requires string url";
+    return false;
+  }
+  out->url = obj.Get("url").As<Napi::String>().Utf8Value();
+  if (out->url.empty()) {
+    *error = "httpFetch requires string url";
+    return false;
+  }
+  if (obj.Has("method") && obj.Get("method").IsString()) {
+    out->method = obj.Get("method").As<Napi::String>().Utf8Value();
+  }
+  if (out->method.empty()) {
+    out->method = "GET";
+  }
+  if (obj.Has("body") && obj.Get("body").IsString()) {
+    out->body = obj.Get("body").As<Napi::String>().Utf8Value();
+  }
+  if (obj.Has("headers") && obj.Get("headers").IsObject()) {
+    Napi::Object headers = obj.Get("headers").As<Napi::Object>();
+    Napi::Array keys = headers.GetPropertyNames();
+    for (std::uint32_t i = 0; i < keys.Length(); ++i) {
+      Napi::Value key_val = keys.Get(i);
+      if (!key_val.IsString()) {
+        continue;
+      }
+      const std::string key = key_val.As<Napi::String>().Utf8Value();
+      Napi::Value val = headers.Get(key_val);
+      if (val.IsUndefined() || val.IsNull()) {
+        continue;
+      }
+      const std::string str_val = val.IsString()
+                                      ? val.As<Napi::String>().Utf8Value()
+                                      : val.ToString().Utf8Value();
+      out->headers.emplace_back(key, str_val);
+    }
+  }
+  return true;
+}
+
+Napi::Value HttpFetch(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 2 || !info[1].IsFunction()) {
+    return env.Undefined();
+  }
+  Napi::ThreadSafeFunction cb_tsfn = Napi::ThreadSafeFunction::New(
+      env, info[1].As<Napi::Function>(), "NativePowerSyncModule.httpFetch", 0,
+      1);
+  auto callback = std::make_shared<OneShotHttpCallback>(std::move(cb_tsfn));
+
+  ps_desktop_http::HttpRequest request;
+  std::string parse_error;
+  if (!ParseHttpRequest(info[0], &request, &parse_error)) {
+    callback->Invoke(ps_desktop_http::MakeFailEnvelope(parse_error));
+    return env.Undefined();
+  }
+
+  ps_desktop_http::StreamEventSender event_sender;
+  if (ps_sync_http_is_sync_stream_url(request.url.c_str()) != 0) {
+    auto resolved = ResolveGlobalEventEmitter(env);
+    if (resolved.has_value()) {
+      Napi::ThreadSafeFunction ev_tsfn = Napi::ThreadSafeFunction::New(
+          env, resolved->fn, "NativePowerSyncModule.httpFetch.events", 0, 1);
+      auto napi_sender =
+          std::make_shared<NapiStreamEventSender>(std::move(ev_tsfn));
+      event_sender = [napi_sender](const ps_desktop_http::StreamEvent& ev) {
+        napi_sender->Send(ev);
+      };
+    }
+  }
+
+  ps_desktop_http::SharedDesktopSyncHttp().Fetch(
+      std::move(request), std::move(event_sender),
+      [callback](ps_desktop_http::HttpResponseEnvelope envelope) {
+        callback->Invoke(std::move(envelope));
+      });
+  return env.Undefined();
+}
+
+Napi::Value HttpFetchAbort(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  std::string stream_id;
+  if (info.Length() >= 1 && info[0].IsString()) {
+    stream_id = info[0].As<Napi::String>().Utf8Value();
+  }
+
+  ps_desktop_http::SharedDesktopSyncHttp().Abort(stream_id, nullptr);
+
+  if (info.Length() >= 2 && info[1].IsFunction()) {
+    try {
+      Napi::Object ok_obj = Napi::Object::New(env);
+      ok_obj.Set("ok", Napi::Boolean::New(env, true));
+      info[1].As<Napi::Function>().Call({ok_obj});
+    } catch (...) {
+      if (env.IsExceptionPending()) {
+        env.GetAndClearPendingException();
+      }
+    }
+  }
+  return env.Undefined();
+}
+
 void BindNativePowerSyncModule(napi_env env, napi_value exports) {
   Napi::Env napi_env(env);
   Napi::Object object = Napi::Object(napi_env, exports);
@@ -454,6 +771,8 @@ void BindNativePowerSyncModule(napi_env env, napi_value exports) {
   object.Set("close", Napi::Function::New(napi_env, Close));
   object.Set("execute", Napi::Function::New(napi_env, Execute));
   object.Set("executeBatch", Napi::Function::New(napi_env, ExecuteBatch));
+  object.Set("httpFetch", Napi::Function::New(napi_env, HttpFetch));
+  object.Set("httpFetchAbort", Napi::Function::New(napi_env, HttpFetchAbort));
 }
 
 }  // namespace
@@ -466,6 +785,20 @@ extern "C" napi_value CreateNativePowerSyncModule(napi_env env,
   (void)opaque;
   BindNativePowerSyncModule(env, exports);
   return exports;
+}
+
+extern "C" void SetNativePowerSyncStreamEventSender(
+    ps_stream_event_sender_fn fn, void* opaque) {
+  if (fn == nullptr) {
+    ps_desktop_http::SharedDesktopSyncHttp().SetSharedStreamEventSender(nullptr);
+    return;
+  }
+  ps_desktop_http::SharedDesktopSyncHttp().SetSharedStreamEventSender(
+      [fn, opaque](const ps_desktop_http::StreamEvent& ev) {
+        fn(ev.stream_id.c_str(), ev.event.c_str(),
+           ev.data.empty() ? nullptr : ev.data.c_str(),
+           ev.error.empty() ? nullptr : ev.error.c_str(), opaque);
+      });
 }
 
 #if defined(POWERSYNC_USE_LYNX_REGISTRATION)

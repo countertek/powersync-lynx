@@ -104,56 +104,36 @@ pnpm --dir examples/hosts/lynxtron start -- --device lynxtron-b
 If ports `:5432` / `:8080` / `:8081` are already bound on your machine, pass
 `--demo-api-url` and `--powersync-url` (or `DEMO_API_URL` / `POWERSYNC_URL`).
 
-## Verified status & `/sync/stream` Gate #73 findings
+## Verified status & `/sync/stream` Gate #73 resolution (PASS)
 
 Empirically verified on **macOS arm64** (`@lynx-js/lynxtron@0.0.31`,
 `@lynx-js/lynxtron-dev-plugins@0.0.31`, Lynx SDK `4.4`, `powersync-sqlite-core`
-`0.5.3/2ba6b280`, Node `26.13.0`, pnpm `12.3.4`) against
-`examples/docker-compose.yml` (`--profile sync`, isolated ports `18080`/`18081`)
-and a local Node HTTP NDJSON server:
+`0.5.3/2ba6b280`, Node `26.13.0`, pnpm `12.3.4`) against the live local compose
+stack (`examples/docker-compose.yml` `--profile sync`, isolated ports
+`18080`/`18081`):
 
 | Check | Status | Observed evidence |
 |---|---|---|
-| Lynxtron Autolink build & staging | **Pass** | `rsbuild build` staged `powersync-lynx.node` + `libpowersync_aarch64.macos.dylib` + `lynxtron/index.cjs` under `dist/desktop/.lynxtron/native/node_modules/powersync-lynx/` with zero warnings. |
+| Lynxtron Autolink build & staging | **Pass** | `rsbuild build` staged `powersync-lynx.node` (with `NSURLSession` Desktop `NativeSyncHttp`) + `libpowersync_aarch64.macos.dylib` + `lynxtron/index.cjs` under `dist/desktop/.lynxtron/native/node_modules/powersync-lynx/` with zero warnings. |
 | `NativePowerSyncModule` registration & SQLite open | **Pass** | Both windowed and `--windowless` launches loaded `NativePowerSyncModule` and created `~/Library/Application Support/com.lynxjs.Lynxtron/powersync-lynx-todo-<device>.db` (`powersync_rs_version() = 0.5.3/2ba6b280`, `ps_kv.client_id` populated, schema tables created). |
-| Local CRUD & restart persistence | **Pass** | `INSERT` + `UPDATE` into `todos` recorded 2 ops in `ps_crud` and persisted across full process restart (`count: 1`, `completed: 1` on relaunch). |
-| Showcase UI launch (`globalProps`) | **Pass** | `examples/showcase/lynx-dist/main.lynx.bundle` launched in `LynxWindow` (windowed & windowless), received `{ device, demoApiUrl, powersyncUrl }` via `lynx.__globalProps`, opened the per-device DB, and initiated `GET /token`. |
-| Stock Lynxtron BTS `fetch()` (`/token` & `/sync/stream`) | **Fail (triggers Gate #73)** | See exact root cause below. `ps_buckets` stayed `0`; live NDJSON chunks did not reach PrimJS. |
-| `AbortSignal` stream cancellation | **Fail (triggers Gate #73)** | See exact root cause below. JS promise rejected locally, but native TCP stream stayed open on the server. |
-| Windows `x64` build & run | **Not yet run** | `lynx.lib.json` `win32`/`x64` target and cross-platform host config are wired; native Windows verification runs in CI (#74). |
+| Local CRUD & restart persistence | **Pass** | `INSERT` + `UPDATE` into `todos` recorded ops in `ps_crud` and persisted across full process restart. |
+| Connector JSON (`/token`, `/upload`) via `native-http` | **Pass** | `demoFetch` and `pickSyncStreamTransport` route desktop non-streaming JSON (`/token`, `/upload`, `/write-checkpoint2.json`) through `NativePowerSyncModule.httpFetch`, bypassing `@lynx-js/lynxtron@0.0.31`'s hanging `LynxFetchModule.fetch`. |
+| Live NDJSON `/sync/stream` via `native-http` | **Pass** | Initial checkpoint downloaded (`ps_buckets=1`, `seed-1: "Initial todo €100"`); live cross-client push (`"Live push Lynxtron 🚀"`) arrived incrementally in ~500 ms while `/sync/stream` stayed open. |
+| Multi-byte UTF-8 chunk boundaries | **Pass** | Shared `shared/utf8_hold.h` (`split-multibyte` fixture replayed in `make test`) and live 3-byte (`€`) + 4-byte (`🚀`, `✨`) UTF-8 decoded cleanly without corruption. |
+| `AbortSignal` / `db.disconnect()` & reconnect | **Pass** | `db.disconnect()` invoked `httpFetchAbort` -> `NSURLSessionDataTask cancel`; proxy observed server TCP socket close in **6 ms**; offline local mutation uploaded (`pendingCrud=0`) and external mutation converged cleanly on reconnect (`stream#2`). |
+| Windows `x64` build & run | **Pending CI (#74)** | `lynx.lib.json` `win32`/`x64` target, `WinHTTP` `desktop_sync_http_win.cc`, and cross-platform host config are wired; native Windows verification runs in CI (#74). |
 
-### Concrete evidence for Gate Ticket #73 (ADR-0005 Section 5)
+### Historical Gate #73 trigger context (why Branch B was taken)
 
-1. **Stock `fetch()` callback never settles on macOS arm64 Lynxtron `0.0.31`**:
-   - Inspecting `String(fetch)` in Lynxtron BTS shows `fetch()` delegates to
-     `NativeModules.LynxFetchModule.fetch(req, resolve, reject)`.
-   - HTTP requests **do** reach the server via macOS `CFNetwork`
-     (`User-Agent: lynxtron/1.0.0 CFNetwork/3896.200.61 Darwin/27.2.0`), and the
-     server returns `HTTP 200` + full body (tested against `demo-api`
-     `GET /health`, `GET /token`, a local Node server with both
-     `Connection: close` and `keep-alive`, and chunked `POST /stream` with both
-     `useStreaming: false` and `useStreaming: true`, in both windowed and
-     `--windowless` modes).
-   - However, **`NativeModules.LynxFetchModule.fetch` never invokes either its
-     JS `resolve` or `reject` callback** — every `await fetch(...)` hangs
-     indefinitely (`TIMEOUT` after 3–4s in probes), so `GET /token` never
-     completes in the showcase and `/sync/stream` never yields bytes into PrimJS
-     (`ps_buckets = 0`).
-2. **`AbortSignal` does not cancel the underlying native HTTP connection**:
-   - Lynxtron `0.0.31`'s BTS `fetch()` implementation only binds
-     `signal.addEventListener("abort", () => reject(signal.reason))` and has no
-     native abort/cancel call on `LynxFetchModule`.
-   - When `AbortController.abort()` was called at `t = 1501 ms` during an open
-     chunked `POST /stream?us=true` request, the JS promise rejected at
-     `t = 1501 ms`, **but the server socket remained open** and continued
-     writing chunk 2 at `t = 2000 ms` until the Lynxtron process exited.
-3. **Gate #73 decision input**:
-   - The ADR-0005 verification gate condition is triggered on macOS arm64
-     Lynxtron. Gate Ticket #73 should reopen ADR-0003 and implement Desktop
-     Native Module `httpFetch` / `httpFetchAbort` (`NSURLSession` on macOS,
-     `WinHTTP` on Windows, sharing `shared/sync_http_session.h` and
-     `shared/utf8_hold.h`). Note also that because stock `fetch()` hangs even
-     for non-streaming JSON requests (`GET /token`, `POST /upload`) on
-     `@lynx-js/lynxtron@0.0.31`, desktop hosts/connectors should also be tested
-     against the Native Module HTTP path (or a newer Lynxtron runtime once
-     upstream fixes `LynxFetchModule`).
+1. On `@lynx-js/lynxtron@0.0.31` (macOS arm64), stock `fetch()` delegates to
+   `NativeModules.LynxFetchModule.fetch`, which sends requests over `CFNetwork`
+   but never invokes JS `resolve` or `reject`, hanging both `/token` and
+   `/sync/stream`, and its JS-only `AbortSignal` does not close the TCP socket.
+2. In addition, Lynx 4.2/4.4's `lynx_core.js` `AbortSignal` splices its listener
+   array inside `forEach` during `emit`, skipping subsequent abort listeners when
+   an earlier listener removes itself.
+3. Gate #73 reopened ADR-0003 for Desktop (`shared/nativeModule/desktop_sync_http.*`
+   + `desktop_sync_http_macos.mm` / `desktop_sync_http_win.cc`), added desktop
+   `native-http` routing for both streaming and non-streaming JSON requests, and
+   added feature-detection in `installAbortControllerPolyfill()` to replace the
+   broken Lynx `AbortController`.

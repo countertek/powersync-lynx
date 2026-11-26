@@ -85,6 +85,14 @@ export function hostIsAndroid(host: LynxHost = getLynxHost()): boolean {
   return platform.toLowerCase() === "android";
 }
 
+export function hostIsIOS(host: LynxHost = getLynxHost()): boolean {
+  const platform = host.platform();
+  if (!isString(platform)) {
+    return false;
+  }
+  return platform.toLowerCase() === "ios";
+}
+
 export function collectGlobalEventEmitters(
   runtime: LynxRuntime | undefined,
 ): LynxGlobalEventEmitter[] {

@@ -94,12 +94,11 @@ Example automated smoke run (for CI / headless E2E):
   Win32 APIs (`shared/nativeModule/db_location.h` + `shared/win_utf8.h`).
 - **`WinHTTP` `LynxHttpService`**: implemented in `src/ShowcaseHttpService.cc`
   and registered via `LynxServiceCenter::GetInstance().RegisterService(...)`.
-- **Lynx 4.2.0 `LynxHttpService` limitation (Gate #73)**: the Windows x64 SDK
-  headers (`include/lynx_http_service.h` and `include/capi/lynx_http_service_capi.h`)
-  are byte-for-byte identical to macOS arm64. `LynxHttpResponse` exposes only a
-  single buffered `SetBody(...)` + `Complete()` callback with no incremental
-  chunk delivery and no request cancellation/abort callback. Normal JSON
-  requests (`/token`, `/upload`) work through `WinHTTP`; live incremental
-  `/sync/stream` NDJSON and `AbortSignal` cancellation require Native Module
-  HTTP streaming (see `examples/hosts/macos/README.md` for full empirical
-  findings).
+- **Live `/sync/stream` via Desktop Native Module HTTP (Gate #73)**: Lynx 4.2.0
+  `LynxHttpService` (`include/lynx_http_service.h`) is buffered-only with no
+  incremental chunk callback or cancel hook. `powersync_lynx_native` now
+  exposes `httpFetch` / `httpFetchAbort` backed by `WinHTTP`
+  (`shared/nativeModule/desktop_sync_http_win.cc`), sharing
+  `shared/sync_http_session.h`, `shared/utf8_hold.h`, and
+  `shared/sync_http_policy.h` with zero host wiring required. Native Windows
+  `x64` CI build and headless E2E sync verification run in Ticket #74.

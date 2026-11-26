@@ -150,6 +150,26 @@ test("packed tarball ships iOS build inputs and omits host/build residue", async
       "NativeSyncHttp session contract lives in shared/sync_http_session.h",
     );
     assert.equal(
+      has("shared/nativeModule/desktop_sync_http.h"),
+      true,
+      "Desktop NativeSyncHttp header must ship",
+    );
+    assert.equal(
+      has("shared/nativeModule/desktop_sync_http.cc"),
+      true,
+      "Desktop NativeSyncHttp core must ship",
+    );
+    assert.equal(
+      has("shared/nativeModule/desktop_sync_http_macos.mm"),
+      true,
+      "macOS Desktop NativeSyncHttp backend must ship",
+    );
+    assert.equal(
+      has("shared/nativeModule/desktop_sync_http_win.cc"),
+      true,
+      "Windows Desktop NativeSyncHttp backend must ship",
+    );
+    assert.equal(
       has("android/src/main/cpp/sync_http_session_jni.cc"),
       true,
       "Android session JNI must ship",

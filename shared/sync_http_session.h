@@ -3,18 +3,17 @@
 /**
  * NativeSyncHttp stream-session contract (FM-PS-LYNX-014 N3 / ADR-0003).
  *
- * Hosts keep platform HTTP (HttpURLConnection / NSURLSession) and emit Lynx
- * Callback + GlobalEventEmitter maps. This header owns the decisions:
+ * Hosts keep platform HTTP (HttpURLConnection / NSURLSession / WinHTTP) and emit
+ * Lynx Callback + GlobalEventEmitter maps. This header owns the decisions:
  *   - idle-complete vs streamingId route
  *   - headers-sent (one-shot callback)
  *   - terminal emission (onData* → onError? → onEnd)
  *   - abort-after-headers (cancel I/O; I/O on_error drives the terminal)
  *
  * Host I/O callbacks (onHeaders / onData / onEnd / onError / abort) call the
- * step functions and apply the returned effect bits. Desktop N-API must not
- * include this file (SQL-only).
+ * step functions and apply the returned effect bits.
  *
- * Requires C++ (`std::atomic`). iOS .mm includes it; Android JNI wraps it.
+ * Requires C++ (`std::atomic`). iOS .mm, Android JNI, and Desktop N-API include it.
  */
 
 #ifndef __cplusplus

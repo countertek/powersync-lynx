@@ -86,30 +86,30 @@ examples/hosts/macos/build/PowerSyncLynxShowcase.app/Contents/MacOS/PowerSyncLyn
    ```
    Or pair one macOS native window with the web demo (`http://localhost:4173/?device=web-b`).
 
-## Empirical Verification Findings (Gate Ticket #73)
+## Empirical Verification Findings (Gate Ticket #73 — Branch B Implemented & Verified)
 
 Verified on macOS `arm64`, AppleClang 21.0.0, CMake 3.22.1, Lynx Desktop C++ SDK **4.2.0**
-(`lynx_sdk_macos_arm64.zip`, SHA-256 `bcbc69270ce5b18ae8503c1bcd284197eb220b76acf5807ebab1efb956750469`).
+(`lynx_sdk_macos_arm64.zip`, SHA-256 `bcbc69270ce5b18ae8503c1bcd284197eb220b76acf5807ebab1efb956750469`)
+against the live local compose stack (`postgres` + `mongo` + `powersync-service` + `demo-api`).
+
+### Initial stock `LynxHttpService` gate findings (triggered Branch B)
+
+1. **`include/lynx_http_service.h` & `include/capi/lynx_http_service_capi.h`** (byte-for-byte identical between `macos-arm64` and `windows-x64`):
+   - `LynxHttpResponse` only exposes buffered `SetBody(...)` + `Complete()`, with **no incremental chunk callback** and **no cancel/abort hook**.
+2. **`LynxResources.bundle/Contents/Resources/lynx_core.js`**:
+   - Stock `fetch` rejects `AbortSignal` locally without a native abort call, and `AbortSignal` (`class Ne extends ye`) splices its listener array inside `forEach` during `emit` (skipping subsequent abort listeners when an earlier listener removes itself).
+3. **Gate #73 resolution (ADR-0003 reopened for Desktop)**:
+   - Desktop `NativePowerSyncModule` (`shared/nativeModule/desktop_sync_http.*` + `desktop_sync_http_macos.mm`) now exposes `httpFetch` / `httpFetchAbort` backed by `NSURLSession`, sharing `shared/sync_http_session.h`, `shared/utf8_hold.h`, and `shared/sync_http_policy.h`, and delivering `GlobalEventEmitter` events directly via `Napi::Env` + `Napi::ThreadSafeFunction` (zero host wiring required).
+   - `installAbortControllerPolyfill()` feature-detects and replaces Lynx 4.2/4.4's broken `AbortController` splice-during-emit bug.
+
+### Live Verification Matrix (Post-Gate #73)
 
 | Check | Result | Concrete evidence |
 |---|---|---|
-| CMake build & `.app` staging | **Pass** | Built `PowerSyncLynxShowcase.app` cleanly via `add_subdirectory(../../../shared)` linking `powersync_lynx_native` + `powersync_lynx_copy_core(...)`. |
+| CMake build & `.app` staging | **Pass** | Built `PowerSyncLynxShowcase.app` cleanly via `add_subdirectory(../../../shared)` linking `powersync_lynx_native` (with `desktop_sync_http_macos.mm` + `-framework Foundation`) + `powersync_lynx_copy_core(...)`. |
 | `libpowersync_aarch64.macos.dylib` lookup | **Pass** | Loaded dynamically from `Contents/Frameworks/libpowersync_aarch64.macos.dylib` with no `POWERSYNC_CORE_PATH` set. |
-| Default macOS `dbLocation` | **Pass** | Resolved `CFBundleIdentifier` (`com.powersync.lynx.showcase`), auto-created `~/Library/Application Support/com.powersync.lynx.showcase/`, and initialized `powersync-lynx-todo-<device>.db` with full PowerSync schema (`ps_buckets`, `ps_crud`, `ps_data__todos`, `todos`, etc.). |
-| Showcase UI & normal JSON `fetch` | **Pass** | `OnFirstScreen`, `OnLoadSuccess`, and `OnRuntimeReady` fired cleanly (`exit 0` in `--smoke-test`). `GET /token` through `NSURLSession`-backed `ShowcaseHttpService` returned `HTTP 200` (374 bytes from local compose `demo-api`). |
-| Live NDJSON `/sync/stream` via `LynxHttpService` | **Fail — Contingency Triggered (#73)** | `POST /sync/stream` reached both the local compose PowerSync service (`127.0.0.1:18080`) and a mock NDJSON streaming server. Because Lynx 4.2.0 `LynxHttpService` is buffered-only, live streams block until EOF/timeout and deliver 0 chunks (`ps_buckets=0`, `todos=0`). Even when the mock server closes after 500ms (`HTTP 200`, 396 bytes), `ps_buckets` remains `0` because PrimJS `fetch` returns a non-streaming `Response` without `body.getReader()`. |
-| `AbortSignal` cancellation via `LynxHttpService` | **Fail — Contingency Triggered (#73)** | Lynx 4.2.0 `lynx_core.js` rejects the JS Promise locally on `signal.abort()` without notifying native code, and `lynx_http_service_capi.h` exposes no cancel/abort hook to terminate an in-flight `NSURLSessionDataTask` or `WinHTTP` request. |
-
-### Exact Lynx 4.2.0 SDK header & runtime findings
-
-1. **`include/lynx_http_service.h` & `include/capi/lynx_http_service_capi.h`** (byte-for-byte identical between `macos-arm64` and `windows-x64`):
-   - `LynxHttpService::Request(std::shared_ptr<LynxHttpRequest>, std::shared_ptr<LynxHttpResponse>)`
-   - `LynxHttpResponse` only exposes: `SetStatusCode(int)`, `SetStatusText(const char*)`, `AddHeader(const std::string&, const std::string&)`, `SetBody(uint8_t*, size_t, dtor, opaque)`, and `Complete()` (`lynx_http_response_callback`).
-   - **No incremental chunk callback** (`OnData` / `WriteBody` / `streamingId`) exists in the C or C++ API.
-   - **No cancellation API** (`Cancel` / `Abort`) exists on `lynx_http_service_t` or `lynx_http_request_t`.
-2. **`LynxResources.bundle/Contents/Resources/lynx_core.js`**:
-   - `fetch` registers `a.addEventListener("abort", s => { i(a.reason) })` purely in JS, then invokes `NativeModules.LynxFetchModule.fetch(f, onSuccess, onError)` with no native abort call.
-   - `lynx_core.js` only wraps the response in `_ReadableStreamClass` when `o.lynxExtension.useStreaming || pageConfigSubset?.enableFetchAPIStandardStreaming` is truthy, and expects the native response to supply `lynxExtension.streamingId` + `GlobalEventEmitter` events (`onData` / `onEnd` / `onError`). Desktop `LynxHttpService` cannot emit those events.
-3. **Path forward for Gate Ticket #73**:
-   - Reopen ADR-0003 for Desktop and add `httpFetch` / `httpFetchAbort` to Desktop `NativePowerSyncModule` (`NSURLSession` on macOS, `WinHTTP` on Windows), sharing `shared/sync_http_session.h` and `shared/utf8_hold.h`.
-   - Native `LynxView` hosts already have `lynx::pub::LynxView::SendGlobalEvent(const std::string& name, const std::string& json)` (`include/lynx_view.h`) to forward incremental `onData` / `onEnd` / `onError` events to `GlobalEventEmitter`.
+| Default macOS `dbLocation` | **Pass** | Resolved `CFBundleIdentifier` (`com.powersync.lynx.showcase`), auto-created `~/Library/Application Support/com.powersync.lynx.showcase/`, and initialized `powersync-lynx-todo-<device>.db`. |
+| Showcase UI & Connector HTTP (`/token`, `/upload`) | **Pass** | `OnFirstScreen`, `OnLoadSuccess`, and `OnRuntimeReady` fired cleanly; `GET /token` and `POST /upload` succeeded via Desktop Native Module HTTP (`httpFetch`). |
+| Live NDJSON `/sync/stream` via `native-http` | **Pass** | Initial checkpoint downloaded (`ps_buckets=1`, `seed-1: "Initial todo €100"` plus cross-host Lynxtron uploads); live cross-client push (`"Live push macOS native €99 🎉"`) arrived incrementally in ~500 ms while `/sync/stream` stayed open. |
+| Multi-byte UTF-8 chunk boundaries | **Pass** | Shared `shared/utf8_hold.h` (`split-multibyte` fixture replayed over loopback `NSURLSession` in `make test`) and live 3-byte (`€`) + 4-byte (`🚀`, `🎉`, `✨`) UTF-8 decoded cleanly without corruption. |
+| `AbortSignal` / `db.disconnect()` & reconnect | **Pass** | `db.disconnect()` invoked `httpFetchAbort` -> `NSURLSessionDataTask cancel`; proxy observed server TCP socket close in **7 ms**; offline local write uploaded (`pendingCrud=0`) and external mutation converged cleanly on reconnect (`stream#2`). |

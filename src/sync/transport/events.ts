@@ -189,10 +189,30 @@ function hookEmitter(emitter: StreamEmitter): void {
   };
 }
 
+function publishDesktopStreamEmitter(emitter: StreamEmitter): void {
+  try {
+    // Expose the lexical BTS GlobalEventEmitter non-enumerably on globalThis
+    // (scoped per-LynxView / Napi::Env) so Desktop N-API NativePowerSyncModule
+    // can resolve it without host wiring even when `lynx` is closure-scoped.
+    Object.defineProperty(globalThis, "__psLynxGlobalEventEmitter", {
+      value: emitter,
+      configurable: true,
+      writable: true,
+      enumerable: false,
+    });
+  } catch {
+    // Read-only globalThis in restricted test environments.
+  }
+}
+
 export function enterEarlyCapture(): void {
   wrapLynxGetJSModule();
-  for (const emitter of lookupEmitters()) {
+  const emitters = lookupEmitters();
+  for (const emitter of emitters) {
     hookEmitter(emitter);
+  }
+  if (emitters.length > 0) {
+    publishDesktopStreamEmitter(emitters[0]!);
   }
 }
 

@@ -19,6 +19,9 @@
 #ifndef PS_ANDROID_UTF8_HOLD_JNI
 #define PS_ANDROID_UTF8_HOLD_JNI "android/src/main/cpp/utf8_hold_jni.cc"
 #endif
+#ifndef PS_DESKTOP_SYNC_HTTP_CC
+#define PS_DESKTOP_SYNC_HTTP_CC "shared/nativeModule/desktop_sync_http.cc"
+#endif
 
 namespace {
 
@@ -151,6 +154,12 @@ int main() {
     expect(jni.find("Java_com_powersync_lynx_StreamingHttp_trailingIncompleteUtf8Bytes") !=
                std::string::npos,
            "JNI symbol matches StreamingHttp.trailingIncompleteUtf8Bytes");
+
+    const std::string desktop_http = read_file(PS_DESKTOP_SYNC_HTTP_CC);
+    expect(desktop_http.find("utf8_hold.h") != std::string::npos,
+           "Desktop desktop_sync_http.cc includes utf8_hold.h");
+    expect(desktop_http.find("ps_utf8_trailing_incomplete") != std::string::npos,
+           "Desktop desktop_sync_http.cc calls ps_utf8_trailing_incomplete");
   } catch (const std::exception& ex) {
     std::fprintf(stderr, "FAIL: source scan: %s\n", ex.what());
     return 1;

@@ -38,6 +38,18 @@ extern "C" {
 napi_value CreateNativePowerSyncModule(napi_env env, napi_value exports,
                                        const char* module_name, void* opaque);
 
+typedef void (*ps_stream_event_sender_fn)(const char* stream_id,
+                                          const char* event,
+                                          const char* data,
+                                          const char* error,
+                                          void* opaque);
+
+// Optional native host override for /sync/stream GlobalEventEmitter delivery.
+// By default, Desktop NativePowerSyncModule resolves PrimJS GlobalEventEmitter
+// directly from Napi::Env on the JS thread (zero host wiring required).
+void SetNativePowerSyncStreamEventSender(ps_stream_event_sender_fn fn,
+                                         void* opaque);
+
 #ifdef __cplusplus
 }
 #endif

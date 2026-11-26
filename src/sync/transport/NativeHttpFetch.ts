@@ -18,8 +18,8 @@ export type {
 } from "./http-types.ts";
 
 /**
- * HTTP methods live on the Autolink SQL module object on iOS/Android.
- * Desktop N-API is SQL-only — `httpFetch` is absent.
+ * HTTP methods live on the NativePowerSyncModule object on iOS, Android, and
+ * Desktop (macOS NSURLSession / Windows WinHTTP). Lynx-for-Web stays SQL-only.
  */
 export function lookupNativeSyncHttp(): NativeSyncHttpModule | undefined {
   const sql = getLynxHost().nativeModules()?.NativePowerSyncModule;
