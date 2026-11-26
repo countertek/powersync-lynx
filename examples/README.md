@@ -51,7 +51,7 @@ Read this before treating a green web preview as "sync works".
 | Live `/sync/stream` download on iOS | **Same Native Module HTTP path as Android**. Rebuild showcase + `pod install` + xcodebuild. Expect `ps_buckets > 0`. See [`hosts/ios/README.md`](hosts/ios/README.md). |
 | `disconnect()` cancelling a live native stream | Same ReactLynx control. **JS abort is tested** in [#36](https://github.com/countertek/powersync-lynx/pull/36) (`httpFetchAbort` when the streaming reader is cancelled / `fetchStream` abort). In-app Go offline is **not re-tapped** this checkout |
 | Physical iOS / Android Autolink host run | **Documented**. Simulator / emulator is what this checkout exercises |
-| Windows / macOS Autolink host run | **Not verified**. Desktop remains recipe-only |
+| Windows / macOS Autolink host run | **Lynxtron host runnable on macOS arm64** (`examples/hosts/lynxtron/`): Autolink `NativePowerSyncModule` + SQLite + restart persistence **verified**; stock Lynxtron `0.0.31` `fetch` / `/sync/stream` **fails** (triggers Gate #73 Native Module HTTP). Windows x64 + native CMake `macos/` & `windows/` hosts tracked in #72–#74 |
 | Lynx Explorer | **Will not work** for SQL: Explorer does not register `NativePowerSyncModule` |
 | `pnpm publish` to npmjs | **Workflow checked in** (`.github/workflows/release.yml`, `release` published). **Not run** from this task |
 | Publish dry-run to local Verdaccio | **Scripted** (`pnpm publish-dry-run`). Requires compose profile `registry` |
@@ -175,7 +175,7 @@ that load the same ReactLynx TODO bundle (`examples/showcase`) via Autolink.
 
 - iOS: [`hosts/ios/README.md`](hosts/ios/README.md)
 - Android: [`hosts/android/README.md`](hosts/android/README.md)
-- Windows / macOS: [`hosts/desktop/README.md`](hosts/desktop/README.md) (recipe-only)
+- Desktop (Lynxtron, macOS & Windows): [`hosts/lynxtron/README.md`](hosts/lynxtron/README.md) (native CMake `hosts/macos/` and `hosts/windows/` are separate native embedder hosts)
 
 Native hosts inject `device`, `demoApiUrl`, and `powersyncUrl` through Lynx
 `globalProps`. The Android emulator default is `http://10.0.2.2:8081` / `:8080`.
@@ -195,7 +195,7 @@ native launches with different `device` values. Filter pills stay local.
 
 **Streaming:** native hosts use **`NativePowerSyncModule.httpFetch`** (`streamingId` + GlobalEventEmitter `onData` before `onEnd`; idle-complete is fallback). LynxEnv `enable_fetch_api_standard_streaming` is still set so stock Fetch uses the standard stream path (LynxSDK 3.7+) — a prerequisite, not by itself proof of incremental `/sync/stream`. Abort of a live native stream is covered by [#36](https://github.com/countertek/powersync-lynx/pull/36) tests; do not treat in-app Go offline as that proof.
 
-**Not verified on Windows / macOS Lynxtron.** Desktop remains recipe-only.
+**Desktop (Lynxtron macOS arm64):** Autolink `NativePowerSyncModule` SQLite + persistence are verified in [`hosts/lynxtron/README.md`](hosts/lynxtron/README.md); stock Lynxtron `0.0.31` `fetch` does not resolve callbacks or cancel native streams on `AbortSignal`, triggering Gate #73 (Desktop Native Module HTTP).
 
 ## Lint / format
 
@@ -222,5 +222,5 @@ examples/
   showcase/                 ReactLynx TODO + Lynx-for-Web host
     src/                    Schema, Connector, UI, log drawer
     host/                   attach() page (Vite)
-  hosts/                    Autolink iOS + Android apps; desktop still recipe-only
+  hosts/                    Autolink iOS, Android, and Lynxtron desktop apps
 ```
