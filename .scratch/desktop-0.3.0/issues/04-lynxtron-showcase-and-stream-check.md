@@ -1,7 +1,7 @@
 # 04: Runnable Lynxtron showcase host (`examples/hosts/lynxtron/`) and streaming check
 
 Type: task
-Status: ready-for-agent
+Status: resolved
 Blocked by: 02, 03
 Spec: ../spec.md (#68)
 GitHub: #71

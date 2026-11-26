@@ -2,7 +2,7 @@
 
 ![powersync-lynx — PowerSync for Lynx apps](https://raw.githubusercontent.com/countertek/powersync-lynx/main/docs/assets/powersync-lynx-readme-hero.png)
 
-**PowerSync JavaScript inside Lynx apps.** One Autolink package, one `PowerSyncDatabase` surface, local SQLite plus sync on web, iOS, and Android.
+**PowerSync JavaScript inside Lynx apps.** One Autolink package, one `PowerSyncDatabase` surface, local SQLite plus sync on web, iOS, Android, macOS, and Windows.
 
 **[Spec](https://github.com/countertek/powersync-lynx/blob/main/docs/spec.md)** · **[Examples](https://github.com/countertek/powersync-lynx/tree/main/examples)** · **[Glossary](https://github.com/countertek/powersync-lynx/blob/main/CONTEXT.md)**
 
@@ -26,11 +26,11 @@ Use this package when you need:
 | Need | What you get |
 | --- | --- |
 | **One JS API** | `PowerSyncDatabase` typed as official `CommonPowerSyncDatabase` |
-| **Native SQL** | Autolinked `NativePowerSyncModule` (async SQL RPC) on iOS and Android |
+| **Native SQL** | Autolinked `NativePowerSyncModule` (async SQL RPC) on iOS, Android, macOS (`arm64`), and Windows (`x64`) — native CMake `LynxView` and Lynxtron |
 | **Lynx-for-Web** | Host helper `attach()` mapping that RPC onto WASQLite |
 | **Local demo stack** | Compose Postgres + PowerSync + demo API under `examples/` |
 
-Do **not** expect Lynx Explorer to run SQL: Explorer does not register `NativePowerSyncModule`. Windows / macOS hosts are recipe-only today.
+Do **not** expect Lynx Explorer to run SQL: Explorer does not register `NativePowerSyncModule`.
 
 ## 📦 Install
 
@@ -93,19 +93,20 @@ import { attach } from "powersync-lynx/web-host";
 | Platform | Persistence | Sync download path |
 | --- | --- | --- |
 | **Lynx-for-Web** | Host-page WASQLite via `powersync-lynx/web-host` | Browser `fetch` streaming |
-| **iOS** | Native SQLite + PowerSync core through Autolink | `NativePowerSyncModule.httpFetch` |
-| **Android** | Same Native Module path | `NativePowerSyncModule.httpFetch` |
-| **Windows / macOS** | Documented Autolink recipes only | Not verified in this checkout |
+| **iOS** | Native SQLite + PowerSync core through Autolink | `NativePowerSyncModule.httpFetch` (`NSURLSession`) |
+| **Android** | Native SQLite + PowerSync core through Autolink | `NativePowerSyncModule.httpFetch` (`HttpURLConnection`) |
+| **macOS (`arm64`, 14.0+)** | Native CMake `LynxView` (`powersync_lynx_native`) or Lynxtron Autolink (`powersync-lynx/lynxtron`) | `NativePowerSyncModule.httpFetch` (`NSURLSession`) |
+| **Windows (`x64`, 10+)** | Native CMake `LynxView` (`powersync_lynx_native`) or Lynxtron Autolink (`powersync-lynx/lynxtron`) | `NativePowerSyncModule.httpFetch` (`WinHTTP`) |
 
-### Native streaming (iOS / Android)
+### Native streaming (iOS / Android / macOS / Windows)
 
-Stock Lynx fetch cannot keep a live `/sync/stream` NDJSON connection open. Autolink hosts use **`NativePowerSyncModule.httpFetch`**:
+Stock Lynx fetch cannot keep a live `/sync/stream` NDJSON connection open across mobile and desktop hosts. Native hosts use **`NativePowerSyncModule.httpFetch`**:
 
 1. One-shot callback returns status + `streamingId` (empty body).
 2. Chunks arrive as UTF-8 strings on **`GlobalEventEmitter`**. Terminal sequence: `onData*` → `onError?` → `onEnd`.
 3. `LynxRemote` rebuilds a ReadableStream so PowerSync applies NDJSON incrementally.
 
-Idle-complete (buffered UTF-8 `body` / `bodyBase64` when no event sender is registered) is the fallback, not the primary path. `httpFetchAbort(streamingId)` cancels after headers (`onError` then `onEnd`). Abort before the headers Callback settles the JS Promise immediately; native I/O may continue until a late Callback delivers `streamingId` ([ADR 0003](https://github.com/countertek/powersync-lynx/blob/main/docs/adr/0003-native-module-http-is-streaming-fallback.md)). Host details: [iOS](https://github.com/countertek/powersync-lynx/blob/main/examples/hosts/ios/README.md), [Android](https://github.com/countertek/powersync-lynx/blob/main/examples/hosts/android/README.md).
+Idle-complete (buffered UTF-8 `body` / `bodyBase64` when no event sender is registered) is the fallback, not the primary path. `httpFetchAbort(streamingId)` cancels after headers (`onError` then `onEnd`). Abort before the headers Callback settles the JS Promise immediately; native I/O may continue until a late Callback delivers `streamingId` ([ADR 0003](https://github.com/countertek/powersync-lynx/blob/main/docs/adr/0003-native-module-http-is-streaming-fallback.md), [ADR 0005](https://github.com/countertek/powersync-lynx/blob/main/docs/adr/0005-desktop-first-class-native-and-lynxtron.md)). Host details: [iOS](https://github.com/countertek/powersync-lynx/blob/main/examples/hosts/ios/README.md), [Android](https://github.com/countertek/powersync-lynx/blob/main/examples/hosts/android/README.md), [macOS](https://github.com/countertek/powersync-lynx/blob/main/examples/hosts/macos/README.md), [Windows](https://github.com/countertek/powersync-lynx/blob/main/examples/hosts/windows/README.md), [Lynxtron](https://github.com/countertek/powersync-lynx/blob/main/examples/hosts/lynxtron/README.md).
 
 ### Status signals
 
@@ -122,7 +123,7 @@ Idle-complete (buffered UTF-8 `body` / `bodyBase64` when no event sender is regi
 ## Limits
 
 - **Lynx Explorer** does not register `NativePowerSyncModule` — SQL and native streaming will not run there.
-- **Windows / macOS** hosts are Autolink recipes only. Desktop is not a full Autolink product path in this checkout (N-API is SQL-only; desktop `/sync/stream` is unverified).
+- **Desktop architecture scope:** `0.3.0` ships prebuilt binaries for **`macos/arm64`** (macOS 14.0+, ad-hoc signed; re-sign/notarize when shipping macOS apps) and **`windows/x64`** (Windows 10+). `macos/x64` is dropped; `windows/arm64`, `windows/x86`, and Linux Lynx hosts are out of scope.
 - **Native abort before headers:** JS settlement may precede native cancel until the `streamingId` Callback ([ADR 0003](https://github.com/countertek/powersync-lynx/blob/main/docs/adr/0003-native-module-http-is-streaming-fallback.md)).
 - **Demo tokens** in the examples stack are a static HS256 JWT, not PowerSync Cloud / JWKS production auth.
 
@@ -144,7 +145,7 @@ pnpm install
 pnpm dev:web   # http://localhost:4173
 ```
 
-Two-window money shot: open `/?device=a` and `/?device=b` so each client gets its own WASQLite file. Native Autolink hosts: [iOS](https://github.com/countertek/powersync-lynx/blob/main/examples/hosts/ios/README.md), [Android](https://github.com/countertek/powersync-lynx/blob/main/examples/hosts/android/README.md). Desktop stays recipe-only.
+Two-window money shot: open `/?device=a` and `/?device=b` so each client gets its own WASQLite file. Native hosts: [iOS](https://github.com/countertek/powersync-lynx/blob/main/examples/hosts/ios/README.md), [Android](https://github.com/countertek/powersync-lynx/blob/main/examples/hosts/android/README.md), [macOS](https://github.com/countertek/powersync-lynx/blob/main/examples/hosts/macos/README.md), [Windows](https://github.com/countertek/powersync-lynx/blob/main/examples/hosts/windows/README.md), and [Lynxtron](https://github.com/countertek/powersync-lynx/blob/main/examples/hosts/lynxtron/README.md).
 
 ## 🛠️ Develop this package
 

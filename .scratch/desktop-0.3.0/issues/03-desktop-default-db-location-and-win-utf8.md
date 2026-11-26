@@ -1,7 +1,7 @@
 # 03: Default OS app-data `dbLocation` and Windows UTF-8 path safety
 
 Type: task
-Status: ready-for-agent
+Status: resolved
 Blocked by: 02
 Spec: ../spec.md (#68)
 GitHub: #70
