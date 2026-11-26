@@ -125,11 +125,6 @@ test("packed tarball ships iOS build inputs and omits host/build residue", async
       "Android SQL JNI binder must ship",
     );
     assert.equal(
-      has("android/src/main/cpp/utf8_hold_jni.cc"),
-      true,
-      "Android UTF-8 hold JNI must ship",
-    );
-    assert.equal(
       has("android/src/main/cpp/CMakeLists.txt"),
       true,
       "Android NDK CMake for ps_sql must ship",
@@ -140,34 +135,34 @@ test("packed tarball ships iOS build inputs and omits host/build residue", async
       "idle-complete / streaming timeouts live in shared/sync_http_policy.h",
     );
     assert.equal(
-      has("shared/utf8_hold.h"),
+      has("shared/sync_http/sync_http_session.h"),
       true,
-      "native incomplete UTF-8 hold lives in shared/utf8_hold.h",
+      "NativeSyncHttp stream session header must ship",
     );
     assert.equal(
-      has("shared/sync_http_session.h"),
+      has("shared/sync_http/sync_http_session.cc"),
       true,
-      "NativeSyncHttp session contract lives in shared/sync_http_session.h",
+      "NativeSyncHttp stream session implementation must ship",
     );
     assert.equal(
-      has("shared/nativeModule/desktop_sync_http.h"),
+      has("shared/sync_http/sync_http_engine.h"),
       true,
-      "Desktop NativeSyncHttp header must ship",
+      "Unified NativeSyncHttp engine header must ship",
     );
     assert.equal(
-      has("shared/nativeModule/desktop_sync_http.cc"),
+      has("shared/sync_http/sync_http_engine.cc"),
       true,
-      "Desktop NativeSyncHttp core must ship",
+      "Unified NativeSyncHttp engine core must ship",
     );
     assert.equal(
-      has("shared/nativeModule/desktop_sync_http_macos.mm"),
+      has("shared/sync_http/apple_sync_http.mm"),
       true,
-      "macOS Desktop NativeSyncHttp backend must ship",
+      "Unified Apple NSURLSession adapter must ship",
     );
     assert.equal(
-      has("shared/nativeModule/desktop_sync_http_win.cc"),
+      has("shared/sync_http/win_sync_http.cc"),
       true,
-      "Windows Desktop NativeSyncHttp backend must ship",
+      "Windows WinHTTP adapter must ship",
     );
     assert.equal(
       has("android/src/main/cpp/sync_http_session_jni.cc"),
@@ -177,7 +172,7 @@ test("packed tarball ships iOS build inputs and omits host/build residue", async
     assert.equal(
       has("android/src/main/java/com/powersync/lynx/SyncHttpSession.java"),
       true,
-      "Android SyncHttpSession JNI wrapper must ship",
+      "Android SyncHttpSession JNI seam must ship",
     );
     assert.equal(
       has("android/src/main/java/com/powersync/lynx/SyncHttpPolicy.java"),
@@ -190,24 +185,19 @@ test("packed tarball ships iOS build inputs and omits host/build residue", async
       "Android policy generator must ship so the committed Java can be regenerated",
     );
     assert.equal(
-      has("ios/src/IdleCompleteHttp.mm"),
+      has("ios/src/sync_http_session_pod.cc"),
       true,
-      "iOS NativePowerSyncModule.httpFetch needs IdleCompleteHttp.mm",
+      "CocoaPods forwarding TU for sync_http_session.cc must ship",
     );
     assert.equal(
-      has("ios/src/StreamingHttp.h"),
+      has("ios/src/sync_http_engine_pod.cc"),
       true,
-      "iOS incremental /sync/stream needs StreamingHttp.h",
+      "CocoaPods forwarding TU for sync_http_engine.cc must ship",
     );
     assert.equal(
-      has("ios/src/StreamingHttp.mm"),
+      has("ios/src/apple_sync_http_pod.mm"),
       true,
-      "iOS incremental /sync/stream needs StreamingHttp.mm",
-    );
-    assert.equal(
-      has("ios/src/SyncHttpRequest.h"),
-      true,
-      "iOS shared request builder header must ship",
+      "CocoaPods forwarding TU for apple_sync_http.mm must ship",
     );
     assert.equal(
       has("android/src/main/java/com/powersync/lynx/StreamingHttp.java"),

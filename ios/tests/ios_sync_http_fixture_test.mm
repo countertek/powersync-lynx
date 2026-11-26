@@ -2,9 +2,8 @@
 #import "ios_sync_http_fixtures.h"
 
 #include "ndjson_http_replay.h"
-#include "sync_http_session.h"
+#include "sync_http/sync_http_session.h"
 #include "sync_stream_fixtures.h"
-#include "utf8_hold.h"
 
 #include <cstdio>
 #include <string>
@@ -136,24 +135,10 @@ int RunSyncHttpFixtureTests(void) {
     }
     const auto* checkpoint = ps_sync_fixtures::find_scenario(catalog, "checkpoint-ops");
     const auto* idle = ps_sync_fixtures::find_scenario(catalog, "idle-complete");
-    const auto* split = ps_sync_fixtures::find_scenario(catalog, "split-multibyte");
-    expect_http(checkpoint != nullptr && idle != nullptr && split != nullptr,
+    expect_http(checkpoint != nullptr && idle != nullptr,
                 "iOS loaded shared NDJSON scenarios");
-    if (checkpoint == nullptr || idle == nullptr || split == nullptr) {
+    if (checkpoint == nullptr || idle == nullptr) {
       return g_http_failures == 0 ? 1 : g_http_failures;
-    }
-    {
-      const auto wire = ps_sync_fixtures::wire_chunks(*split);
-      expect_http(wire.size() == 2, "split-multibyte decodes two wire pieces");
-      expect_http(ps_utf8_trailing_incomplete(
-                      reinterpret_cast<const uint8_t*>(wire[0].data()), wire[0].size()) == 1,
-                  "iOS helper holds euro lead from split-multibyte fixture");
-      std::string joined;
-      for (const auto& piece : wire) {
-        joined += piece;
-      }
-      expect_http(joined == ps_sync_fixtures::joined_body(*split),
-                  "iOS split-multibyte wire bytes match chunks");
     }
 
     ps_sync_fixtures::ReplayConfig config;
@@ -197,8 +182,8 @@ int RunSyncHttpFixtureTests(void) {
     }
     expect_http(names.count >= 1 && [names[0] isEqualToString:@"onData"],
                 "first GlobalEventEmitter event is onData");
-    expect_http(WaitForEventCount(sender, names.count + 1) ||
-                    [[sender snapshot].lastObject[@"event"] isEqualToString:@"onEnd"],
+    expect_http([[sender snapshot].lastObject[@"event"] isEqualToString:@"onEnd"] ||
+                    WaitForEventCount(sender, names.count + 1),
                 "onEnd follows onData");
     events = [sender snapshot];
     NSString* last = events.lastObject[@"event"];
@@ -277,8 +262,8 @@ int RunSyncHttpFixtureTests(void) {
                 "shared-sender idleComplete is false");
     expect_http(WaitForEventCount(shared_sender, 2),
                 "shared-sender onData* arrived without UIWindow walk");
-    expect_http(WaitForEventCount(shared_sender, [shared_sender snapshot].count + 1) ||
-                    [[shared_sender snapshot].lastObject[@"event"] isEqualToString:@"onEnd"],
+    expect_http([[shared_sender snapshot].lastObject[@"event"] isEqualToString:@"onEnd"] ||
+                    WaitForEventCount(shared_sender, [shared_sender snapshot].count + 1),
                 "shared-sender onEnd follows onData");
     expect_http([[[shared_sender snapshot] lastObject][@"event"] isEqualToString:@"onEnd"],
                 "shared-sender terminal event is onEnd");
@@ -397,8 +382,8 @@ int RunSyncHttpFixtureTests(void) {
       expect_http([err_headers[@"ok"] boolValue], "error-then-end headers ok");
       expect_http(WaitForEventCount(err_sender, 2),
                   "error-then-end onData then terminal events");
-      expect_http(WaitForEventCount(err_sender, [err_sender snapshot].count + 1) ||
-                      [[err_sender snapshot].lastObject[@"event"] isEqualToString:@"onEnd"],
+      expect_http([[err_sender snapshot].lastObject[@"event"] isEqualToString:@"onEnd"] ||
+                      WaitForEventCount(err_sender, [err_sender snapshot].count + 1),
                   "error-then-end waits for onEnd");
       NSArray<NSDictionary*>* err_events = [err_sender snapshot];
       BOOL saw_stream_error = NO;

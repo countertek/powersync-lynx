@@ -1,4 +1,4 @@
-#include "desktop_sync_http.h"
+#include "sync_http_engine.h"
 
 #if defined(_WIN32)
 
@@ -12,7 +12,6 @@
 #include <winhttp.h>
 
 #include "sync_http_policy.h"
-#include "sync_http_session.h"
 #include "win_utf8.h"
 
 #include <atomic>
@@ -24,7 +23,7 @@
 #include <utility>
 #include <vector>
 
-namespace ps_desktop_http {
+namespace ps_sync_http {
 
 namespace {
 
@@ -152,6 +151,23 @@ void AddRequestHeaders(
   }
 }
 
+class ScopedHandle {
+ public:
+  explicit ScopedHandle(HINTERNET h = nullptr) : h_(h) {}
+  ~ScopedHandle() {
+    if (h_ != nullptr) {
+      WinHttpCloseHandle(h_);
+    }
+  }
+  ScopedHandle(const ScopedHandle&) = delete;
+  ScopedHandle& operator=(const ScopedHandle&) = delete;
+  HINTERNET get() const { return h_; }
+  explicit operator bool() const { return h_ != nullptr; }
+
+ private:
+  HINTERNET h_;
+};
+
 class WinHttpStreamTask final
     : public PlatformStreamTask,
       public std::enable_shared_from_this<WinHttpStreamTask> {
@@ -159,7 +175,7 @@ class WinHttpStreamTask final
   WinHttpStreamTask(HttpRequest request, PlatformStreamCallbacks callbacks)
       : request_(std::move(request)), callbacks_(std::move(callbacks)) {}
 
-  ~WinHttpStreamTask() override { CloseHandles(); }
+  ~WinHttpStreamTask() override { CloseRequestHandle(); }
 
   void Start() {
     auto self = shared_from_this();
@@ -168,52 +184,70 @@ class WinHttpStreamTask final
 
   void Cancel() override {
     cancelled_.store(true);
-    CloseHandles();
+    // Interrupt any blocking call on the request handle without racing
+    // Run()'s local session/connection ScopedHandles.
+    CloseRequestHandle();
   }
 
  private:
-  bool AssignHandle(HINTERNET* slot, HINTERNET handle) {
+  bool AssignRequestHandle(HINTERNET handle) {
     if (handle == nullptr) {
       return false;
     }
-    std::lock_guard<std::mutex> lock(handle_mutex_);
+    std::lock_guard<std::mutex> lock(req_mutex_);
     if (cancelled_.load()) {
       WinHttpCloseHandle(handle);
       return false;
     }
-    *slot = handle;
+    req_ = handle;
     return true;
   }
 
-  void CloseHandles() {
+  void CloseRequestHandle() {
     HINTERNET req = nullptr;
-    HINTERNET conn = nullptr;
-    HINTERNET sess = nullptr;
     {
-      std::lock_guard<std::mutex> lock(handle_mutex_);
+      std::lock_guard<std::mutex> lock(req_mutex_);
       req = req_;
-      conn = conn_;
-      sess = sess_;
       req_ = nullptr;
-      conn_ = nullptr;
-      sess_ = nullptr;
     }
     if (req != nullptr) {
       WinHttpCloseHandle(req);
     }
-    if (conn != nullptr) {
-      WinHttpCloseHandle(conn);
-    }
-    if (sess != nullptr) {
-      WinHttpCloseHandle(sess);
-    }
+  }
+
+  void ClearCallbacks() {
+    callbacks_.on_headers = nullptr;
+    callbacks_.on_bytes = nullptr;
+    callbacks_.on_end = nullptr;
+    callbacks_.on_error = nullptr;
   }
 
   void FinishError(const std::string& message) {
-    CloseHandles();
-    if (callbacks_.on_error) {
-      callbacks_.on_error(cancelled_.load() ? PS_SYNC_HTTP_ABORT_MESSAGE
-                                            : message);
+    CloseRequestHandle();
+    if (finished_.exchange(true)) {
+      return;
+    }
+    auto on_error = std::move(callbacks_.on_error);
+    ClearCallbacks();
+    if (on_error) {
+      on_error(cancelled_.load() ? PS_SYNC_HTTP_ABORT_MESSAGE : message);
+    }
+  }
+
+  void FinishEnd() {
+    CloseRequestHandle();
+    if (finished_.exchange(true)) {
+      return;
+    }
+    auto on_error = std::move(callbacks_.on_error);
+    auto on_end = std::move(callbacks_.on_end);
+    ClearCallbacks();
+    if (cancelled_.load()) {
+      if (on_error) {
+        on_error(PS_SYNC_HTTP_ABORT_MESSAGE);
+      }
+    } else if (on_end) {
+      on_end();
     }
   }
 
@@ -225,20 +259,30 @@ class WinHttpStreamTask final
       return;
     }
 
-    HINTERNET session = OpenWinHttpSession();
-    if (!AssignHandle(&sess_, session)) {
+    if (cancelled_.load()) {
+      FinishError(PS_SYNC_HTTP_ABORT_MESSAGE);
+      return;
+    }
+
+    ScopedHandle session(OpenWinHttpSession());
+    if (!session) {
       FinishError(FormatWinHttpError("WinHttpOpen", GetLastError()));
       return;
     }
 
-    WinHttpSetTimeouts(session, PS_SYNC_HTTP_CONNECT_TIMEOUT_MS,
+    WinHttpSetTimeouts(session.get(), PS_SYNC_HTTP_CONNECT_TIMEOUT_MS,
                        PS_SYNC_HTTP_CONNECT_TIMEOUT_MS,
                        PS_SYNC_HTTP_CONNECT_TIMEOUT_MS,
                        PS_SYNC_HTTP_STREAM_READ_TIMEOUT_MS);
 
-    HINTERNET conn =
-        WinHttpConnect(session, parsed.host.c_str(), parsed.port, 0);
-    if (!AssignHandle(&conn_, conn)) {
+    if (cancelled_.load()) {
+      FinishError(PS_SYNC_HTTP_ABORT_MESSAGE);
+      return;
+    }
+
+    ScopedHandle conn(
+        WinHttpConnect(session.get(), parsed.host.c_str(), parsed.port, 0));
+    if (!conn) {
       FinishError(FormatWinHttpError("WinHttpConnect", GetLastError()));
       return;
     }
@@ -248,10 +292,12 @@ class WinHttpStreamTask final
     const std::wstring wide_method = ps_sql::Utf8ToWide(method);
     const DWORD flags = parsed.secure ? WINHTTP_FLAG_SECURE : 0;
     HINTERNET req = WinHttpOpenRequest(
-        conn, wide_method.c_str(), parsed.path_and_query.c_str(), nullptr,
+        conn.get(), wide_method.c_str(), parsed.path_and_query.c_str(), nullptr,
         WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
-    if (!AssignHandle(&req_, req)) {
-      FinishError(FormatWinHttpError("WinHttpOpenRequest", GetLastError()));
+    if (!AssignRequestHandle(req)) {
+      FinishError(cancelled_.load()
+                      ? PS_SYNC_HTTP_ABORT_MESSAGE
+                      : FormatWinHttpError("WinHttpOpenRequest", GetLastError()));
       return;
     }
 
@@ -319,40 +365,15 @@ class WinHttpStreamTask final
       }
     }
 
-    CloseHandles();
-    if (cancelled_.load()) {
-      if (callbacks_.on_error) {
-        callbacks_.on_error(PS_SYNC_HTTP_ABORT_MESSAGE);
-      }
-    } else if (callbacks_.on_end) {
-      callbacks_.on_end();
-    }
+    FinishEnd();
   }
 
   HttpRequest request_;
   PlatformStreamCallbacks callbacks_;
-  std::mutex handle_mutex_;
-  HINTERNET sess_ = nullptr;
-  HINTERNET conn_ = nullptr;
+  std::mutex req_mutex_;
   HINTERNET req_ = nullptr;
   std::atomic<bool> cancelled_{false};
-};
-
-class ScopedHandle {
- public:
-  explicit ScopedHandle(HINTERNET h = nullptr) : h_(h) {}
-  ~ScopedHandle() {
-    if (h_ != nullptr) {
-      WinHttpCloseHandle(h_);
-    }
-  }
-  ScopedHandle(const ScopedHandle&) = delete;
-  ScopedHandle& operator=(const ScopedHandle&) = delete;
-  HINTERNET get() const { return h_; }
-  explicit operator bool() const { return h_ != nullptr; }
-
- private:
-  HINTERNET h_;
+  std::atomic<bool> finished_{false};
 };
 
 HttpResponseEnvelope RunWinHttpIdleComplete(const HttpRequest& request,
@@ -360,13 +381,14 @@ HttpResponseEnvelope RunWinHttpIdleComplete(const HttpRequest& request,
   ParsedUrl parsed;
   std::string parse_err;
   if (!CrackUrlUtf8(request.url, &parsed, &parse_err)) {
-    return MakeIdleErrorEnvelope(-1, parse_err);
+    return MakeIdleErrorEnvelope(PS_SYNC_HTTP_FAIL_STATUS, parse_err);
   }
 
   ScopedHandle session(OpenWinHttpSession());
   if (!session) {
     return MakeIdleErrorEnvelope(
-        -1, FormatWinHttpError("WinHttpOpen", GetLastError()));
+        PS_SYNC_HTTP_FAIL_STATUS,
+        FormatWinHttpError("WinHttpOpen", GetLastError()));
   }
 
   WinHttpSetTimeouts(session.get(), PS_SYNC_HTTP_CONNECT_TIMEOUT_MS,
@@ -378,7 +400,8 @@ HttpResponseEnvelope RunWinHttpIdleComplete(const HttpRequest& request,
       WinHttpConnect(session.get(), parsed.host.c_str(), parsed.port, 0));
   if (!conn) {
     return MakeIdleErrorEnvelope(
-        -1, FormatWinHttpError("WinHttpConnect", GetLastError()));
+        PS_SYNC_HTTP_FAIL_STATUS,
+        FormatWinHttpError("WinHttpConnect", GetLastError()));
   }
 
   const std::string method =
@@ -390,7 +413,8 @@ HttpResponseEnvelope RunWinHttpIdleComplete(const HttpRequest& request,
       WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags));
   if (!req) {
     return MakeIdleErrorEnvelope(
-        -1, FormatWinHttpError("WinHttpOpenRequest", GetLastError()));
+        PS_SYNC_HTTP_FAIL_STATUS,
+        FormatWinHttpError("WinHttpOpenRequest", GetLastError()));
   }
 
   AddRequestHeaders(req.get(), request.headers);
@@ -403,12 +427,14 @@ HttpResponseEnvelope RunWinHttpIdleComplete(const HttpRequest& request,
   if (!WinHttpSendRequest(req.get(), WINHTTP_NO_ADDITIONAL_HEADERS, 0, body_ptr,
                           body_len, body_len, 0)) {
     return MakeIdleErrorEnvelope(
-        -1, FormatWinHttpError("WinHttpSendRequest", GetLastError()));
+        PS_SYNC_HTTP_FAIL_STATUS,
+        FormatWinHttpError("WinHttpSendRequest", GetLastError()));
   }
 
   if (!WinHttpReceiveResponse(req.get(), nullptr)) {
     return MakeIdleErrorEnvelope(
-        -1, FormatWinHttpError("WinHttpReceiveResponse", GetLastError()));
+        PS_SYNC_HTTP_FAIL_STATUS,
+        FormatWinHttpError("WinHttpReceiveResponse", GetLastError()));
   }
 
   const int status = QueryStatusCode(req.get());
@@ -446,7 +472,8 @@ HttpResponseEnvelope RunWinHttpIdleComplete(const HttpRequest& request,
         break;
       }
       return MakeIdleErrorEnvelope(
-          -1, FormatWinHttpError("WinHttpQueryDataAvailable", err));
+          PS_SYNC_HTTP_FAIL_STATUS,
+          FormatWinHttpError("WinHttpQueryDataAvailable", err));
     }
     if (avail == 0) {
       break;
@@ -464,7 +491,8 @@ HttpResponseEnvelope RunWinHttpIdleComplete(const HttpRequest& request,
         idle_completed = true;
         break;
       }
-      return MakeIdleErrorEnvelope(-1, FormatWinHttpError("WinHttpReadData", err));
+      return MakeIdleErrorEnvelope(PS_SYNC_HTTP_FAIL_STATUS,
+                                   FormatWinHttpError("WinHttpReadData", err));
     }
     if (bytes_read == 0) {
       break;
@@ -484,28 +512,34 @@ HttpResponseEnvelope RunWinHttpIdleComplete(const HttpRequest& request,
       idle_completed || (is_sync_stream && !body.empty()));
 }
 
+class WinPlatformTransport final : public PlatformTransport {
+ public:
+  std::shared_ptr<PlatformStreamTask> StartStreaming(
+      const HttpRequest& request, PlatformStreamCallbacks callbacks) override {
+    auto task =
+        std::make_shared<WinHttpStreamTask>(request, std::move(callbacks));
+    task->Start();
+    return task;
+  }
+
+  void StartIdleComplete(const HttpRequest& request, bool is_sync_stream,
+                         EnvelopeCallback callback) override {
+    if (!callback) {
+      return;
+    }
+    std::thread([request, is_sync_stream,
+                 callback = std::move(callback)]() mutable {
+      callback(RunWinHttpIdleComplete(request, is_sync_stream));
+    }).detach();
+  }
+};
+
 }  // namespace
 
-std::shared_ptr<PlatformStreamTask> StartPlatformStreamingRequest(
-    const HttpRequest& request, PlatformStreamCallbacks callbacks) {
-  auto task =
-      std::make_shared<WinHttpStreamTask>(request, std::move(callbacks));
-  task->Start();
-  return task;
+std::shared_ptr<PlatformTransport> DefaultPlatformTransport() {
+  return std::make_shared<WinPlatformTransport>();
 }
 
-void StartPlatformIdleCompleteRequest(const HttpRequest& request,
-                                      bool is_sync_stream,
-                                      EnvelopeCallback callback) {
-  if (!callback) {
-    return;
-  }
-  std::thread([request, is_sync_stream,
-               callback = std::move(callback)]() mutable {
-    callback(RunWinHttpIdleComplete(request, is_sync_stream));
-  }).detach();
-}
-
-}  // namespace ps_desktop_http
+}  // namespace ps_sync_http
 
 #endif  // defined(_WIN32)

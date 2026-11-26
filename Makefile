@@ -18,7 +18,7 @@ else ifeq ($(UNAME_S),Darwin)
   JNI_OS_INCLUDE := darwin
   JAVA_HOME ?= $(shell /usr/libexec/java_home 2>/dev/null)
   MACOS_LDFLAGS := -framework CoreFoundation -framework Foundation
-  DESKTOP_HTTP_OBJS := shared/build/desktop_sync_http.o shared/build/desktop_sync_http_macos.o
+  SYNC_HTTP_OBJS := shared/build/sync_http_session.o shared/build/sync_http_engine.o shared/build/apple_sync_http.o
   ifeq ($(UNAME_M),arm64)
     CORE_DYLIB := dist/macos/arm64/libpowersync_aarch64.macos.dylib
     FETCH_DEPS_FLAGS := --macos-arm64
@@ -32,17 +32,15 @@ else
   JNI_OS_INCLUDE := darwin
   JAVA_HOME ?= $(shell /usr/libexec/java_home 2>/dev/null)
   MACOS_LDFLAGS := -framework CoreFoundation -framework Foundation
-  DESKTOP_HTTP_OBJS := shared/build/desktop_sync_http.o shared/build/desktop_sync_http_macos.o
+  SYNC_HTTP_OBJS := shared/build/sync_http_session.o shared/build/sync_http_engine.o shared/build/apple_sync_http.o
 endif
 ifeq ($(UNAME_S),Linux)
-  DESKTOP_HTTP_OBJS := shared/build/desktop_sync_http.o
+  SYNC_HTTP_OBJS := shared/build/sync_http_session.o shared/build/sync_http_engine.o
 endif
 TEST_BIN := shared/build/ps_sql_test
 FIXTURE_TEST_BIN := shared/build/sync_stream_fixtures_test
-POLICY_ANDROID_TEST_BIN := shared/build/sync_http_policy_android_test
-UTF8_HOLD_TEST_BIN := shared/build/utf8_hold_test
 SESSION_TEST_BIN := shared/build/sync_http_session_test
-DESKTOP_HTTP_TEST_BIN := shared/build/desktop_sync_http_test
+ENGINE_TEST_BIN := shared/build/sync_http_engine_test
 IOS_TEST_BIN := shared/build/ios_module_rpc_test
 ANDROID_JAVA_DIR := $(CURDIR)/android/src/main/java/com/powersync/lynx
 FIXTURES_JSON := $(CURDIR)/shared/fixtures/sync-stream.json
@@ -62,9 +60,10 @@ PNPM ?= $(shell \
 
 JNI_CFLAGS := -I$(JAVA_HOME)/include -I$(JAVA_HOME)/include/$(JNI_OS_INCLUDE)
 JNI_OBJ := shared/build/ps_sql_jni.o
-JNI_UTF8_OBJ := shared/build/utf8_hold_jni.o
 JNI_SESSION_OBJ := shared/build/sync_http_session_jni.o
 POD_ENGINE_OBJ := shared/build/ps_sql_engine_pod.o
+POD_SYNC_HTTP_SESSION_OBJ := shared/build/sync_http_session_pod.o
+POD_SYNC_HTTP_ENGINE_OBJ := shared/build/sync_http_engine_pod.o
 
 ANDROID_SDK ?= $(ANDROID_HOME)
 ADB := $(ANDROID_SDK)/platform-tools/adb
@@ -101,111 +100,84 @@ $(FIXTURE_TEST_BIN): shared/tests/sync_stream_fixtures_test.cc \
 		-DPS_SYNC_STREAM_FIXTURES_PATH='"$(FIXTURES_JSON)"' \
 		shared/tests/sync_stream_fixtures_test.cc $(LDFLAGS) -o $@
 
-$(POLICY_ANDROID_TEST_BIN): shared/tests/sync_http_policy_android_test.cc \
-		shared/sync_http_policy.h \
-		android/src/main/java/com/powersync/lynx/SyncHttpPolicy.java \
-		android/src/main/java/com/powersync/lynx/IdleCompleteHttp.java \
-		android/src/main/java/com/powersync/lynx/StreamingHttp.java \
-		android/src/main/java/com/powersync/lynx/NativeSyncHttp.java
+shared/build/sync_http_session.o: shared/sync_http/sync_http_session.cc \
+		shared/sync_http/sync_http_session.h shared/sync_http_policy.h
 	mkdir -p shared/build
-	$(CXX) $(CXXFLAGS) \
-		-DPS_SYNC_HTTP_POLICY_H_PATH='"$(CURDIR)/shared/sync_http_policy.h"' \
-		-DPS_ANDROID_JAVA_DIR='"$(ANDROID_JAVA_DIR)"' \
-		shared/tests/sync_http_policy_android_test.cc -o $@
+	$(CXX) $(CXXFLAGS) -Ishared/sync_http -c shared/sync_http/sync_http_session.cc -o $@
 
-$(UTF8_HOLD_TEST_BIN): shared/tests/utf8_hold_test.cc shared/utf8_hold.h \
+shared/build/sync_http_engine.o: shared/sync_http/sync_http_engine.cc \
+		shared/sync_http/sync_http_engine.h shared/sync_http/sync_http_session.h \
+		shared/sync_http_policy.h
+	mkdir -p shared/build
+	$(CXX) $(CXXFLAGS) -Ishared/sync_http -c shared/sync_http/sync_http_engine.cc -o $@
+
+shared/build/apple_sync_http.o: shared/sync_http/apple_sync_http.mm \
+		shared/sync_http/sync_http_engine.h shared/sync_http/sync_http_session.h \
+		shared/sync_http_policy.h
+	mkdir -p shared/build
+	clang++ -std=c++17 -fPIC -O2 -fobjc-arc -fblocks -Ishared -Ishared/sync_http \
+		-c shared/sync_http/apple_sync_http.mm -o $@
+
+$(SESSION_TEST_BIN): shared/tests/sync_http_session_test.cc \
+		shared/sync_http/sync_http_session.h shared/sync_http_policy.h \
 		shared/sync_stream_fixtures.h shared/fixtures/sync-stream.json \
-		android/src/main/java/com/powersync/lynx/StreamingHttp.java \
-		android/src/main/cpp/utf8_hold_jni.cc \
-		ios/src/StreamingHttp.mm \
-		shared/nativeModule/desktop_sync_http.cc
+		shared/build/sync_http_session.o
 	mkdir -p shared/build
-	$(CXX) $(CXXFLAGS) \
+	$(CXX) $(CXXFLAGS) -Ishared/sync_http \
 		-DPS_SYNC_STREAM_FIXTURES_PATH='"$(FIXTURES_JSON)"' \
-		-DPS_ANDROID_STREAMING_HTTP_JAVA='"$(ANDROID_JAVA_DIR)/StreamingHttp.java"' \
-		-DPS_IOS_STREAMING_HTTP_MM='"$(CURDIR)/ios/src/StreamingHttp.mm"' \
-		-DPS_ANDROID_UTF8_HOLD_JNI='"$(CURDIR)/android/src/main/cpp/utf8_hold_jni.cc"' \
-		-DPS_DESKTOP_SYNC_HTTP_CC='"$(CURDIR)/shared/nativeModule/desktop_sync_http.cc"' \
-		shared/tests/utf8_hold_test.cc -o $@
+		shared/tests/sync_http_session_test.cc shared/build/sync_http_session.o \
+		$(LDFLAGS) -o $@
 
-$(SESSION_TEST_BIN): shared/tests/sync_http_session_test.cc shared/sync_http_session.h \
-		shared/sync_http_policy.h \
-		android/src/main/java/com/powersync/lynx/NativeSyncHttp.java \
-		android/src/main/java/com/powersync/lynx/SyncHttpSession.java \
-		android/src/main/cpp/sync_http_session_jni.cc \
-		ios/src/NativeSyncHttp.mm \
-		shared/nativeModule/NativePowerSyncModule.cc \
-		shared/nativeModule/desktop_sync_http.cc
-	mkdir -p shared/build
-	$(CXX) $(CXXFLAGS) \
-		-DPS_ANDROID_NATIVE_SYNC_HTTP_JAVA='"$(ANDROID_JAVA_DIR)/NativeSyncHttp.java"' \
-		-DPS_ANDROID_SYNC_HTTP_SESSION_JAVA='"$(ANDROID_JAVA_DIR)/SyncHttpSession.java"' \
-		-DPS_IOS_NATIVE_SYNC_HTTP_MM='"$(CURDIR)/ios/src/NativeSyncHttp.mm"' \
-		-DPS_ANDROID_SESSION_JNI='"$(CURDIR)/android/src/main/cpp/sync_http_session_jni.cc"' \
-		-DPS_DESKTOP_NATIVE_MODULE_CC='"$(CURDIR)/shared/nativeModule/NativePowerSyncModule.cc"' \
-		-DPS_DESKTOP_SYNC_HTTP_CC='"$(CURDIR)/shared/nativeModule/desktop_sync_http.cc"' \
-		shared/tests/sync_http_session_test.cc -o $@
-
-shared/build/desktop_sync_http.o: shared/nativeModule/desktop_sync_http.cc \
-		shared/nativeModule/desktop_sync_http.h shared/sync_http_policy.h \
-		shared/sync_http_session.h shared/utf8_hold.h
-	mkdir -p shared/build
-	$(CXX) $(CXXFLAGS) -Ishared/nativeModule -c shared/nativeModule/desktop_sync_http.cc -o $@
-
-shared/build/desktop_sync_http_macos.o: shared/nativeModule/desktop_sync_http_macos.mm \
-		shared/nativeModule/desktop_sync_http.h shared/sync_http_policy.h \
-		shared/sync_http_session.h
-	mkdir -p shared/build
-	clang++ -std=c++17 -fPIC -O2 -fobjc-arc -fblocks -Ishared -Ishared/nativeModule \
-		-c shared/nativeModule/desktop_sync_http_macos.mm -o $@
-
-$(DESKTOP_HTTP_TEST_BIN): shared/tests/desktop_sync_http_test.cc \
-		shared/nativeModule/desktop_sync_http.h \
+$(ENGINE_TEST_BIN): shared/tests/sync_http_engine_test.cc \
+		shared/sync_http/sync_http_engine.h shared/sync_http/sync_http_session.h \
 		shared/sync_stream_fixtures.h shared/tests/ndjson_http_replay.h \
-		shared/fixtures/sync-stream.json $(DESKTOP_HTTP_OBJS)
+		shared/fixtures/sync-stream.json $(SYNC_HTTP_OBJS)
 	mkdir -p shared/build
-	$(CXX) $(CXXFLAGS) -Ishared/nativeModule -Ishared/tests \
+	$(CXX) $(CXXFLAGS) -Ishared/sync_http -Ishared/tests \
 		-DPS_SYNC_STREAM_FIXTURES_PATH='"$(FIXTURES_JSON)"' \
-		shared/tests/desktop_sync_http_test.cc $(DESKTOP_HTTP_OBJS) \
+		shared/tests/sync_http_engine_test.cc $(SYNC_HTTP_OBJS) \
 		$(LDFLAGS) $(MACOS_LDFLAGS) -o $@
 
-test: deps $(TEST_BIN) $(FIXTURE_TEST_BIN) $(POLICY_ANDROID_TEST_BIN) $(UTF8_HOLD_TEST_BIN) \
-		$(SESSION_TEST_BIN) $(DESKTOP_HTTP_TEST_BIN) $(JNI_OBJ) $(JNI_UTF8_OBJ) $(JNI_SESSION_OBJ) $(POD_ENGINE_OBJ)
+test: deps $(TEST_BIN) $(FIXTURE_TEST_BIN) $(SESSION_TEST_BIN) $(ENGINE_TEST_BIN) \
+		$(JNI_OBJ) $(JNI_SESSION_OBJ) $(POD_ENGINE_OBJ) $(POD_SYNC_HTTP_SESSION_OBJ) $(POD_SYNC_HTTP_ENGINE_OBJ)
 	@! grep -n 'UIApplication.sharedApplication.windows' ios/src/NativeSyncHttp.mm
 	@! grep -n 'findLynxViewIn' ios/src/NativeSyncHttp.mm
 	POWERSYNC_CORE_PATH="$(CURDIR)/$(CORE_DYLIB)" $(TEST_BIN)
 	PS_SYNC_STREAM_FIXTURES_PATH="$(FIXTURES_JSON)" $(FIXTURE_TEST_BIN)
-	$(POLICY_ANDROID_TEST_BIN)
-	$(UTF8_HOLD_TEST_BIN)
-	$(SESSION_TEST_BIN)
-	PS_SYNC_STREAM_FIXTURES_PATH="$(FIXTURES_JSON)" $(DESKTOP_HTTP_TEST_BIN)
+	PS_SYNC_STREAM_FIXTURES_PATH="$(FIXTURES_JSON)" $(SESSION_TEST_BIN)
+	PS_SYNC_STREAM_FIXTURES_PATH="$(FIXTURES_JSON)" $(ENGINE_TEST_BIN)
 	node scripts/gen-sync-http-policy-java.mjs --check
 
 $(JNI_OBJ): android/src/main/cpp/ps_sql_jni.cc shared/ps_sql.h
 	mkdir -p shared/build
 	$(CXX) $(CXXFLAGS) $(SQLITE_FLAGS) $(JNI_CFLAGS) -c android/src/main/cpp/ps_sql_jni.cc -o $@
 
-$(JNI_UTF8_OBJ): android/src/main/cpp/utf8_hold_jni.cc shared/utf8_hold.h
+$(JNI_SESSION_OBJ): android/src/main/cpp/sync_http_session_jni.cc \
+		shared/sync_http/sync_http_session.h shared/sync_http_policy.h
 	mkdir -p shared/build
-	$(CXX) $(CXXFLAGS) $(JNI_CFLAGS) -c android/src/main/cpp/utf8_hold_jni.cc -o $@
-
-$(JNI_SESSION_OBJ): android/src/main/cpp/sync_http_session_jni.cc shared/sync_http_session.h \
-		shared/sync_http_policy.h
-	mkdir -p shared/build
-	$(CXX) $(CXXFLAGS) $(JNI_CFLAGS) -c android/src/main/cpp/sync_http_session_jni.cc -o $@
+	$(CXX) $(CXXFLAGS) -Ishared/sync_http $(JNI_CFLAGS) -c android/src/main/cpp/sync_http_session_jni.cc -o $@
 
 $(POD_ENGINE_OBJ): ios/src/ps_sql_engine.cc shared/ps_sql.cc shared/ps_sql.h $(SQLITE_DIR)/sqlite3.h
 	mkdir -p shared/build
 	$(CXX) $(CXXFLAGS) $(SQLITE_FLAGS) -c ios/src/ps_sql_engine.cc -o $@
 
+$(POD_SYNC_HTTP_SESSION_OBJ): ios/src/sync_http_session_pod.cc shared/sync_http/sync_http_session.cc \
+		shared/sync_http/sync_http_session.h shared/sync_http_policy.h
+	mkdir -p shared/build
+	$(CXX) $(CXXFLAGS) -Ishared/sync_http -c ios/src/sync_http_session_pod.cc -o $@
+
+$(POD_SYNC_HTTP_ENGINE_OBJ): ios/src/sync_http_engine_pod.cc shared/sync_http/sync_http_engine.cc \
+		shared/sync_http/sync_http_engine.h shared/sync_http/sync_http_session.h shared/sync_http_policy.h
+	mkdir -p shared/build
+	$(CXX) $(CXXFLAGS) -Ishared/sync_http -c ios/src/sync_http_engine_pod.cc -o $@
+
 $(IOS_TEST_BIN): deps ios/tests/ios_module_rpc_test.mm ios/tests/ios_sync_http_fixture_test.mm \
 		ios/tests/ios_sync_http_fixtures.h \
 		ios/src/NativePowerSyncModule.mm \
 		ios/src/NativePowerSyncModule.h ios/src/NativeSyncHttp.mm ios/src/NativeSyncHttp.h \
-		ios/src/IdleCompleteHttp.mm ios/src/IdleCompleteHttp.h \
-		ios/src/StreamingHttp.mm ios/src/StreamingHttp.h \
-		ios/src/SyncHttpRequest.h \
-		shared/sync_http_policy.h shared/utf8_hold.h shared/sync_http_session.h \
+		ios/src/sync_http_session_pod.cc ios/src/sync_http_engine_pod.cc ios/src/apple_sync_http_pod.mm \
+		shared/sync_http_policy.h shared/sync_http/sync_http_session.h shared/sync_http/sync_http_session.cc \
+		shared/sync_http/sync_http_engine.h shared/sync_http/sync_http_engine.cc shared/sync_http/apple_sync_http.mm \
 		shared/sync_stream_fixtures.h \
 		shared/tests/ndjson_http_replay.h shared/fixtures/sync-stream.json \
 		shared/ps_sql.cc shared/ps_sql.h \
@@ -215,18 +187,17 @@ $(IOS_TEST_BIN): deps ios/tests/ios_module_rpc_test.mm ios/tests/ios_sync_http_f
 		> shared/build/ios-src/NativePowerSyncModule.h
 	cp ios/src/NativePowerSyncModule.mm shared/build/ios-src/NativePowerSyncModule.mm
 	cp ios/src/NativeSyncHttp.h ios/src/NativeSyncHttp.mm shared/build/ios-src/
-	cp ios/src/IdleCompleteHttp.h ios/src/IdleCompleteHttp.mm shared/build/ios-src/
-	cp ios/src/StreamingHttp.h ios/src/StreamingHttp.mm shared/build/ios-src/
-	cp ios/src/SyncHttpRequest.h shared/build/ios-src/
+	cp ios/src/sync_http_session_pod.cc ios/src/sync_http_engine_pod.cc ios/src/apple_sync_http_pod.mm shared/build/ios-src/
 	clang++ -std=c++17 -fPIC -O2 -fobjc-arc -fblocks \
-		-Ishared/build/ios-src -Iios/tests -Iios/tests/stubs -Ishared -Ishared/tests -I$(SQLITE_DIR) \
+		-Ishared/build/ios-src -Iios/tests -Iios/tests/stubs -Ishared -Ishared/sync_http -Ishared/tests -I$(SQLITE_DIR) \
 		$(SQLITE_FLAGS) -DPS_SQL_LINK_CORE=1 \
 		-DPS_SYNC_STREAM_FIXTURES_PATH='"$(FIXTURES_JSON)"' \
 		ios/tests/ios_module_rpc_test.mm ios/tests/ios_sync_http_fixture_test.mm \
 		shared/build/ios-src/NativePowerSyncModule.mm \
 		shared/build/ios-src/NativeSyncHttp.mm \
-		shared/build/ios-src/IdleCompleteHttp.mm \
-		shared/build/ios-src/StreamingHttp.mm \
+		shared/build/ios-src/sync_http_session_pod.cc \
+		shared/build/ios-src/sync_http_engine_pod.cc \
+		shared/build/ios-src/apple_sync_http_pod.mm \
 		shared/ps_sql.cc $(SQLITE_DIR)/sqlite3.o \
 		$(CORE_DYLIB) -framework Foundation $(LDFLAGS) \
 		-Wl,-rpath,$(CURDIR)/dist/macos/arm64 \
@@ -267,18 +238,19 @@ shared/build/library_entry.o: lynxtron/library_entry.cc $(NODE_VENDOR_MARKER)
 
 shared/build/NativePowerSyncModule.o: shared/nativeModule/NativePowerSyncModule.cc \
 		shared/nativeModule/NativePowerSyncModule.h shared/nativeModule/core_path.h \
-		shared/nativeModule/db_location.h shared/nativeModule/desktop_sync_http.h \
-		shared/sync_http_policy.h shared/win_utf8.h $(NODE_VENDOR_MARKER)
+		shared/nativeModule/db_location.h shared/sync_http/sync_http_engine.h \
+		shared/sync_http/sync_http_session.h shared/sync_http_policy.h \
+		shared/win_utf8.h $(NODE_VENDOR_MARKER)
 	mkdir -p shared/build
 	$(CXX) $(CXXFLAGS) $(SQLITE_FLAGS) $(NAPI_INCLUDE) -DNAPI_VERSION=8 \
-		-DUSE_WEAK_SUFFIX_NAPI -Ishared/nativeModule \
+		-DUSE_WEAK_SUFFIX_NAPI -Ishared/nativeModule -Ishared/sync_http \
 		-c shared/nativeModule/NativePowerSyncModule.cc -o $@
 
 $(NODE): deps $(NODE_VENDOR_MARKER) shared/build/ps_sql.o shared/build/NativePowerSyncModule.o \
-		$(DESKTOP_HTTP_OBJS) shared/build/library_entry.o $(SQLITE_DIR)/sqlite3.o
+		$(SYNC_HTTP_OBJS) shared/build/library_entry.o $(SQLITE_DIR)/sqlite3.o
 	mkdir -p dist/macos/arm64
 	$(CXX) -std=c++17 -fPIC -O2 -shared -Wl,-undefined,dynamic_lookup \
-		shared/build/NativePowerSyncModule.o $(DESKTOP_HTTP_OBJS) \
+		shared/build/NativePowerSyncModule.o $(SYNC_HTTP_OBJS) \
 		shared/build/library_entry.o shared/build/ps_sql.o $(SQLITE_DIR)/sqlite3.o \
 		$(LDFLAGS) $(MACOS_LDFLAGS) -o $@
 

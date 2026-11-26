@@ -13,7 +13,13 @@ Pod::Spec.new do |s|
   # Keep leftover ios/src/ps_sql.{cc,h} copies out of the target (canonical is shared/).
   s.source_files = 'src/**/*.{h,m,mm,c,cc}'
   s.exclude_files = 'src/ps_sql.{cc,h}'
-  s.preserve_paths = '../shared/ps_sql.cc', '../shared/ps_sql.h'
+  s.preserve_paths = '../shared/ps_sql.cc', '../shared/ps_sql.h',
+                     '../shared/sync_http_policy.h',
+                     '../shared/sync_http/sync_http_session.h',
+                     '../shared/sync_http/sync_http_session.cc',
+                     '../shared/sync_http/sync_http_engine.h',
+                     '../shared/sync_http/sync_http_engine.cc',
+                     '../shared/sync_http/apple_sync_http.mm'
   s.dependency 'Lynx'
   s.dependency 'powersync-sqlite-core', '0.5.3'
   s.libraries = 'c++'

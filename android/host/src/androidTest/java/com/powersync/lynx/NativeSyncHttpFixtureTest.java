@@ -46,13 +46,26 @@ public class NativeSyncHttpFixtureTest {
     String idleBody = joinedChunks(idle);
 
     new NativePowerSyncModule(context);
-    byte[] firstWire = hexBytes(split.getJSONArray("wireChunksHex").getString(0));
-    expect(
-        StreamingHttp.trailingIncompleteUtf8Bytes(firstWire) == 1,
-        "JNI hold counts the 3-byte euro lead from split-multibyte");
-    expect(
-        StreamingHttp.trailingIncompleteUtf8Bytes(joinedWire(split)) == 0,
-        "JNI hold is 0 for complete split-multibyte wire");
+    List<byte[]> splitWireChunks = new ArrayList<>();
+    JSONArray wireHex = split.getJSONArray("wireChunksHex");
+    for (int i = 0; i < wireHex.length(); i++) {
+      splitWireChunks.add(hexBytes(wireHex.getString(i)));
+    }
+    try (ReplayServer splitServer = ReplayServer.startChunked(contentType, splitWireChunks)) {
+      RecordingLynxContext lynx = new RecordingLynxContext(context);
+      NativePowerSyncModule module = new NativePowerSyncModule(lynx);
+      WritableMap request = Arguments.createMap();
+      request.putString("method", "POST");
+      request.putString("url", splitServer.url());
+      request.putString("body", "{}");
+      ReadableMap headers = await(callback -> module.httpFetch(request, callback));
+      expect(headers.getBoolean("ok"), "split-multibyte httpFetch ok");
+      expect(lynx.waitForEnd(10, TimeUnit.SECONDS), "split-multibyte reaches onEnd");
+      expect(!lynx.sawError(), "split-multibyte has no onError");
+      expect(
+          joinedChunks(split).equals(lynx.joinedData()),
+          "split-multibyte reassembles UTF-8 euro across TCP chunks");
+    }
 
     try (ReplayServer streamServer = ReplayServer.start(contentType, checkpointBody)) {
       RecordingLynxContext lynx = new RecordingLynxContext(context);
@@ -245,15 +258,6 @@ public class NativeSyncHttpFixtureTest {
     return out;
   }
 
-  private static byte[] joinedWire(JSONObject scenario) throws Exception {
-    JSONArray hex = scenario.getJSONArray("wireChunksHex");
-    ByteArrayOutputStream out = new ByteArrayOutputStream();
-    for (int i = 0; i < hex.length(); i++) {
-      out.write(hexBytes(hex.getString(i)));
-    }
-    return out.toByteArray();
-  }
-
   private static ReadableMap await(RpcCall call) throws Exception {
     CountDownLatch done = new CountDownLatch(1);
     AtomicReference<ReadableMap> result = new AtomicReference<>();
@@ -392,7 +396,12 @@ public class NativeSyncHttpFixtureTest {
     private final Thread worker;
     private volatile boolean stop;
 
-    private ReplayServer(ServerSocket server, Mode mode, String contentType, String body) {
+    private ReplayServer(
+        ServerSocket server,
+        Mode mode,
+        String contentType,
+        String body,
+        List<byte[]> rawChunks) {
       this.server = server;
       this.worker =
           new Thread(
@@ -405,6 +414,23 @@ public class NativeSyncHttpFixtureTest {
                       continue;
                     }
                     OutputStream out = socket.getOutputStream();
+                    if (rawChunks != null) {
+                      String header =
+                          "HTTP/1.1 200 OK\r\nContent-Type: "
+                              + contentType
+                              + "\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
+                      out.write(header.getBytes(StandardCharsets.US_ASCII));
+                      for (int i = 0; i < rawChunks.size(); i++) {
+                        writeChunked(out, rawChunks.get(i));
+                        out.flush();
+                        if (i + 1 < rawChunks.size()) {
+                          Thread.sleep(30);
+                        }
+                      }
+                      out.write("0\r\n\r\n".getBytes(StandardCharsets.US_ASCII));
+                      out.flush();
+                      continue;
+                    }
                     byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
                     if (mode == Mode.RST_AFTER_FIRST || mode == Mode.HOLD_OPEN) {
                       String header =
@@ -453,7 +479,13 @@ public class NativeSyncHttpFixtureTest {
     static ReplayServer start(Mode mode, String contentType, String body) throws Exception {
       ServerSocket server = new ServerSocket(0);
       server.setReuseAddress(true);
-      return new ReplayServer(server, mode, contentType, body);
+      return new ReplayServer(server, mode, contentType, body, null);
+    }
+
+    static ReplayServer startChunked(String contentType, List<byte[]> rawChunks) throws Exception {
+      ServerSocket server = new ServerSocket(0);
+      server.setReuseAddress(true);
+      return new ReplayServer(server, Mode.CLEAN, contentType, "", rawChunks);
     }
 
     private static void writeChunked(OutputStream out, byte[] bytes) throws Exception {

@@ -20,11 +20,11 @@ import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Native Module HTTP for {@code /sync/stream}. Autolink still registers methods on
- * {@link NativePowerSyncModule}; this class is the SQL/HTTP boundary.
+ * {@link NativePowerSyncModule}; this class is the SQL/HTTP seam.
  *
- * <p>Session decisions (headers-sent, idle vs streaming, terminal, abort) come from
- * {@link SyncHttpSession} ({@code shared/sync_http_session.h}). Timeouts and stream event
- * names come from {@link SyncHttpPolicy} ({@code shared/sync_http_policy.h}).
+ * <p>Stream state transitions, UTF-8 chunk framing, and ordered effect delivery live in
+ * {@link SyncHttpSession} ({@code shared/sync_http/sync_http_session.{h,cc}}). Timeouts and
+ * stream event names come from {@link SyncHttpPolicy} ({@code shared/sync_http_policy.h}).
  *
  * <p>Primary: {@code streamingId} + GlobalEventEmitter {@code onData*} → {@code onError?} →
  * {@code onEnd}. Idle-complete UTF-8 body is fallback when {@link LynxContext} is absent.
@@ -35,10 +35,70 @@ final class NativeSyncHttp {
     LynxContext lynxContext();
   }
 
-  private static final class StreamHandle {
+  private final class StreamHandle implements SyncHttpSession.Sink {
+    final String streamId;
+    final Callback callback;
     final AtomicBoolean cancelled = new AtomicBoolean(false);
     final AtomicReference<HttpURLConnection> connection = new AtomicReference<>();
     final SyncHttpSession session = new SyncHttpSession();
+
+    StreamHandle(String streamId, Callback callback) {
+      this.streamId = streamId;
+      this.callback = callback;
+    }
+
+    @Override
+    public void onHeaders(int status, String statusText, @Nullable String contentType) {
+      WritableMap ok = Arguments.createMap();
+      ok.putBoolean("ok", true);
+      ok.putDouble("status", status);
+      ok.putString("statusText", statusText == null ? "" : statusText);
+      if (contentType != null && !contentType.isEmpty()) {
+        ok.putString("contentType", contentType);
+      }
+      ok.putString("body", "");
+      ok.putString("streamingId", streamId);
+      ok.putBoolean("idleComplete", false);
+      invoke(callback, ok);
+    }
+
+    @Override
+    public void onFail(String message) {
+      invoke(callback, fail(message));
+    }
+
+    @Override
+    public void onData(String utf8Chunk) {
+      sendStreamEvent(streamId, SyncHttpPolicy.EVENT_ON_DATA, utf8Chunk, null);
+    }
+
+    @Override
+    public void onError(String message) {
+      sendStreamEvent(streamId, SyncHttpPolicy.EVENT_ON_ERROR, null, message);
+    }
+
+    @Override
+    public void onEnd() {
+      sendStreamEvent(streamId, SyncHttpPolicy.EVENT_ON_END, null, null);
+    }
+
+    @Override
+    public void cancelIo() {
+      cancelled.set(true);
+      HttpURLConnection conn = connection.get();
+      if (conn != null) {
+        try {
+          conn.disconnect();
+        } catch (Throwable ignored) {
+          // disconnect is best-effort; the reader loop still observes cancelled.
+        }
+      }
+    }
+
+    @Override
+    public void onDrop() {
+      activeStreams.remove(streamId, this);
+    }
   }
 
   private final ContextSource contextSource;
@@ -71,7 +131,7 @@ final class NativeSyncHttp {
   void abort(String streamId, Callback callback) {
     StreamHandle handle = streamId == null ? null : activeStreams.get(streamId);
     if (handle != null) {
-      apply(handle, streamId, handle.session.abort(), callback, 0, "", null, null, null);
+      handle.session.abort(handle);
     }
     WritableMap ok = Arguments.createMap();
     ok.putBoolean("ok", true);
@@ -80,7 +140,7 @@ final class NativeSyncHttp {
 
   private void fetchStreaming(ParsedHttpRequest parsed, Callback callback) {
     final String streamId = SyncHttpPolicy.STREAM_EVENT_PREFIX + nextStreamId.getAndIncrement();
-    final StreamHandle handle = new StreamHandle();
+    final StreamHandle handle = new StreamHandle(streamId, callback);
     activeStreams.put(streamId, handle);
     try {
       StreamingHttp.stream(
@@ -93,124 +153,28 @@ final class NativeSyncHttp {
           new StreamingHttp.Listener() {
             @Override
             public void onHeaders(int status, String statusText, String contentType) {
-              apply(
-                  handle,
-                  streamId,
-                  handle.session.onHeaders(),
-                  callback,
-                  status,
-                  statusText,
-                  contentType,
-                  null,
-                  null);
+              handle.session.onHeaders(status, statusText, contentType, handle);
             }
 
             @Override
-            public void onData(String utf8Chunk) {
-              if (utf8Chunk == null || utf8Chunk.isEmpty()) {
-                return;
-              }
-              apply(
-                  handle,
-                  streamId,
-                  handle.session.onData(),
-                  callback,
-                  0,
-                  "",
-                  null,
-                  utf8Chunk,
-                  null);
+            public void onBytes(byte[] bytes, int offset, int length) {
+              handle.session.onBytes(bytes, offset, length, handle);
             }
 
             @Override
             public void onEnd() {
-              apply(handle, streamId, handle.session.onEnd(), callback, 0, "", null, null, null);
+              handle.session.onEnd(handle);
             }
 
             @Override
             public void onError(String message) {
-              apply(
-                  handle,
-                  streamId,
-                  handle.session.onError(),
-                  callback,
-                  0,
-                  "",
-                  null,
-                  null,
-                  message);
+              handle.session.onError(message, handle);
             }
           });
     } catch (Throwable t) {
-      apply(
-          handle,
-          streamId,
-          handle.session.onError(),
-          callback,
-          0,
-          "",
-          null,
-          null,
-          t.getMessage() != null ? t.getMessage() : PS_FAIL_DEFAULT);
-    }
-  }
-
-  /**
-   * Apply {@link SyncHttpSession} effect bits. After headers: {@code onError} then {@code onEnd}.
-   * Before headers: one-shot fail Callback (no GlobalEventEmitter events).
-   */
-  private void apply(
-      StreamHandle handle,
-      String streamId,
-      int effects,
-      Callback callback,
-      int status,
-      String statusText,
-      String contentType,
-      String data,
-      String error) {
-    if ((effects & SyncHttpSession.EFFECT_CALLBACK_HEADERS) != 0) {
-      WritableMap ok = Arguments.createMap();
-      ok.putBoolean("ok", true);
-      ok.putDouble("status", status);
-      ok.putString("statusText", statusText == null ? "" : statusText);
-      if (contentType != null) {
-        ok.putString("contentType", contentType);
-      }
-      ok.putString("body", "");
-      ok.putString("streamingId", streamId);
-      ok.putBoolean("idleComplete", false);
-      invoke(callback, ok);
-    }
-    if ((effects & SyncHttpSession.EFFECT_CALLBACK_FAIL) != 0) {
-      invoke(callback, fail(error));
-    }
-    if ((effects & SyncHttpSession.EFFECT_EVENT_DATA) != 0) {
-      sendStreamEvent(streamId, SyncHttpPolicy.EVENT_ON_DATA, data, null);
-    }
-    if ((effects & SyncHttpSession.EFFECT_EVENT_ERROR) != 0) {
-      sendStreamEvent(
-          streamId,
-          SyncHttpPolicy.EVENT_ON_ERROR,
-          null,
-          error != null && !error.isEmpty() ? error : PS_FAIL_DEFAULT);
-    }
-    if ((effects & SyncHttpSession.EFFECT_EVENT_END) != 0) {
-      sendStreamEvent(streamId, SyncHttpPolicy.EVENT_ON_END, null, null);
-    }
-    if ((effects & SyncHttpSession.EFFECT_CANCEL_IO) != 0) {
-      handle.cancelled.set(true);
-      HttpURLConnection conn = handle.connection.get();
-      if (conn != null) {
-        try {
-          conn.disconnect();
-        } catch (Throwable ignored) {
-          // disconnect is best-effort; the reader loop still observes cancelled.
-        }
-      }
-    }
-    if ((effects & SyncHttpSession.EFFECT_DROP) != 0) {
-      activeStreams.remove(streamId);
+      handle.session.onError(t.getMessage(), handle);
+    } finally {
+      activeStreams.remove(streamId, handle);
       handle.session.close();
     }
   }
@@ -309,7 +273,7 @@ final class NativeSyncHttp {
 
   private static final String PS_FAIL_DEFAULT = "httpFetch stream failed";
 
-  /** Shared pre-headers failure envelope ({@code shared/sync_http_session.h}). */
+  /** Shared pre-headers failure envelope ({@code shared/sync_http/sync_http_session.h}). */
   private static WritableMap fail(String message) {
     String text = message != null && !message.isEmpty() ? message : PS_FAIL_DEFAULT;
     WritableMap map = Arguments.createMap();

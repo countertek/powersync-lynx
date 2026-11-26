@@ -4,7 +4,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.SocketTimeoutException;
-import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -12,19 +11,18 @@ import java.util.concurrent.atomic.AtomicReference;
 /**
  * Incremental HTTP for PowerSync {@code /sync/stream}.
  *
- * <p>Keeps the chunked NDJSON connection open and delivers UTF-8 string chunks as they arrive.
- * Unlike {@link IdleCompleteHttp}, this does <strong>not</strong> close after a short idle window —
- * PowerSync keepalive (~20s) and later checkpoints stay on the same session.
+ * <p>Keeps the chunked NDJSON connection open and forwards raw socket bytes into
+ * {@link SyncHttpSession} ({@code shared/sync_http/sync_http_session.{h,cc}}), which owns
+ * incomplete UTF-8 carry buffering and terminal event sequencing ({@code onData*} →
+ * {@code onError?} → {@code onEnd}).
  *
  * <p>Read timeout is {@link SyncHttpPolicy#STREAM_READ_TIMEOUT_MS} so keepalive gaps do not abort.
- * Terminal GlobalEventEmitter sequence ({@code onData*} → {@code onError?} → {@code onEnd}) is
- * assembled by {@link NativeSyncHttp} via {@link SyncHttpSession}, not this reader.
  */
 final class StreamingHttp {
   interface Listener {
     void onHeaders(int status, String statusText, String contentType);
 
-    void onData(String utf8Chunk);
+    void onBytes(byte[] bytes, int offset, int length);
 
     void onEnd();
 
@@ -84,19 +82,17 @@ final class StreamingHttp {
     }
 
     byte[] chunk = new byte[8192];
-    // Carry incomplete UTF-8 so PrimJS always receives well-formed string chunks.
-    // Hold count is shared/utf8_hold.h (JNI), not a Java copy of bytes.ts.
-    byte[] carry = new byte[0];
     try (InputStream in = stream) {
       while (!cancelled.get()) {
         int n;
         try {
           n = in.read(chunk);
         } catch (SocketTimeoutException idle) {
-          // Long silence after bytes — keep waiting (timeout resets per read). Treat pure
-          // first-byte timeout with no prior data as end; otherwise continue is not possible
-          // because the read already failed. Disconnect and end so PowerSync can reconnect.
-          listener.onEnd();
+          if (cancelled.get()) {
+            listener.onError("aborted");
+          } else {
+            listener.onEnd();
+          }
           return;
         } catch (IOException io) {
           if (cancelled.get()) {
@@ -110,26 +106,11 @@ final class StreamingHttp {
             listener.onError("aborted");
             return;
           }
-          if (carry.length > 0) {
-            listener.onData(new String(carry, StandardCharsets.UTF_8));
-            carry = new byte[0];
-          }
           listener.onEnd();
           return;
         }
-        byte[] combined = new byte[carry.length + n];
-        System.arraycopy(carry, 0, combined, 0, carry.length);
-        System.arraycopy(chunk, 0, combined, carry.length, n);
-        int hold = trailingIncompleteUtf8Bytes(combined);
-        int complete = combined.length - hold;
-        if (complete > 0) {
-          listener.onData(new String(combined, 0, complete, StandardCharsets.UTF_8));
-        }
-        if (hold > 0) {
-          carry = new byte[hold];
-          System.arraycopy(combined, complete, carry, 0, hold);
-        } else {
-          carry = new byte[0];
+        if (n > 0) {
+          listener.onBytes(chunk, 0, n);
         }
       }
       listener.onError("aborted");
@@ -137,9 +118,6 @@ final class StreamingHttp {
       conn.disconnect();
     }
   }
-
-  /** Incomplete UTF-8 hold; {@code shared/utf8_hold.h} via JNI. */
-  static native int trailingIncompleteUtf8Bytes(byte[] bytes);
 
   private static final int HTTP_BAD_REQUEST = 400;
 }

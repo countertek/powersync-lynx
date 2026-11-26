@@ -1,31 +1,42 @@
 package com.powersync.lynx;
 
 import androidx.annotation.Keep;
+import androidx.annotation.Nullable;
 
 /**
- * JNI wrapper for {@code shared/sync_http_session.h} (FM-PS-LYNX-014 N3) and
- * {@code shared/sync_http_policy.h} URL / long-lived response predicates.
+ * JNI seam onto {@code shared/sync_http/sync_http_session.{h,cc}} and
+ * {@code shared/sync_http_policy.h}.
  *
- * <p>Decision bits only. HTTP I/O stays in {@link StreamingHttp} / {@link IdleCompleteHttp}.
+ * <p>C++ owns stream state transitions, incomplete UTF-8 carry/flush, error defaults, and
+ * serialized effect delivery; Java only supplies {@link Sink} callbacks and HTTP I/O.
  * Library load is {@link PsSqlEngine#ensureLoaded}.
  */
 @Keep
-final class SyncHttpSession {
+final class SyncHttpSession implements AutoCloseable {
+  @Keep
+  interface Sink {
+    void onHeaders(int status, String statusText, @Nullable String contentType);
+
+    void onFail(String message);
+
+    void onData(String utf8Chunk);
+
+    void onError(String message);
+
+    void onEnd();
+
+    void cancelIo();
+
+    void onDrop();
+  }
+
   static final int ROUTE_IDLE = 0;
   static final int ROUTE_STREAMING = 1;
-
   static final int FAIL_STATUS = -1;
 
-  static final int EFFECT_NONE = 0;
-  static final int EFFECT_CALLBACK_HEADERS = 1;
-  static final int EFFECT_CALLBACK_FAIL = 1 << 1;
-  static final int EFFECT_EVENT_DATA = 1 << 2;
-  static final int EFFECT_EVENT_ERROR = 1 << 3;
-  static final int EFFECT_EVENT_END = 1 << 4;
-  static final int EFFECT_CANCEL_IO = 1 << 5;
-  static final int EFFECT_DROP = 1 << 6;
-
   private long nativeHandle;
+  private int inFlight = 0;
+  private boolean closed = false;
 
   SyncHttpSession() {
     nativeHandle = nativeCreate();
@@ -44,46 +55,106 @@ final class SyncHttpSession {
     return nativeLooksLikeLongLived(transferEncoding, contentLength, contentType);
   }
 
-  synchronized int onHeaders() {
-    if (nativeHandle == 0L) {
-      return EFFECT_NONE;
+  void onHeaders(int status, String statusText, @Nullable String contentType, Sink sink) {
+    long handle = acquire();
+    if (handle == 0L) {
+      return;
     }
-    return nativeOnHeaders(nativeHandle);
+    try {
+      nativeOnHeaders(handle, status, statusText == null ? "" : statusText, contentType, sink);
+    } finally {
+      release();
+    }
   }
 
-  synchronized int onData() {
-    if (nativeHandle == 0L) {
-      return EFFECT_NONE;
+  void onBytes(byte[] bytes, int offset, int length, Sink sink) {
+    if (bytes == null || length <= 0) {
+      return;
     }
-    return nativeOnData(nativeHandle);
+    long handle = acquire();
+    if (handle == 0L) {
+      return;
+    }
+    try {
+      nativeOnBytes(handle, bytes, offset, length, sink);
+    } finally {
+      release();
+    }
   }
 
-  synchronized int onEnd() {
-    if (nativeHandle == 0L) {
-      return EFFECT_NONE;
+  void onEnd(Sink sink) {
+    long handle = acquire();
+    if (handle == 0L) {
+      return;
     }
-    return nativeOnEnd(nativeHandle);
+    try {
+      nativeOnEnd(handle, sink);
+    } finally {
+      release();
+    }
   }
 
-  synchronized int onError() {
-    if (nativeHandle == 0L) {
-      return EFFECT_NONE;
+  void onError(@Nullable String message, Sink sink) {
+    long handle = acquire();
+    if (handle == 0L) {
+      return;
     }
-    return nativeOnError(nativeHandle);
+    try {
+      nativeOnError(handle, message, sink);
+    } finally {
+      release();
+    }
   }
 
-  synchronized int abort() {
-    if (nativeHandle == 0L) {
-      return EFFECT_NONE;
+  void abort(Sink sink) {
+    long handle = acquire();
+    if (handle == 0L) {
+      return;
     }
-    return nativeAbort(nativeHandle);
+    try {
+      nativeAbort(handle, sink);
+    } finally {
+      release();
+    }
   }
 
-  synchronized void close() {
-    long handle = nativeHandle;
-    nativeHandle = 0L;
-    if (handle != 0L) {
-      nativeDestroy(handle);
+  @Override
+  public void close() {
+    long toDestroy = 0L;
+    synchronized (this) {
+      if (closed) {
+        return;
+      }
+      closed = true;
+      if (inFlight == 0) {
+        toDestroy = nativeHandle;
+        nativeHandle = 0L;
+      }
+    }
+    if (toDestroy != 0L) {
+      nativeDestroy(toDestroy);
+    }
+  }
+
+  private synchronized long acquire() {
+    if (closed || nativeHandle == 0L) {
+      return 0L;
+    }
+    inFlight += 1;
+    return nativeHandle;
+  }
+
+  private void release() {
+    long toDestroy = 0L;
+    synchronized (this) {
+      inFlight -= 1;
+      if (closed && inFlight == 0 && nativeHandle != 0L) {
+        toDestroy = nativeHandle;
+        nativeHandle = 0L;
+      }
+    }
+    if (toDestroy != 0L) {
+      nativeDestroy(toDestroy);
     }
   }
 
@@ -98,13 +169,15 @@ final class SyncHttpSession {
   private static native boolean nativeLooksLikeLongLived(
       String transferEncoding, String contentLength, String contentType);
 
-  private static native int nativeOnHeaders(long handle);
+  private static native void nativeOnHeaders(
+      long handle, int status, String statusText, @Nullable String contentType, Sink sink);
 
-  private static native int nativeOnData(long handle);
+  private static native void nativeOnBytes(
+      long handle, byte[] bytes, int offset, int length, Sink sink);
 
-  private static native int nativeOnEnd(long handle);
+  private static native void nativeOnEnd(long handle, Sink sink);
 
-  private static native int nativeOnError(long handle);
+  private static native void nativeOnError(long handle, @Nullable String message, Sink sink);
 
-  private static native int nativeAbort(long handle);
+  private static native void nativeAbort(long handle, Sink sink);
 }

@@ -15,14 +15,15 @@ set(SHARED_DIR "${POWERSYNC_LYNX_ROOT}/shared")
 
 add_library(powersync_lynx_sql SHARED
   ps_sql_jni.cc
-  utf8_hold_jni.cc
   sync_http_session_jni.cc
   "${SHARED_DIR}/ps_sql.cc"
+  "${SHARED_DIR}/sync_http/sync_http_session.cc"
   "${SQLITE_DIR}/sqlite3.c"
 )
 
 target_include_directories(powersync_lynx_sql PRIVATE
   "${SHARED_DIR}"
+  "${SHARED_DIR}/sync_http"
   "${SQLITE_DIR}"
 )
 

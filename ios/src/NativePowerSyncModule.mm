@@ -1,6 +1,5 @@
 #import "NativePowerSyncModule.h"
 #import "NativeSyncHttp.h"
-#import "SyncHttpRequest.h"
 
 #include "ps_sql.h"
 
@@ -30,6 +29,18 @@ Engine& SharedEngine() {
     return new Engine(config);
   }();
   return *engine;
+}
+
+std::string Utf8FromNSString(NSString* value) {
+  if (value == nil) {
+    return {};
+  }
+  NSData* data = [value dataUsingEncoding:NSUTF8StringEncoding];
+  if (data == nil || data.length == 0) {
+    return {};
+  }
+  const auto* bytes = static_cast<const char*>(data.bytes);
+  return std::string(bytes, bytes + data.length);
 }
 
 NSString* NSStringFromUtf8(const std::string& text) {

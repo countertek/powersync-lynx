@@ -149,11 +149,10 @@ jobs:
           $env:POWERSYNC_CORE_PATH = (Resolve-Path dist/windows/x64/powersync_x64.dll).Path
           $env:PS_SYNC_STREAM_FIXTURES_PATH = (Resolve-Path shared/fixtures/sync-stream.json).Path
           .\shared\build-win\Release\ps_sql_test.exe
-          .\shared\build-win\Release\desktop_sync_http_test.exe
+          .\shared\build-win\Release\sync_http_engine_test.exe
           .\shared\build-win\Release\sync_stream_fixtures_test.exe
-          .\shared\build-win\Release\utf8_hold_test.exe
           .\shared\build-win\Release\sync_http_session_test.exe
-          .\shared\build-win\Release\sync_http_policy_android_test.exe
+          node scripts/gen-sync-http-policy-java.mjs --check
 
       - name: Build showcase bundle
         run: |
