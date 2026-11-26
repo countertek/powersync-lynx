@@ -42,7 +42,6 @@
     "shared/utf8_hold.h",
     "shared/sync_http_session.h",
     "shared/nativeModule",
-    "shared/win_host_stubs.c",
     "shared/CMakeLists.txt",
     "dist",
     "lynx.lib.json",

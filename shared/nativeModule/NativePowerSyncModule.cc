@@ -1,6 +1,12 @@
+#if !defined(POWERSYNC_NO_STATIC_REGISTRATION) && defined(__has_include)
+#if __has_include(<lynx/registration.h>)
+#define POWERSYNC_USE_LYNX_REGISTRATION 1
 #include <lynx/registration.h>
+#endif
+#endif
 
 #include "NativePowerSyncModule.h"
+#include "core_path.h"
 #include "ps_sql.h"
 
 #include "napi.h"
@@ -10,19 +16,24 @@
 #endif
 
 #include <cmath>
+#include <cstdlib>
+#include <cstring>
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
-#include <cstring>
-#include <optional>
 
 #if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #else
 #include <dlfcn.h>
+#include <sys/stat.h>
 #endif
 
 namespace {
@@ -91,20 +102,51 @@ std::string CoreFileName() {
 #endif
 }
 
+std::string ReadEnvVar(const char* name) {
+#if defined(_MSC_VER)
+  char* value = nullptr;
+  std::size_t len = 0;
+  if (_dupenv_s(&value, &len, name) != 0 || value == nullptr) {
+    return {};
+  }
+  std::string result(value);
+  std::free(value);
+  return result;
+#else
+  const char* value = std::getenv(name);
+  return value != nullptr ? std::string(value) : std::string();
+#endif
+}
+
+bool FileExists(const std::string& path) {
+#if defined(_WIN32)
+  const DWORD attrs = GetFileAttributesA(path.c_str());
+  return attrs != INVALID_FILE_ATTRIBUTES &&
+         (attrs & FILE_ATTRIBUTE_DIRECTORY) == 0;
+#else
+  struct stat st;
+  return stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode);
+#endif
+}
+
 EngineConfig MakeConfig() {
   EngineConfig config;
+  ps_sql::CorePathOptions path_options;
 #if defined(_WIN32)
   config.core_load = ps_sql::CoreLoad::kLoadExtension;
+  path_options.platform = ps_sql::CorePlatform::kWindows;
+#elif defined(__APPLE__)
+  config.core_load = ps_sql::CoreLoad::kAutoExtension;
+  path_options.platform = ps_sql::CorePlatform::kMacOS;
 #else
   config.core_load = ps_sql::CoreLoad::kAutoExtension;
+  path_options.platform = ps_sql::CorePlatform::kLinux;
 #endif
-  config.core_path = ModuleDirectory() +
-#if defined(_WIN32)
-                     "\\"
-#else
-                     "/"
-#endif
-                     + CoreFileName();
+  path_options.env_core_path = ReadEnvVar("POWERSYNC_CORE_PATH");
+  path_options.module_dir = ModuleDirectory();
+  path_options.core_filename = CoreFileName();
+  path_options.file_exists = FileExists;
+  config.core_path = ps_sql::ResolveCorePath(path_options);
   return config;
 }
 
@@ -409,16 +451,20 @@ void BindNativePowerSyncModule(napi_env env, napi_value exports) {
 
 }  // namespace
 
-napi_value CreateNativePowerSyncModule(napi_env env, napi_value exports,
-                                       const char* module_name, void* opaque) {
+extern "C" napi_value CreateNativePowerSyncModule(napi_env env,
+                                                  napi_value exports,
+                                                  const char* module_name,
+                                                  void* opaque) {
   (void)module_name;
   (void)opaque;
   BindNativePowerSyncModule(env, exports);
   return exports;
 }
 
+#if defined(POWERSYNC_USE_LYNX_REGISTRATION)
 LYNX_REGISTER_NATIVE_MODULE("NativePowerSyncModule", CreateNativePowerSyncModule,
                             nullptr);
+#endif
 
 #ifdef USE_WEAK_SUFFIX_NAPI
 #include "weak_napi_undefs.h"

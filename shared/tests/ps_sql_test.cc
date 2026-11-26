@@ -1,3 +1,4 @@
+#include "nativeModule/core_path.h"
 #include "ps_sql.h"
 
 #include <chrono>
@@ -5,6 +6,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <mutex>
 #include <string>
@@ -244,6 +247,102 @@ int main(int argc, char** argv) {
     draining.execute(opened_drain.db_id, slow_sql, {}, [](Envelope) {});
   }
   expect(true, "engine destructor drains queued SQL before teardown");
+
+  {
+    using ps_sql::CorePathOptions;
+    using ps_sql::CorePlatform;
+    using ps_sql::ResolveCorePath;
+
+    // 1. POWERSYNC_CORE_PATH env var takes precedence on both macOS and Windows.
+    CorePathOptions env_mac;
+    env_mac.platform = CorePlatform::kMacOS;
+    env_mac.env_core_path = "/custom/override/libpowersync.dylib";
+    env_mac.module_dir = "/App.app/Contents/MacOS";
+    env_mac.core_filename = "libpowersync_aarch64.macos.dylib";
+    env_mac.file_exists = [](const std::string&) { return true; };
+    expect(ResolveCorePath(env_mac) == "/custom/override/libpowersync.dylib",
+           "core-path: POWERSYNC_CORE_PATH overrides macOS probes");
+
+    CorePathOptions env_win;
+    env_win.platform = CorePlatform::kWindows;
+    env_win.env_core_path = "C:\\custom\\powersync_x64.dll";
+    env_win.module_dir = "C:\\app";
+    env_win.core_filename = "powersync_x64.dll";
+    expect(ResolveCorePath(env_win) == "C:\\custom\\powersync_x64.dll",
+           "core-path: POWERSYNC_CORE_PATH overrides Windows probe");
+
+    // 2. macOS prefers sibling <ModuleDirectory> over ../Frameworks when both exist.
+    CorePathOptions mac_sibling;
+    mac_sibling.platform = CorePlatform::kMacOS;
+    mac_sibling.module_dir = "/dist/macos/arm64";
+    mac_sibling.core_filename = "libpowersync_aarch64.macos.dylib";
+    mac_sibling.file_exists = [](const std::string& p) {
+      return p == "/dist/macos/arm64/libpowersync_aarch64.macos.dylib" ||
+             p == "/dist/macos/arm64/../Frameworks/libpowersync_aarch64.macos.dylib";
+    };
+    expect(ResolveCorePath(mac_sibling) ==
+               "/dist/macos/arm64/libpowersync_aarch64.macos.dylib",
+           "core-path: macOS prefers sibling when present");
+
+    // 3. macOS falls back to <ModuleDirectory>/../Frameworks when sibling is absent.
+    CorePathOptions mac_frameworks;
+    mac_frameworks.platform = CorePlatform::kMacOS;
+    mac_frameworks.module_dir = "/MyApp.app/Contents/MacOS";
+    mac_frameworks.core_filename = "libpowersync_aarch64.macos.dylib";
+    mac_frameworks.file_exists = [](const std::string& p) {
+      return p == "/MyApp.app/Contents/MacOS/../Frameworks/libpowersync_aarch64.macos.dylib";
+    };
+    expect(ResolveCorePath(mac_frameworks) ==
+               "/MyApp.app/Contents/MacOS/../Frameworks/libpowersync_aarch64.macos.dylib",
+           "core-path: macOS falls back to ../Frameworks when sibling missing");
+
+    // 4. macOS returns sibling path when neither exists (clear downstream error path).
+    CorePathOptions mac_missing;
+    mac_missing.platform = CorePlatform::kMacOS;
+    mac_missing.module_dir = "/missing/dir/";
+    mac_missing.core_filename = "libpowersync_aarch64.macos.dylib";
+    mac_missing.file_exists = [](const std::string&) { return false; };
+    expect(ResolveCorePath(mac_missing) ==
+               "/missing/dir/libpowersync_aarch64.macos.dylib",
+           "core-path: macOS returns sibling fallback when neither exists");
+
+    // 5. Real filesystem check mimicking a macOS .app bundle layout.
+    namespace fs = std::filesystem;
+    const fs::path bundle_root =
+        fs::temp_directory_path() / "ps_lynx_core_path_test.app";
+    std::error_code ec;
+    fs::remove_all(bundle_root, ec);
+    const fs::path macos_dir = bundle_root / "Contents" / "MacOS";
+    const fs::path fw_dir = bundle_root / "Contents" / "Frameworks";
+    fs::create_directories(macos_dir, ec);
+    fs::create_directories(fw_dir, ec);
+    const fs::path fw_dylib = fw_dir / "libpowersync_aarch64.macos.dylib";
+    {
+      std::ofstream f(fw_dylib);
+      f << "stub";
+    }
+    CorePathOptions mac_fs;
+    mac_fs.platform = CorePlatform::kMacOS;
+    mac_fs.module_dir = macos_dir.string();
+    mac_fs.core_filename = "libpowersync_aarch64.macos.dylib";
+    mac_fs.file_exists = [](const std::string& p) {
+      std::error_code inner_ec;
+      return fs::is_regular_file(p, inner_ec);
+    };
+    const std::string resolved_fs = ResolveCorePath(mac_fs);
+    expect(fs::equivalent(resolved_fs, fw_dylib, ec),
+           "core-path: real filesystem macOS .app resolves Contents/Frameworks dylib");
+    fs::remove_all(bundle_root, ec);
+
+    // 6. Windows resolves <ModuleDirectory>\powersync_x64.dll.
+    CorePathOptions win_sibling;
+    win_sibling.platform = CorePlatform::kWindows;
+    win_sibling.module_dir = "C:\\Program Files\\MyApp";
+    win_sibling.core_filename = "powersync_x64.dll";
+    expect(ResolveCorePath(win_sibling) ==
+               "C:\\Program Files\\MyApp\\powersync_x64.dll",
+           "core-path: Windows resolves sibling powersync_x64.dll");
+  }
 
   if (g_failures != 0) {
     std::fprintf(stderr, "%d check(s) failed\n", g_failures);
