@@ -51,11 +51,28 @@
   [_lynxView loadTemplateFromURL:@"main.lynx" initData:nil];
 }
 
+- (UIStatusBarStyle)preferredStatusBarStyle {
+  return UIStatusBarStyleLightContent;
+}
+
+- (void)layoutLynxView {
+  CGRect safeFrame = self.view.safeAreaLayoutGuide.layoutFrame;
+  if (CGRectIsEmpty(safeFrame)) {
+    safeFrame = self.view.bounds;
+  }
+  _lynxView.frame = safeFrame;
+  _lynxView.preferredLayoutWidth = safeFrame.size.width;
+  _lynxView.preferredLayoutHeight = safeFrame.size.height;
+}
+
 - (void)viewDidLayoutSubviews {
   [super viewDidLayoutSubviews];
-  _lynxView.frame = self.view.bounds;
-  _lynxView.preferredLayoutWidth = self.view.bounds.size.width;
-  _lynxView.preferredLayoutHeight = self.view.bounds.size.height;
+  [self layoutLynxView];
+}
+
+- (void)viewSafeAreaInsetsDidChange {
+  [super viewSafeAreaInsetsDidChange];
+  [self layoutLynxView];
 }
 
 @end
