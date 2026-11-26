@@ -38,6 +38,7 @@
     "ios/powersync-lynx.podspec",
     "shared/ps_sql.cc",
     "shared/ps_sql.h",
+    "shared/win_utf8.h",
     "shared/sync_http_policy.h",
     "shared/utf8_hold.h",
     "shared/sync_http_session.h",
