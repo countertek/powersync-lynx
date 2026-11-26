@@ -108,10 +108,7 @@ class NativeStreamBroker {
     }
   }
 
-  createReader(
-    eventName: string,
-    onCancel?: () => void,
-  ): ReadableStreamDefaultReader<Uint8Array> {
+  createReader(eventName: string, onCancel?: () => void): ReadableStreamDefaultReader<Uint8Array> {
     const queue: Uint8Array[] = [];
     let finished = false;
     let released = false;

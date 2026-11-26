@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { BasePowerSyncDatabase } from "@powersync/shared-internals";
 import { Schema, Table, column, SyncStreamConnectionMethod } from "../src/index.ts";
 import { PowerSyncDatabase } from "../src/PowerSyncDatabase.ts";
 import { LynxRemote } from "../src/sync/LynxRemote.ts";
@@ -153,22 +154,16 @@ test("app constructs PowerSyncDatabase and uses official SQL including executeBa
       { id: "list-3", name: "Pharmacy" },
     ]);
 
-    const protectedDb = db as unknown as {
-      defaultConnectionMethod: SyncStreamConnectionMethod;
-      generateSyncStreamImplementation(
-        connector: { fetchCredentials(): Promise<null>; uploadData(): Promise<void> },
-        options: Record<string, unknown>,
-      ): LynxStreamingSyncImplementation;
-    };
-    assert.equal(protectedDb.defaultConnectionMethod, SyncStreamConnectionMethod.HTTP);
-    const impl = protectedDb.generateSyncStreamImplementation(
+    const remote = new LynxRemote(
       { fetchCredentials: async () => null, uploadData: async () => {} },
-      {},
+      { log() {} },
     );
-    assert.ok(impl instanceof LynxStreamingSyncImplementation);
-    const { remote } = (impl as unknown as { options: { remote: LynxRemote } }).options;
-    assert.ok(remote instanceof LynxRemote);
     assert.match(remote.getUserAgent(), /powersync-lynx/);
+
+    await db.connect({ fetchCredentials: async () => null, uploadData: async () => {} });
+    assert.ok(db instanceof BasePowerSyncDatabase);
+    assert.ok(db.syncStreamImplementation instanceof LynxStreamingSyncImplementation);
+    await db.disconnect();
 
     await db.close();
     assert.equal(mock.closes.length, 6);

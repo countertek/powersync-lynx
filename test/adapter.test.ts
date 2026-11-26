@@ -74,8 +74,8 @@ function createFakeSqlModule(overrides: NativeOverrides = {}) {
       queueMicrotask(() => {
         cb({ ok: true, dbId });
       });
-      // Native modules are callback-only; return a bogus Promise-like value to prove it is ignored.
-      return Promise.resolve("must-not-await-native-return") as unknown as void;
+      // Native modules are callback-only; return a Promise-like value to prove it is ignored.
+      return Promise.resolve("must-not-await-native-return");
     },
     close(dbId: string, cb: NativeCallback) {
       closes.push({ dbId, callback: cb instanceof Function });
@@ -84,7 +84,7 @@ function createFakeSqlModule(overrides: NativeOverrides = {}) {
         return;
       }
       queueMicrotask(() => cb({ ok: true }));
-      return Promise.resolve("must-not-await-native-return") as unknown as void;
+      return Promise.resolve("must-not-await-native-return");
     },
     execute(dbId: string, sql: string, params: BindValues, cb: NativeCallback) {
       assert.ok(cb instanceof Function);
@@ -122,7 +122,7 @@ function createFakeSqlModule(overrides: NativeOverrides = {}) {
           rawRows: [],
         });
       });
-      return Promise.resolve("must-not-await-native-return") as unknown as void;
+      return Promise.resolve("must-not-await-native-return");
     },
     executeBatch(dbId: string, sql: string, params: BindValueRows, cb: NativeCallback) {
       assert.ok(cb instanceof Function);
@@ -140,7 +140,7 @@ function createFakeSqlModule(overrides: NativeOverrides = {}) {
           rawRows: [],
         });
       });
-      return Promise.resolve("must-not-await-native-return") as unknown as void;
+      return Promise.resolve("must-not-await-native-return");
     },
   };
 
@@ -216,7 +216,7 @@ test("rejects with NativeModuleError when Native Module returns { ok: false, cod
     async ({ adapter }) => {
       await assert.rejects(
         () => adapter.execute("SELECT fail"),
-        (err: unknown) => {
+        (err) => {
           assert.ok(err instanceof NativeModuleError);
           assert.equal(err.message, "disk I/O error");
           assert.equal(err.code, 778);
@@ -241,18 +241,20 @@ test("fails init when NativePowerSyncModule is not registered or open omits dbId
       queueMicrotask(() => cb({ ok: true }));
     },
   });
-  await withFakeLynxHost(
-    { nativeModules: { NativePowerSyncModule: noDbId.native } },
-    async () => {
-      const adapter = new LynxDBAdapter({ name: "no-id.db" });
-      await assert.rejects(() => adapter.initialized, {
-        message: "NativePowerSyncModule.open did not return dbId",
-      });
-    },
-  );
+  await withFakeLynxHost({ nativeModules: { NativePowerSyncModule: noDbId.native } }, async () => {
+    const adapter = new LynxDBAdapter({ name: "no-id.db" });
+    await assert.rejects(() => adapter.initialized, {
+      message: "NativePowerSyncModule.open did not return dbId",
+    });
+  });
 });
 
 test("encodes Uint8Array, number[], and BigInt inbound and decodes ArrayBuffer and tagged BigInt outbound", async () => {
+  interface RoundTripRow {
+    blob: Uint8Array;
+    big: bigint;
+    snowflake: string;
+  }
   let sawInsertParams: BindValues = [];
   await withAdapter(
     {
@@ -268,14 +270,14 @@ test("encodes Uint8Array, number[], and BigInt inbound and decodes ArrayBuffer a
         }
         if (sql.startsWith("INSERT")) {
           sawInsertParams = params;
+          const blobParam = params[0];
+          assert.ok(blobParam instanceof ArrayBuffer);
           return {
             ok: true,
             insertId: 1,
             rowsAffected: 1,
             columnNames: ["blob", "big", "snowflake"],
-            rawRows: [
-              [params[0] as ArrayBuffer, { __psBig: true, v: "9007199254740993" }, "9007199254740993"],
-            ],
+            rawRows: [[blobParam, { __psBig: true, v: "9007199254740993" }, "9007199254740993"]],
           };
         }
         return { ok: true, insertId: 0, rowsAffected: 0, columnNames: [], rawRows: [] };
@@ -295,11 +297,10 @@ test("encodes Uint8Array, number[], and BigInt inbound and decodes ArrayBuffer a
       assert.deepEqual(sawInsertParams[2], { __psBig: true, v: "9007199254740993" });
       assert.equal(sawInsertParams[3], null);
 
-      const row = result.rows?.item(0) as {
-        blob: Uint8Array;
-        big: bigint;
-        snowflake: string;
-      };
+      const first = result.rows?.item(0);
+      assert.ok(first != null);
+      // SAFETY: SELECT/INSERT row columns match the fake NativePowerSyncModule response schema above.
+      const row = first as RoundTripRow;
       assert.ok(row.blob instanceof Uint8Array);
       assert.deepEqual([...row.blob], [1, 2]);
       assert.equal(row.big, 9007199254740993n);

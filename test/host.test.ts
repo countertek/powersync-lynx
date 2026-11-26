@@ -140,14 +140,13 @@ test("hostIsIOS matches iOS case-insensitively and rejects desktop platforms", (
 });
 
 test("PrimJSLynxHost.globalEventEmitters publishes __psLynxGlobalEventEmitter non-enumerably while FakeLynxHost does not", () => {
-  const globalBag = globalThis as Record<string, unknown>;
-  const previousLynx = globalBag.lynx;
+  const previousLynx = globalThis.lynx;
   const previousPublished = Object.getOwnPropertyDescriptor(
     globalThis,
     "__psLynxGlobalEventEmitter",
   );
   try {
-    delete globalBag.__psLynxGlobalEventEmitter;
+    Reflect.deleteProperty(globalThis, "__psLynxGlobalEventEmitter");
     const { emitter: fakeEmitter } = createFakeEmitter();
     const fakeHost = new FakeLynxHost({ emitter: fakeEmitter });
     assert.deepEqual(fakeHost.globalEventEmitters(), [fakeEmitter]);
@@ -157,7 +156,7 @@ test("PrimJSLynxHost.globalEventEmitters publishes __psLynxGlobalEventEmitter no
     );
 
     const { emitter: primEmitter } = createFakeEmitter();
-    globalBag.lynx = {
+    globalThis.lynx = {
       getJSModule(name: string) {
         return name === "GlobalEventEmitter" ? primEmitter : undefined;
       },
@@ -168,13 +167,9 @@ test("PrimJSLynxHost.globalEventEmitters publishes __psLynxGlobalEventEmitter no
     assert.equal(desc?.value, primEmitter);
     assert.equal(desc?.enumerable, false);
   } finally {
-    if (previousLynx === undefined) {
-      delete globalBag.lynx;
-    } else {
-      globalBag.lynx = previousLynx;
-    }
+    globalThis.lynx = previousLynx;
     if (previousPublished == null) {
-      delete globalBag.__psLynxGlobalEventEmitter;
+      Reflect.deleteProperty(globalThis, "__psLynxGlobalEventEmitter");
     } else {
       Object.defineProperty(globalThis, "__psLynxGlobalEventEmitter", previousPublished);
     }
