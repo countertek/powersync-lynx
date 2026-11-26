@@ -37,7 +37,8 @@ static Napi::Object Init(Napi::Env env, Napi::Object exports) {
   return exports;
 }
 
-static napi_value RegisterNodeApiModule(napi_env env, napi_value exports) {
+static napi_value NAPI_CDECL RegisterNodeApiModule(napi_env env,
+                                                   napi_value exports) {
   return Napi::RegisterModule(env, exports, Init);
 }
 

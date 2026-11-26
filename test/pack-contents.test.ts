@@ -150,6 +150,26 @@ test("packed tarball ships iOS build inputs and omits host/build residue", async
       "NativeSyncHttp session contract lives in shared/sync_http_session.h",
     );
     assert.equal(
+      has("shared/nativeModule/desktop_sync_http.h"),
+      true,
+      "Desktop NativeSyncHttp header must ship",
+    );
+    assert.equal(
+      has("shared/nativeModule/desktop_sync_http.cc"),
+      true,
+      "Desktop NativeSyncHttp core must ship",
+    );
+    assert.equal(
+      has("shared/nativeModule/desktop_sync_http_macos.mm"),
+      true,
+      "macOS Desktop NativeSyncHttp backend must ship",
+    );
+    assert.equal(
+      has("shared/nativeModule/desktop_sync_http_win.cc"),
+      true,
+      "Windows Desktop NativeSyncHttp backend must ship",
+    );
+    assert.equal(
       has("android/src/main/cpp/sync_http_session_jni.cc"),
       true,
       "Android session JNI must ship",
@@ -205,9 +225,29 @@ test("packed tarball ships iOS build inputs and omits host/build residue", async
       "iOS NativePowerSyncModule sources ship for Autolink",
     );
     assert.equal(
+      has("shared/win_utf8.h"),
+      true,
+      "Windows UTF-8 path helper shared/win_utf8.h must ship",
+    );
+    assert.equal(
+      has("lynxtron/index.cjs"),
+      true,
+      "Lynxtron CJS loader entry lynxtron/index.cjs must ship",
+    );
+    assert.equal(
       has("dist/web-host/factory.js"),
       true,
       "attach factory URL needs the bundled ESM entry",
+    );
+    assert.equal(
+      files.some((file) => file.startsWith("dist/macos/x64/")),
+      false,
+      "dropped macos/x64 binaries must never ship in tarball",
+    );
+    assert.equal(
+      files.some((file) => file.startsWith("dist/linux/")),
+      false,
+      "linux test binaries must never ship in tarball",
     );
     assert.equal(
       has("android/consumer-rules.pro"),
@@ -225,6 +265,31 @@ test("packed tarball ships iOS build inputs and omits host/build residue", async
       Object.hasOwn(packedLynxLib.platforms?.ios ?? {}, "podspecPath"),
       false,
       "Autolink uses the first .podspec under ios/",
+    );
+    const lynxtronTargets = packedLynxLib.platforms?.lynxtron?.targets ?? [];
+    assert.equal(
+      Array.isArray(lynxtronTargets) &&
+        lynxtronTargets.some(
+          (t) =>
+            t.os === "darwin" &&
+            t.arch === "arm64" &&
+            t.files?.includes("dist/macos/arm64/powersync-lynx.node") &&
+            t.files?.includes("dist/macos/arm64/libpowersync_aarch64.macos.dylib"),
+        ),
+      true,
+      "lynx.lib.json must declare darwin/arm64 Lynxtron Autolink target",
+    );
+    assert.equal(
+      Array.isArray(lynxtronTargets) &&
+        lynxtronTargets.some(
+          (t) =>
+            t.os === "win32" &&
+            t.arch === "x64" &&
+            t.files?.includes("dist/windows/x64/powersync-lynx.node") &&
+            t.files?.includes("dist/windows/x64/powersync_x64.dll"),
+        ),
+      true,
+      "lynx.lib.json must declare win32/x64 Lynxtron Autolink target",
     );
 
     assert.equal(

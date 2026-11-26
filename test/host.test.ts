@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import { installAbortControllerPolyfill } from "../src/abort-controller.ts";
 import { nativeSql } from "../src/adapter/native.ts";
 import {
   getLynxHost,
   hostIsAndroid,
+  hostIsIOS,
   PrimJSLynxHost,
   resetLynxHost,
   setLynxHost,
@@ -125,5 +127,85 @@ test("PrimJSLynxHost.nativeModules handles sql-only, empty, and unset NativeModu
     assert.equal(host.nativeModules(), undefined);
   } finally {
     globalThis.NativeModules = previousModules;
+  }
+});
+
+test("hostIsIOS matches iOS case-insensitively and rejects desktop platforms", () => {
+  assert.equal(hostIsIOS(new FakeLynxHost({ platform: "iOS" })), true);
+  assert.equal(hostIsIOS(new FakeLynxHost({ platform: "ios" })), true);
+  assert.equal(hostIsIOS(new FakeLynxHost({ platform: "macOS" })), false);
+  assert.equal(hostIsIOS(new FakeLynxHost({ platform: "Windows" })), false);
+  assert.equal(hostIsIOS(new FakeLynxHost({ platform: "Android" })), false);
+});
+
+test("installAbortControllerPolyfill replaces broken splice-during-emit AbortController and preserves native Node AbortController", () => {
+  const OriginalAC = globalThis.AbortController;
+  const OriginalAS = globalThis.AbortSignal;
+  // Native Node AbortController passes the feature check and is preserved untouched.
+  installAbortControllerPolyfill();
+  assert.equal(globalThis.AbortController, OriginalAC);
+  assert.equal(globalThis.AbortSignal, OriginalAS);
+
+  // Simulate Lynx 4.2/4.4 lynx_core.js AbortSignal where removeEventListener splices during forEach.
+  class BrokenSignal {
+    aborted = false;
+    listeners: Array<() => void> = [];
+    addEventListener(_type: string, fn: () => void) {
+      this.listeners.push(fn);
+    }
+    removeEventListener(_type: string, fn: () => void) {
+      const idx = this.listeners.indexOf(fn);
+      if (idx >= 0) {
+        this.listeners.splice(idx, 1);
+      }
+    }
+    dispatch() {
+      this.aborted = true;
+      this.listeners.forEach((fn) => fn());
+    }
+  }
+  class BrokenController {
+    signal = new BrokenSignal();
+    abort() {
+      this.signal.dispatch();
+    }
+  }
+
+  try {
+    Object.defineProperty(globalThis, "AbortController", {
+      value: BrokenController,
+      configurable: true,
+      writable: true,
+    });
+    Object.defineProperty(globalThis, "AbortSignal", {
+      value: BrokenSignal,
+      configurable: true,
+      writable: true,
+    });
+
+    installAbortControllerPolyfill();
+    assert.notEqual(globalThis.AbortController, BrokenController);
+
+    const controller = new globalThis.AbortController();
+    let secondFired = false;
+    const first = () => controller.signal.removeEventListener("abort", first);
+    controller.signal.addEventListener("abort", first);
+    controller.signal.addEventListener("abort", () => {
+      secondFired = true;
+    });
+    controller.abort();
+    assert.equal(controller.signal.aborted, true);
+    assert.equal(secondFired, true);
+  } finally {
+    Object.defineProperty(globalThis, "AbortController", {
+      value: OriginalAC,
+      configurable: true,
+      writable: true,
+    });
+    Object.defineProperty(globalThis, "AbortSignal", {
+      value: OriginalAS,
+      configurable: true,
+      writable: true,
+    });
   }
 });

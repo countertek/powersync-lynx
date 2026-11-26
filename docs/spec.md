@@ -178,23 +178,23 @@ Default `connect` `connectionMethod`: **HTTP** (`BasePowerSyncDatabase` default)
 | Host | Streaming download | Connector JSON (`fetchCredentials` / `uploadData`) |
 |---|---|---|
 | iOS / Android | Native Module HTTP (`httpFetch` + `streamingId` / GlobalEventEmitter). Idle-complete UTF-8 body is fallback when no event sender is registered. Stock Lynx fetch is not the live NDJSON path. `LynxFetchModule` is never a stream transport ([ADR 0004](adr/0004-lynx-fetch-module-is-json-only.md)). | Ordinary JSON `fetch` (host HTTP Service). Android write-checkpoint / JSON GETs use `LynxFetchModule`. |
-| Windows / macOS | Identifier `fetch` (host `LynxHttpService`). Desktop N-API starts SQL-only; `0.3.0` verifies live NDJSON + `AbortSignal` on Lynxtron and native CMake `LynxHttpService` first, lifting the SQL-only lock for Desktop Native Module `httpFetch` only if stock streaming or abort fails ([ADR 0005](adr/0005-desktop-first-class-native-and-lynxtron.md)). | Ordinary JSON `fetch`. |
+| Windows / macOS | Native Module HTTP (`httpFetch` + `streamingId` / `GlobalEventEmitter` captured from `Napi::Env`, backed by `NSURLSession` on macOS and `WinHTTP` on Windows; idle-complete fallback when no emitter is reachable). Gate #73 ([ADR 0003](adr/0003-native-module-http-is-streaming-fallback.md), [ADR 0005](adr/0005-desktop-first-class-native-and-lynxtron.md)) lifted the desktop SQL-only lock after verifying Lynx 4.2.0 `LynxHttpService` is buffered-only and Lynxtron 0.0.31 `LynxFetchModule.fetch` hangs without settling. | Native Module HTTP (`httpFetch` buffered/idle-complete JSON path) when present, avoiding Lynxtron 0.0.31 `LynxFetchModule` hangs; native `LynxView` hosts may also register `LynxHttpService` for app `fetch()`. |
 | Lynx-for-Web | Browser `fetch` in the Lynx bundle (CORS applies). No Native Module HTTP. | Browser `fetch`. |
 
 Mobile hosts still register a Lynx HTTP Service for Connector traffic: iOS `LynxService` `Http` subspec; Android `org.lynxsdk.lynx:lynx-service-http` + `LynxServiceCenter`. Native Module Autolink does not replace that.
 
-**Native Module HTTP** (iOS/Android Autolink, same lookup name as SQL RPC, separate sub-interface):
+**Native Module HTTP** (iOS, Android, and Desktop `NativePowerSyncModule`, same lookup name as SQL RPC, separate sub-interface):
 
 1. One-shot callback returns HTTP status + `streamingId` with an empty body (Lynx Callback is one-shot).
 2. Chunks are UTF-8 strings on GlobalEventEmitter. Terminal sequence after headers: **`onData*` → `onError?` → `onEnd`**. JS waits for `onEnd`; `onError` records failure.
 3. `httpFetchAbort(streamingId)` cancels the native request. After headers this is `onError` then `onEnd`. Before headers the one-shot Callback is `{ok:false,status:-1,message,…}` and no events fire. JS learns `streamingId` only from that Callback: abort after dispatch rejects the JS Promise immediately, then `httpFetchAbort` runs if a late Callback delivers the id. Until then native I/O may continue (residual: callback-only handle — [ADR 0003](adr/0003-native-module-http-is-streaming-fallback.md)).
-4. Idle-complete (2.5 s quiet window after bytes, UTF-8 `body` / `bodyBase64`, `idleComplete: true`) runs only when streaming cannot be started. It is not the primary realtime path.
+4. Idle-complete (2.5 s quiet window after bytes, UTF-8 `body` / `bodyBase64`, `idleComplete: true`) runs when streaming cannot be started (no event sender) and as the buffered path for non-`/sync/stream` JSON requests. It is not the primary realtime path.
 
-Pre-headers / I/O failure Callback on iOS and Android: `{ok:false,status:-1,statusText:"",message,body,idleComplete:false}`. Session decisions live in `shared/sync_http_session.h` (hosts keep their HTTP I/O).
+Pre-headers / I/O failure Callback on iOS, Android, and Desktop: `{ok:false,status:-1,statusText:"",message,body,idleComplete:false}`. Session decisions live in `shared/sync_http_session.h` (hosts keep their HTTP I/O).
 
-iOS GlobalEventEmitter posting uses a **host-provided** sender (`sendGlobalEvent:withParams:`): Autolink `initWithParam:` / `NativeSyncHttp initWithEventSender:`, or `+[NativePowerSyncModule setSharedStreamEventSender:]` (showcase registers the `LynxView`). The library does not walk `UIWindow`s. If no sender is registered, `httpFetch` uses idle-complete. Android posts through `LynxContext.sendGlobalEvent` when the module was constructed with a `LynxContext`; otherwise idle-complete.
+iOS GlobalEventEmitter posting uses a **host-provided** sender (`sendGlobalEvent:withParams:`): Autolink `initWithParam:` / `NativeSyncHttp initWithEventSender:`, or `+[NativePowerSyncModule setSharedStreamEventSender:]` (showcase registers the `LynxView`). The library does not walk `UIWindow`s. If no sender is registered, `httpFetch` uses idle-complete. Android posts through `LynxContext.sendGlobalEvent` when the module was constructed with a `LynxContext`; otherwise idle-complete. Desktop N-API resolves PrimJS `GlobalEventEmitter` directly from `Napi::Env` (`lynx.getJSModule("GlobalEventEmitter")` / `lynx.GlobalEventEmitter`) into a `Napi::ThreadSafeFunction`, requiring zero host wiring on both Lynxtron and native CMake `LynxView` (with an optional C override `SetNativePowerSyncStreamEventSender`).
 
-Presence-only gate: pick native-http when `httpFetch` is present (not `typeof === "function"`). Desktop SQL modules without `httpFetch` use identifier `fetch`. Android `LynxFetchModule` is JSON-only ([ADR 0004](adr/0004-lynx-fetch-module-is-json-only.md)); it is never picked for `/sync/stream`.
+Presence-only gate: pick `native-http` when `httpFetch` is present (not `typeof === "function"`) for streaming on all native hosts and for non-streaming sync JSON on non-Android/non-iOS hosts (desktop). Web SQL modules without `httpFetch` use identifier `fetch`. Android `LynxFetchModule` is JSON-only ([ADR 0004](adr/0004-lynx-fetch-module-is-json-only.md)); it is never picked for `/sync/stream` or off Android.
 
 ---
 
@@ -240,7 +240,7 @@ Last argument is a `function` callback that receives the envelope. The Native Mo
 
 Native `open` opens SQLite **and** loads `powersync-sqlite-core` (entry `sqlite3_powersync_init`).
 
-SQL RPC has no `/sync/stream`, no `readLock`/`writeLock`, no `onTablesUpdated` callback. Native Module HTTP (`httpFetch` / `httpFetchAbort`) is a separate sub-interface on the iOS/Android Autolink class — see [Sync transport](#sync-transport) and [ADR 0003](adr/0003-native-module-http-is-streaming-fallback.md). Desktop N-API starts SQL-only, subject to the `0.3.0` desktop streaming verification gate ([ADR 0005](adr/0005-desktop-first-class-native-and-lynxtron.md)).
+SQL RPC has no `/sync/stream`, no `readLock`/`writeLock`, no `onTablesUpdated` callback. Native Module HTTP (`httpFetch` / `httpFetchAbort`) is a separate sub-interface exposed on iOS, Android, and Desktop (`macos/arm64` `NSURLSession`, `windows/x64` `WinHTTP`) `NativePowerSyncModule` — see [Sync transport](#sync-transport), [ADR 0003](adr/0003-native-module-http-is-streaming-fallback.md), and [ADR 0005](adr/0005-desktop-first-class-native-and-lynxtron.md).
 
 ### Connections (official RN)
 

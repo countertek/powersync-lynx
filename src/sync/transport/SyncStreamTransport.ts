@@ -1,4 +1,5 @@
 import type { FetchOptions } from "@powersync/shared-internals";
+import { hostIsAndroid, hostIsIOS } from "../../host.ts";
 import { isString } from "../../type-guards.ts";
 import { hostFetchTransport } from "./HostFetch.ts";
 import { lynxFetchModuleAvailable, lynxFetchModuleTransport } from "./LynxFetchModule.ts";
@@ -100,10 +101,13 @@ export function syncStreamRequestFromFetch(options: FetchOptions): SyncStreamReq
 }
 
 /**
- * Native httpFetch is primary for streaming (streamingId realtime path).
- * Desktop N-API has no httpFetch — pick falls through to host-fetch.
+ * Native httpFetch is primary for streaming (streamingId realtime path) on
+ * iOS, Android, and Desktop (ADR-0003 / ADR-0005).
  * LynxFetchModule is the Android JSON adapter only (ADR-0004); never a stream
- * transport. Identifier fetch is Lynx-for-Web / iOS JSON / desktop.
+ * transport and never used off Android (Lynxtron 0.0.31 hangs on fetch).
+ * Desktop hosts (non-Android, non-iOS) with native httpFetch also route
+ * non-streaming sync JSON (e.g. write-checkpoint) through native-http.
+ * Identifier fetch is Lynx-for-Web and iOS JSON.
  */
 export function pickSyncStreamTransport(request: SyncStreamRequest): SyncStreamTransport {
   if (request.expectStreamingResponse && nativeHttpFetchAvailable()) {
@@ -111,6 +115,14 @@ export function pickSyncStreamTransport(request: SyncStreamRequest): SyncStreamT
   }
   if (!request.expectStreamingResponse && lynxFetchModuleAvailable()) {
     return lynxFetchModuleTransport;
+  }
+  if (
+    !request.expectStreamingResponse &&
+    nativeHttpFetchAvailable() &&
+    !hostIsAndroid() &&
+    !hostIsIOS()
+  ) {
+    return nativeHttpFetchTransport;
   }
   return hostFetchTransport;
 }

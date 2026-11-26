@@ -9,8 +9,8 @@
  * Returns how many trailing bytes do not form a complete UTF-8 sequence, so
  * those bytes stay in a carry buffer and PrimJS only sees well-formed strings.
  *
- * iOS StreamingHttp.mm includes this header. Android StreamingHttp.java calls
- * it through JNI (android/src/main/cpp/utf8_hold_jni.cc).
+ * iOS StreamingHttp.mm and Desktop desktop_sync_http.cc include this header.
+ * Android StreamingHttp.java calls it through JNI (android/src/main/cpp/utf8_hold_jni.cc).
  *
  * Lynx-bundle JS keeps a copy in src/sync/transport/bytes.ts for host-fetch
  * bodies; shared/fixtures/sync-stream.json scenario "split-multibyte" pins

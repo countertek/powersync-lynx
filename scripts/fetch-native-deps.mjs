@@ -78,6 +78,29 @@ function materializeIosSqliteAmalgamation() {
   materializeRegularFile(path.join(sqliteDir, 'sqlite3.h'), path.join(iosSrc, 'sqlite3.h'));
 }
 
+function extractZip(zipPath, destDir) {
+  fs.mkdirSync(destDir, { recursive: true });
+  if (process.platform === 'win32') {
+    try {
+      execFileSync('tar', ['-xf', zipPath, '-C', destDir], { stdio: 'inherit' });
+      return;
+    } catch {
+      execFileSync(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          `Expand-Archive -LiteralPath '${zipPath.replaceAll("'", "''")}' -DestinationPath '${destDir.replaceAll("'", "''")}' -Force`,
+        ],
+        { stdio: 'inherit' },
+      );
+      return;
+    }
+  }
+  execFileSync('unzip', ['-o', zipPath, '-d', destDir], { stdio: 'inherit' });
+}
+
 async function ensureSqlite() {
   const dir = path.join(ROOT, 'third_party', 'sqlite');
   const header = path.join(dir, 'sqlite3.h');
@@ -92,9 +115,7 @@ async function ensureSqlite() {
   console.log(`downloading ${SQLITE_URL}`);
   await download(SQLITE_URL, zipPath);
   fs.mkdirSync(dir, { recursive: true });
-  execFileSync('unzip', ['-o', zipPath, '-d', path.join(ROOT, 'third_party')], {
-    stdio: 'inherit',
-  });
+  extractZip(zipPath, path.join(ROOT, 'third_party'));
   const extracted = path.join(ROOT, 'third_party', SQLITE_AMALGAMATION);
   fs.copyFileSync(path.join(extracted, 'sqlite3.c'), source);
   fs.copyFileSync(path.join(extracted, 'sqlite3.h'), header);
@@ -122,27 +143,56 @@ async function ensureCoreAsset(name, destDir) {
   return dest;
 }
 
+const TARGET_ASSETS = {
+  '--macos-arm64': {
+    name: 'libpowersync_aarch64.macos.dylib',
+    destDir: path.join(ROOT, 'dist', 'macos', 'arm64'),
+  },
+  '--windows-x64': {
+    name: 'powersync_x64.dll',
+    destDir: path.join(ROOT, 'dist', 'windows', 'x64'),
+  },
+  '--linux-x64': {
+    name: 'libpowersync_x64.linux.so',
+    destDir: path.join(ROOT, 'dist', 'linux', 'x64'),
+  },
+};
+
+const DEFAULT_ASSETS = [
+  TARGET_ASSETS['--macos-arm64'],
+  {
+    name: 'libpowersync_x64.macos.dylib',
+    destDir: path.join(ROOT, 'dist', 'macos', 'x64'),
+  },
+  TARGET_ASSETS['--windows-x64'],
+  TARGET_ASSETS['--linux-x64'],
+];
+
 async function main() {
+  const args = process.argv.slice(2);
+  let sqliteOnly = false;
+  const selectedTargets = [];
+  for (const arg of args) {
+    if (arg === '--sqlite') {
+      sqliteOnly = true;
+    } else if (Object.hasOwn(TARGET_ASSETS, arg)) {
+      selectedTargets.push(TARGET_ASSETS[arg]);
+    } else {
+      throw new Error(
+        `Unknown argument: ${arg}. Expected one of --sqlite, --macos-arm64, --windows-x64, --linux-x64`,
+      );
+    }
+  }
+
   await ensureSqlite();
-  if (process.argv.includes("--sqlite")) {
+  if (sqliteOnly && selectedTargets.length === 0) {
     return;
   }
-  await ensureCoreAsset(
-    'libpowersync_aarch64.macos.dylib',
-    path.join(ROOT, 'dist', 'macos', 'arm64'),
-  );
-  await ensureCoreAsset(
-    'libpowersync_x64.macos.dylib',
-    path.join(ROOT, 'dist', 'macos', 'x64'),
-  );
-  await ensureCoreAsset(
-    'powersync_x64.dll',
-    path.join(ROOT, 'dist', 'windows', 'x64'),
-  );
-  await ensureCoreAsset(
-    'libpowersync_x64.linux.so',
-    path.join(ROOT, 'dist', 'linux', 'x64'),
-  );
+
+  const assets = selectedTargets.length > 0 ? selectedTargets : DEFAULT_ASSETS;
+  for (const asset of assets) {
+    await ensureCoreAsset(asset.name, asset.destDir);
+  }
 }
 
 main().catch((err) => {

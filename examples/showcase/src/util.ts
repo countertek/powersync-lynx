@@ -29,15 +29,25 @@ function globalProps(): {
   device?: string;
   demoApiUrl?: string;
   powersyncUrl?: string;
+  e2e?: boolean;
 } {
   try {
     const runtime = lynx as {
-      __globalProps?: { device?: string; demoApiUrl?: string; powersyncUrl?: string };
+      __globalProps?: {
+        device?: string;
+        demoApiUrl?: string;
+        powersyncUrl?: string;
+        e2e?: boolean;
+      };
     };
     return runtime.__globalProps ?? {};
   } catch {
     return {};
   }
+}
+
+export function e2eMode(): boolean {
+  return globalProps().e2e === true;
 }
 
 function defaultLoopbackHost(): string {
@@ -97,6 +107,19 @@ type LynxFetchNative = {
   ): void;
 };
 
+type NativeHttpFetchEnvelope = {
+  ok?: boolean;
+  message?: string;
+  status?: number;
+  statusText?: string;
+  body?: string;
+};
+
+type NativeHttpFetchFn = (
+  request: { method?: string; url?: string; headers?: Record<string, string>; body?: string },
+  callback: (envelope: NativeHttpFetchEnvelope | NativeHttpFetchEnvelope[]) => void,
+) => void;
+
 function lynxFetchNative(): LynxFetchNative | undefined {
   try {
     const fromGlobal = (
@@ -110,6 +133,30 @@ function lynxFetchNative(): LynxFetchNative | undefined {
   }
   try {
     return (NativeModules as { LynxFetchModule?: LynxFetchNative }).LynxFetchModule;
+  } catch {
+    return undefined;
+  }
+}
+
+function nativeHttpFetchFn(): NativeHttpFetchFn | undefined {
+  try {
+    const fromGlobal = (
+      globalThis as unknown as {
+        NativeModules?: { NativePowerSyncModule?: { httpFetch?: NativeHttpFetchFn } };
+      }
+    ).NativeModules?.NativePowerSyncModule?.httpFetch;
+    if (fromGlobal != null) {
+      return fromGlobal;
+    }
+  } catch {
+    // PrimJS may not put NativeModules on globalThis.
+  }
+  try {
+    return (
+      NativeModules as {
+        NativePowerSyncModule?: { httpFetch?: NativeHttpFetchFn };
+      }
+    ).NativePowerSyncModule?.httpFetch;
   } catch {
     return undefined;
   }
@@ -154,14 +201,8 @@ function decodeBody(body: ArrayBuffer | Uint8Array | string | undefined): string
   return out;
 }
 
-/** Android PrimJS fetch(url, init) throws Request. Token GET fetch(url) still works. */
-export async function demoFetch(url: string, init: RequestInit = {}): Promise<Response> {
-  const native = hostLabel().toLowerCase() === "android" ? lynxFetchNative() : undefined;
-  if (native == null) {
-    return fetch(url, init);
-  }
+function collectHeaders(rawHeaders: RequestInit["headers"]): Record<string, string> {
   const headers: Record<string, string> = {};
-  const rawHeaders = init.headers;
   if (rawHeaders != null && !(rawHeaders instanceof Headers) && !Array.isArray(rawHeaders)) {
     for (const [key, value] of Object.entries(rawHeaders)) {
       headers[key] = String(value);
@@ -170,27 +211,14 @@ export async function demoFetch(url: string, init: RequestInit = {}): Promise<Re
   if (headers["Accept-Encoding"] == null && headers["accept-encoding"] == null) {
     headers["Accept-Encoding"] = "identity";
   }
-  const payload: Record<string, unknown> = {
-    method: String(init.method ?? "GET"),
-    url,
-    headers,
-  };
-  if (typeof init.body === "string") {
-    payload.body = encodeUtf8(init.body);
-  }
-  const result = await new Promise<{ status?: number; body?: ArrayBuffer | Uint8Array | string }>(
-    (resolve, reject) => {
-      native.fetch(payload, resolve, (error) =>
-        reject(new Error(error?.message ?? "LynxFetchModule.fetch failed")),
-      );
-    },
-  );
-  const status = Number(result.status ?? 0);
-  const textBody = decodeBody(result.body);
+  return headers;
+}
+
+function jsonTextResponse(status: number, statusText: string, textBody: string): Response {
   return {
     ok: status >= 200 && status < 300,
     status,
-    statusText: "",
+    statusText,
     async text() {
       return textBody;
     },
@@ -199,4 +227,74 @@ export async function demoFetch(url: string, init: RequestInit = {}): Promise<Re
       return JSON.parse(text.trim()) as unknown;
     },
   } as Response;
+}
+
+/**
+ * Showcase Connector HTTP helper:
+ * - Android: LynxFetchModule (PrimJS fetch(url, init) throws Request).
+ * - Desktop (non-Android, non-iOS) with NativePowerSyncModule.httpFetch:
+ *   routes JSON traffic (/token, /upload) through Native Module HTTP so both
+ *   Lynxtron 0.0.31 (where stock fetch hangs) and native LynxView work.
+ * - iOS & Web: standard fetch(url, init).
+ */
+export async function demoFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  const platform = hostLabel().toLowerCase();
+  if (platform === "android") {
+    const native = lynxFetchNative();
+    if (native != null) {
+      const headers = collectHeaders(init.headers);
+      const payload: Record<string, unknown> = {
+        method: String(init.method ?? "GET"),
+        url,
+        headers,
+      };
+      if (typeof init.body === "string") {
+        payload.body = encodeUtf8(init.body);
+      }
+      const result = await new Promise<{
+        status?: number;
+        body?: ArrayBuffer | Uint8Array | string;
+      }>((resolve, reject) => {
+        native.fetch(payload, resolve, (error) =>
+          reject(new Error(error?.message ?? "LynxFetchModule.fetch failed")),
+        );
+      });
+      const status = Number(result.status ?? 0);
+      return jsonTextResponse(status, "", decodeBody(result.body));
+    }
+  }
+  if (platform !== "android" && platform !== "ios") {
+    const httpFetch = nativeHttpFetchFn();
+    if (httpFetch != null) {
+      const headers = collectHeaders(init.headers);
+      const payload: {
+        method: string;
+        url: string;
+        headers: Record<string, string>;
+        body?: string;
+      } = {
+        method: String(init.method ?? "GET"),
+        url,
+        headers,
+      };
+      if (typeof init.body === "string") {
+        payload.body = init.body;
+      }
+      const raw = await new Promise<NativeHttpFetchEnvelope | NativeHttpFetchEnvelope[]>(
+        (resolve) => {
+          httpFetch(payload, resolve);
+        },
+      );
+      const result = Array.isArray(raw) ? (raw[0] ?? {}) : raw;
+      if (result.ok === false) {
+        throw new Error(result.message ?? "NativePowerSyncModule.httpFetch failed");
+      }
+      return jsonTextResponse(
+        Number(result.status ?? 0),
+        String(result.statusText ?? ""),
+        typeof result.body === "string" ? result.body : "",
+      );
+    }
+  }
+  return fetch(url, init);
 }

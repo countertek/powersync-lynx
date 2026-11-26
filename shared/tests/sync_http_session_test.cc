@@ -23,6 +23,9 @@
 #ifndef PS_DESKTOP_NATIVE_MODULE_CC
 #define PS_DESKTOP_NATIVE_MODULE_CC "shared/nativeModule/NativePowerSyncModule.cc"
 #endif
+#ifndef PS_DESKTOP_SYNC_HTTP_CC
+#define PS_DESKTOP_SYNC_HTTP_CC "shared/nativeModule/desktop_sync_http.cc"
+#endif
 
 namespace {
 
@@ -225,6 +228,7 @@ int main() {
     const std::string ios = read_file(PS_IOS_NATIVE_SYNC_HTTP_MM);
     const std::string jni = read_file(PS_ANDROID_SESSION_JNI);
     const std::string desktop = read_file(PS_DESKTOP_NATIVE_MODULE_CC);
+    const std::string desktop_http = read_file(PS_DESKTOP_SYNC_HTTP_CC);
 
     expect(java_session.find("native int nativeOnHeaders") != std::string::npos,
            "Android SyncHttpSession.java declares JNI session steps");
@@ -252,8 +256,28 @@ int main() {
     expect(jni.find("Java_com_powersync_lynx_SyncHttpSession_nativeOnError") != std::string::npos,
            "JNI symbol matches SyncHttpSession.nativeOnError");
 
-    expect(desktop.find("sync_http_session.h") == std::string::npos,
-           "desktop N-API stays SQL-only (does not include the HTTP session header)");
+    expect(desktop.find("desktop_sync_http.h") != std::string::npos,
+           "desktop NativePowerSyncModule.cc includes desktop_sync_http.h");
+    expect(desktop.find("\"httpFetch\"") != std::string::npos &&
+               desktop.find("\"httpFetchAbort\"") != std::string::npos,
+           "desktop NativePowerSyncModule.cc binds httpFetch and httpFetchAbort");
+    expect(desktop_http.find("sync_http_session.h") != std::string::npos,
+           "desktop desktop_sync_http.cc includes sync_http_session.h");
+    expect(desktop_http.find("ps_sync_http_route") != std::string::npos,
+           "desktop desktop_sync_http.cc calls ps_sync_http_route");
+    expect(desktop_http.find("ps_sync_http_session_on_headers") != std::string::npos,
+           "desktop desktop_sync_http.cc calls ps_sync_http_session_on_headers");
+    expect(desktop_http.find("ps_sync_http_session_on_data") != std::string::npos,
+           "desktop desktop_sync_http.cc calls ps_sync_http_session_on_data");
+    expect(desktop_http.find("ps_sync_http_session_on_end") != std::string::npos,
+           "desktop desktop_sync_http.cc calls ps_sync_http_session_on_end");
+    expect(desktop_http.find("ps_sync_http_session_on_error") != std::string::npos,
+           "desktop desktop_sync_http.cc calls ps_sync_http_session_on_error");
+    expect(desktop_http.find("ps_sync_http_session_abort") != std::string::npos,
+           "desktop desktop_sync_http.cc calls ps_sync_http_session_abort");
+    expect(desktop_http.find("utf8_hold.h") != std::string::npos &&
+               desktop_http.find("ps_utf8_trailing_incomplete") != std::string::npos,
+           "desktop desktop_sync_http.cc uses shared/utf8_hold.h");
   } catch (const std::exception& ex) {
     std::fprintf(stderr, "FAIL: source scan: %s\n", ex.what());
     return 1;

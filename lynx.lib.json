@@ -8,7 +8,24 @@
       "sourceDir": "ios"
     },
     "lynxtron": {
-      "path": "dist"
+      "targets": [
+        {
+          "os": "darwin",
+          "arch": "arm64",
+          "files": [
+            "dist/macos/arm64/powersync-lynx.node",
+            "dist/macos/arm64/libpowersync_aarch64.macos.dylib"
+          ]
+        },
+        {
+          "os": "win32",
+          "arch": "x64",
+          "files": [
+            "dist/windows/x64/powersync-lynx.node",
+            "dist/windows/x64/powersync_x64.dll"
+          ]
+        }
+      ]
     },
     "macos": {
       "sourceDir": "shared"

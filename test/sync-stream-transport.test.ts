@@ -101,6 +101,71 @@ test("pickSyncStreamTransport uses lynx-fetch-module for Android JSON without ht
   );
 });
 
+test("pickSyncStreamTransport uses native-http for desktop JSON and skips LynxFetchModule", async () => {
+  for (const platform of ["macOS", "Windows"]) {
+    await withFakeLynxHost(
+      {
+        platform,
+        nativeModules: {
+          LynxFetchModule: {
+            fetch() {
+              throw new Error("LynxFetchModule must never be used on desktop");
+            },
+          },
+          NativePowerSyncModule: nativeWithHttp({
+            httpFetch(_request, callback) {
+              callback({ ok: true, status: 200, body: '{"data":{}}' });
+            },
+          }),
+        },
+        fetchImpl: async () => new Response(null, { status: 200 }),
+      },
+      async () => {
+        const streaming = pickSyncStreamTransport(streamingRequest());
+        assert.equal(streaming.name, "native-http");
+
+        const json = pickSyncStreamTransport(
+          syncStreamRequestFromFetch({
+            resource: "http://127.0.0.1:8080/write-checkpoint2.json?client_id=1",
+            request: { method: "GET" },
+            expectStreamingResponse: false,
+          }),
+        );
+        assert.equal(json.name, "native-http");
+      },
+    );
+  }
+});
+
+test("pickSyncStreamTransport preserves host-fetch for iOS JSON even when httpFetch is present", async () => {
+  await withFakeLynxHost(
+    {
+      platform: "iOS",
+      nativeModules: {
+        NativePowerSyncModule: nativeWithHttp({
+          httpFetch(_request, callback) {
+            callback({ ok: true, status: 200, body: "" });
+          },
+        }),
+      },
+      fetchImpl: async () => new Response('{"data":{}}', { status: 200 }),
+    },
+    async () => {
+      const streaming = pickSyncStreamTransport(streamingRequest());
+      assert.equal(streaming.name, "native-http");
+
+      const json = pickSyncStreamTransport(
+        syncStreamRequestFromFetch({
+          resource: "http://127.0.0.1:8080/write-checkpoint2.json?client_id=1",
+          request: { method: "GET" },
+          expectStreamingResponse: false,
+        }),
+      );
+      assert.equal(json.name, "host-fetch");
+    },
+  );
+});
+
 test("pickSyncStreamTransport uses host-fetch when no native HTTP module is present", async () => {
   await withFakeLynxHost(
     {

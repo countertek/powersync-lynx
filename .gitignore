@@ -48,6 +48,8 @@ examples/**/build/
 examples/**/.cxx/
 examples/hosts/android/local.properties
 examples/hosts/ios/generated/
+examples/hosts/lynxtron/dist/
+examples/**/.lynxtron/
 
 
 

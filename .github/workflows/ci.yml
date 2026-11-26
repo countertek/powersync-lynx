@@ -7,6 +7,7 @@ on:
 
 jobs:
   check:
+    name: Linux (JS + native tests)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -26,5 +27,152 @@ jobs:
 
       - run: pnpm lint
 
+      - run: pnpm check-packed-consumers
+
       - name: Native unit tests
         run: make test
+
+  macos:
+    name: macOS arm64 (native + Lynxtron builds & tests)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Fetch native dependencies and Lynx Desktop SDK
+        run: |
+          node scripts/fetch-native-deps.mjs --macos-arm64
+          node scripts/fetch-lynx-desktop-sdk.mjs --macos-arm64
+
+      - name: Build powersync_lynx_napi (macOS arm64)
+        run: make node
+
+      - name: Verify macOS native artifacts
+        run: node scripts/check-native-artifacts.mjs --macos
+
+      - name: Native unit tests
+        run: make test
+
+      - name: iOS native module host tests
+        run: make test-ios
+
+      - name: JS unit tests
+        run: pnpm test
+
+      - name: Build showcase bundle
+        run: |
+          pnpm --dir examples/showcase install --frozen-lockfile
+          pnpm --dir examples/showcase build
+
+      - name: Build native macOS LynxView showcase host
+        run: |
+          cmake -S examples/hosts/macos -B examples/hosts/macos/build -DCMAKE_BUILD_TYPE=Release
+          cmake --build examples/hosts/macos/build --parallel
+
+      - name: Build Lynxtron showcase host (macOS arm64)
+        run: |
+          pnpm --dir examples/hosts/lynxtron install --frozen-lockfile
+          pnpm --dir examples/hosts/lynxtron build
+
+      - name: Headless desktop E2E sync verification (macOS native + Lynxtron)
+        run: node examples/scripts/e2e-desktop-sync.mjs --target all
+
+  windows:
+    name: Windows x64 MSVC (native + Lynxtron builds, tests & headless E2E)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Fetch native dependencies and Lynx Desktop SDK
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          node scripts/fetch-native-deps.mjs --windows-x64
+          node scripts/fetch-lynx-desktop-sdk.mjs --windows-x64
+
+      - name: Install Lynxtron host dependencies and runtime
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          pnpm --dir examples/hosts/lynxtron install --frozen-lockfile
+
+      - name: Install Lynxtron native build headers
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          New-Item -ItemType Directory -Force native-vendor | Out-Null
+          '{"name":"powersync-lynx-native-vendor","private":true}' | Set-Content -Encoding utf8 native-vendor/package.json
+          'packages: []' | Set-Content -Encoding utf8 native-vendor/pnpm-workspace.yaml
+          pnpm --dir native-vendor add --no-lockfile --ignore-scripts @lynx-js/weak-node-api@0.1.0 @lynx-js/lynx-library-headers@0.0.31
+
+      - name: Build powersync_lynx_napi and native C++ unit tests (MSVC x64)
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $importLib = node --input-type=module -e "import { createRequire } from 'node:module'; import path from 'node:path'; import { pathToFileURL } from 'node:url'; const pkg = path.resolve('examples/hosts/lynxtron/package.json'); const req = createRequire(pkg); const rm = await import(pathToFileURL(req.resolve('@lynx-js/lynxtron/runtime-manager')).href); await rm.ensureRuntime({ variant: 'devtool' }); const np = req('@lynx-js/lynxtron/native-paths'); if (!np.importLibraryPath) throw new Error('missing importLibraryPath'); process.stdout.write(np.importLibraryPath);"
+          if (-not (Test-Path $importLib)) {
+            throw "lynxtron.dll.lib not found at $importLib"
+          }
+          Write-Host "Using LYNXTRON_IMPORT_LIB=$importLib"
+          cmake -S shared -B shared/build-win -A x64 `
+            -DPOWERSYNC_BUILD_LYNXTRON_NAPI=ON `
+            -DPOWERSYNC_BUILD_TESTS=ON `
+            "-DLYNXTRON_IMPORT_LIB=$importLib"
+          cmake --build shared/build-win --config Release --parallel
+          New-Item -ItemType Directory -Force dist/windows/x64 | Out-Null
+          Copy-Item -Force shared/build-win/Release/powersync-lynx.node dist/windows/x64/powersync-lynx.node
+
+      - name: Verify Windows native artifacts
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          node scripts/check-native-artifacts.mjs --windows
+
+      - name: Run Windows native C++ unit tests
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $env:POWERSYNC_CORE_PATH = (Resolve-Path dist/windows/x64/powersync_x64.dll).Path
+          $env:PS_SYNC_STREAM_FIXTURES_PATH = (Resolve-Path shared/fixtures/sync-stream.json).Path
+          .\shared\build-win\Release\ps_sql_test.exe
+          .\shared\build-win\Release\desktop_sync_http_test.exe
+          .\shared\build-win\Release\sync_stream_fixtures_test.exe
+          .\shared\build-win\Release\utf8_hold_test.exe
+          .\shared\build-win\Release\sync_http_session_test.exe
+          .\shared\build-win\Release\sync_http_policy_android_test.exe
+
+      - name: Build showcase bundle
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          pnpm --dir examples/showcase install --frozen-lockfile
+          pnpm --dir examples/showcase build
+
+      - name: Build native Windows LynxView showcase host
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          cmake -S examples/hosts/windows -B examples/hosts/windows/build -A x64
+          cmake --build examples/hosts/windows/build --config Release --parallel
+
+      - name: Build Lynxtron showcase host (Windows x64)
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          pnpm --dir examples/hosts/lynxtron build
+
+      - name: Headless desktop E2E sync verification (Windows native + Lynxtron)
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          node examples/scripts/e2e-desktop-sync.mjs --target all

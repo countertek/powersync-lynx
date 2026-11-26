@@ -1,7 +1,7 @@
 # 02: Desktop CMake native target, macOS core lookup, and MSVC Lynxtron build
 
 Type: task
-Status: ready-for-agent
+Status: resolved
 Spec: ../spec.md (#68)
 GitHub: #69
 

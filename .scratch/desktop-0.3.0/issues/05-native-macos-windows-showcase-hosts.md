@@ -1,7 +1,7 @@
 # 05: Runnable native macOS & Windows showcase hosts (`examples/hosts/macos/` & `windows/`) + Lynx SDK fetcher
 
 Type: task
-Status: ready-for-agent
+Status: resolved
 Blocked by: 02, 03
 Spec: ../spec.md (#68)
 GitHub: #72

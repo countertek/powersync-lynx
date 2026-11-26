@@ -11,32 +11,42 @@ UNAME_S := $(shell uname -s)
 UNAME_M := $(shell uname -m)
 ifeq ($(UNAME_S),Linux)
   CORE_DYLIB := dist/linux/x64/libpowersync_x64.linux.so
+  FETCH_DEPS_FLAGS := --linux-x64
   JNI_OS_INCLUDE := linux
   JAVA_HOME ?= $(shell dirname $$(dirname $$(readlink -f $$(command -v java))))
 else ifeq ($(UNAME_S),Darwin)
   JNI_OS_INCLUDE := darwin
   JAVA_HOME ?= $(shell /usr/libexec/java_home 2>/dev/null)
+  MACOS_LDFLAGS := -framework CoreFoundation -framework Foundation
+  DESKTOP_HTTP_OBJS := shared/build/desktop_sync_http.o shared/build/desktop_sync_http_macos.o
   ifeq ($(UNAME_M),arm64)
     CORE_DYLIB := dist/macos/arm64/libpowersync_aarch64.macos.dylib
+    FETCH_DEPS_FLAGS := --macos-arm64
   else
     CORE_DYLIB := dist/macos/x64/libpowersync_x64.macos.dylib
+    FETCH_DEPS_FLAGS :=
   endif
 else
   CORE_DYLIB := dist/macos/arm64/libpowersync_aarch64.macos.dylib
+  FETCH_DEPS_FLAGS := --macos-arm64
   JNI_OS_INCLUDE := darwin
   JAVA_HOME ?= $(shell /usr/libexec/java_home 2>/dev/null)
+  MACOS_LDFLAGS := -framework CoreFoundation -framework Foundation
+  DESKTOP_HTTP_OBJS := shared/build/desktop_sync_http.o shared/build/desktop_sync_http_macos.o
+endif
+ifeq ($(UNAME_S),Linux)
+  DESKTOP_HTTP_OBJS := shared/build/desktop_sync_http.o
 endif
 TEST_BIN := shared/build/ps_sql_test
 FIXTURE_TEST_BIN := shared/build/sync_stream_fixtures_test
 POLICY_ANDROID_TEST_BIN := shared/build/sync_http_policy_android_test
 UTF8_HOLD_TEST_BIN := shared/build/utf8_hold_test
 SESSION_TEST_BIN := shared/build/sync_http_session_test
+DESKTOP_HTTP_TEST_BIN := shared/build/desktop_sync_http_test
 IOS_TEST_BIN := shared/build/ios_module_rpc_test
 ANDROID_JAVA_DIR := $(CURDIR)/android/src/main/java/com/powersync/lynx
 FIXTURES_JSON := $(CURDIR)/shared/fixtures/sync-stream.json
 NODE := dist/macos/arm64/powersync-lynx.node
-WIN_NODE := dist/windows/x64/powersync-lynx.node
-ZIG ?= $(shell command -v zig 2>/dev/null)
 # package.json packageManager is pnpm@12.3.4.
 # Prefer pnpm 12 on PATH (Corepack or a local install). Do not use the npm CLI.
 PNPM_PIN := 12.3.4
@@ -61,27 +71,27 @@ ADB := $(ANDROID_SDK)/platform-tools/adb
 EMULATOR := $(ANDROID_SDK)/emulator/emulator
 ANDROID_AVD ?= Pixel_10_Pro
 
-.PHONY: deps test test-ios test-android node win-node all
+.PHONY: deps test test-ios test-android node all
 
 all: test node
 
 deps:
-	node scripts/fetch-native-deps.mjs
+	node scripts/fetch-native-deps.mjs $(FETCH_DEPS_FLAGS)
 
 $(SQLITE_DIR)/sqlite3.c:
-	node scripts/fetch-native-deps.mjs
+	node scripts/fetch-native-deps.mjs $(FETCH_DEPS_FLAGS)
 
 $(SQLITE_DIR)/sqlite3.o: $(SQLITE_DIR)/sqlite3.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
-shared/build/ps_sql.o: shared/ps_sql.cc shared/ps_sql.h $(SQLITE_DIR)/sqlite3.h
+shared/build/ps_sql.o: shared/ps_sql.cc shared/ps_sql.h shared/win_utf8.h $(SQLITE_DIR)/sqlite3.h
 	mkdir -p shared/build
 	$(CXX) $(CXXFLAGS) $(SQLITE_FLAGS) -c shared/ps_sql.cc -o $@
 
-$(TEST_BIN): shared/build/ps_sql.o $(SQLITE_DIR)/sqlite3.o shared/tests/ps_sql_test.cc
+$(TEST_BIN): shared/build/ps_sql.o $(SQLITE_DIR)/sqlite3.o shared/tests/ps_sql_test.cc shared/nativeModule/core_path.h shared/nativeModule/db_location.h shared/win_utf8.h
 	mkdir -p shared/build
 	$(CXX) $(CXXFLAGS) $(SQLITE_FLAGS) shared/tests/ps_sql_test.cc \
-		shared/build/ps_sql.o $(SQLITE_DIR)/sqlite3.o $(LDFLAGS) -o $@
+		shared/build/ps_sql.o $(SQLITE_DIR)/sqlite3.o $(LDFLAGS) $(MACOS_LDFLAGS) -o $@
 
 $(FIXTURE_TEST_BIN): shared/tests/sync_stream_fixtures_test.cc \
 		shared/sync_stream_fixtures.h shared/tests/ndjson_http_replay.h \
@@ -107,13 +117,15 @@ $(UTF8_HOLD_TEST_BIN): shared/tests/utf8_hold_test.cc shared/utf8_hold.h \
 		shared/sync_stream_fixtures.h shared/fixtures/sync-stream.json \
 		android/src/main/java/com/powersync/lynx/StreamingHttp.java \
 		android/src/main/cpp/utf8_hold_jni.cc \
-		ios/src/StreamingHttp.mm
+		ios/src/StreamingHttp.mm \
+		shared/nativeModule/desktop_sync_http.cc
 	mkdir -p shared/build
 	$(CXX) $(CXXFLAGS) \
 		-DPS_SYNC_STREAM_FIXTURES_PATH='"$(FIXTURES_JSON)"' \
 		-DPS_ANDROID_STREAMING_HTTP_JAVA='"$(ANDROID_JAVA_DIR)/StreamingHttp.java"' \
 		-DPS_IOS_STREAMING_HTTP_MM='"$(CURDIR)/ios/src/StreamingHttp.mm"' \
 		-DPS_ANDROID_UTF8_HOLD_JNI='"$(CURDIR)/android/src/main/cpp/utf8_hold_jni.cc"' \
+		-DPS_DESKTOP_SYNC_HTTP_CC='"$(CURDIR)/shared/nativeModule/desktop_sync_http.cc"' \
 		shared/tests/utf8_hold_test.cc -o $@
 
 $(SESSION_TEST_BIN): shared/tests/sync_http_session_test.cc shared/sync_http_session.h \
@@ -122,7 +134,8 @@ $(SESSION_TEST_BIN): shared/tests/sync_http_session_test.cc shared/sync_http_ses
 		android/src/main/java/com/powersync/lynx/SyncHttpSession.java \
 		android/src/main/cpp/sync_http_session_jni.cc \
 		ios/src/NativeSyncHttp.mm \
-		shared/nativeModule/NativePowerSyncModule.cc
+		shared/nativeModule/NativePowerSyncModule.cc \
+		shared/nativeModule/desktop_sync_http.cc
 	mkdir -p shared/build
 	$(CXX) $(CXXFLAGS) \
 		-DPS_ANDROID_NATIVE_SYNC_HTTP_JAVA='"$(ANDROID_JAVA_DIR)/NativeSyncHttp.java"' \
@@ -130,10 +143,34 @@ $(SESSION_TEST_BIN): shared/tests/sync_http_session_test.cc shared/sync_http_ses
 		-DPS_IOS_NATIVE_SYNC_HTTP_MM='"$(CURDIR)/ios/src/NativeSyncHttp.mm"' \
 		-DPS_ANDROID_SESSION_JNI='"$(CURDIR)/android/src/main/cpp/sync_http_session_jni.cc"' \
 		-DPS_DESKTOP_NATIVE_MODULE_CC='"$(CURDIR)/shared/nativeModule/NativePowerSyncModule.cc"' \
+		-DPS_DESKTOP_SYNC_HTTP_CC='"$(CURDIR)/shared/nativeModule/desktop_sync_http.cc"' \
 		shared/tests/sync_http_session_test.cc -o $@
 
+shared/build/desktop_sync_http.o: shared/nativeModule/desktop_sync_http.cc \
+		shared/nativeModule/desktop_sync_http.h shared/sync_http_policy.h \
+		shared/sync_http_session.h shared/utf8_hold.h
+	mkdir -p shared/build
+	$(CXX) $(CXXFLAGS) -Ishared/nativeModule -c shared/nativeModule/desktop_sync_http.cc -o $@
+
+shared/build/desktop_sync_http_macos.o: shared/nativeModule/desktop_sync_http_macos.mm \
+		shared/nativeModule/desktop_sync_http.h shared/sync_http_policy.h \
+		shared/sync_http_session.h
+	mkdir -p shared/build
+	clang++ -std=c++17 -fPIC -O2 -fobjc-arc -fblocks -Ishared -Ishared/nativeModule \
+		-c shared/nativeModule/desktop_sync_http_macos.mm -o $@
+
+$(DESKTOP_HTTP_TEST_BIN): shared/tests/desktop_sync_http_test.cc \
+		shared/nativeModule/desktop_sync_http.h \
+		shared/sync_stream_fixtures.h shared/tests/ndjson_http_replay.h \
+		shared/fixtures/sync-stream.json $(DESKTOP_HTTP_OBJS)
+	mkdir -p shared/build
+	$(CXX) $(CXXFLAGS) -Ishared/nativeModule -Ishared/tests \
+		-DPS_SYNC_STREAM_FIXTURES_PATH='"$(FIXTURES_JSON)"' \
+		shared/tests/desktop_sync_http_test.cc $(DESKTOP_HTTP_OBJS) \
+		$(LDFLAGS) $(MACOS_LDFLAGS) -o $@
+
 test: deps $(TEST_BIN) $(FIXTURE_TEST_BIN) $(POLICY_ANDROID_TEST_BIN) $(UTF8_HOLD_TEST_BIN) \
-		$(SESSION_TEST_BIN) $(JNI_OBJ) $(JNI_UTF8_OBJ) $(JNI_SESSION_OBJ) $(POD_ENGINE_OBJ)
+		$(SESSION_TEST_BIN) $(DESKTOP_HTTP_TEST_BIN) $(JNI_OBJ) $(JNI_UTF8_OBJ) $(JNI_SESSION_OBJ) $(POD_ENGINE_OBJ)
 	@! grep -n 'UIApplication.sharedApplication.windows' ios/src/NativeSyncHttp.mm
 	@! grep -n 'findLynxViewIn' ios/src/NativeSyncHttp.mm
 	POWERSYNC_CORE_PATH="$(CURDIR)/$(CORE_DYLIB)" $(TEST_BIN)
@@ -141,6 +178,7 @@ test: deps $(TEST_BIN) $(FIXTURE_TEST_BIN) $(POLICY_ANDROID_TEST_BIN) $(UTF8_HOL
 	$(POLICY_ANDROID_TEST_BIN)
 	$(UTF8_HOLD_TEST_BIN)
 	$(SESSION_TEST_BIN)
+	PS_SYNC_STREAM_FIXTURES_PATH="$(FIXTURES_JSON)" $(DESKTOP_HTTP_TEST_BIN)
 	node scripts/gen-sync-http-policy-java.mjs --check
 
 $(JNI_OBJ): android/src/main/cpp/ps_sql_jni.cc shared/ps_sql.h
@@ -210,66 +248,38 @@ test-android: android/host/gradlew
 	cd android/host && ./gradlew connectedDebugAndroidTest
 
 NODE_VENDOR := native-vendor/node_modules
+NODE_VENDOR_MARKER := $(NODE_VENDOR)/@lynx-js/lynx-library-headers/include/lynx/registration.h
 NAPI_INCLUDE := -I$(NODE_VENDOR)/@lynx-js/weak-node-api/headers \
 	-I$(NODE_VENDOR)/@lynx-js/lynx-library-headers/include \
 	-I$(NODE_VENDOR)/@lynx-js/lynx-library-headers/include/third_party/weak-node-api/headers
 
-$(NODE_VENDOR):
+$(NODE_VENDOR_MARKER):
 	mkdir -p native-vendor
-	cd native-vendor && $(PNPM) init >/dev/null 2>&1 || true
-	cd native-vendor && $(PNPM) add --ignore-scripts \
-		@lynx-js/weak-node-api@0.1.0 @lynx-js/lynx-library-headers@0.0.21
+	printf '{"name":"powersync-lynx-native-vendor","private":true}\n' > native-vendor/package.json
+	printf 'packages: []\n' > native-vendor/pnpm-workspace.yaml
+	cd native-vendor && $(PNPM) add --no-lockfile --ignore-scripts \
+		@lynx-js/weak-node-api@0.1.0 @lynx-js/lynx-library-headers@0.0.31
 
-shared/build/library_entry.o: lynxtron/library_entry.cc $(NODE_VENDOR)
+shared/build/library_entry.o: lynxtron/library_entry.cc $(NODE_VENDOR_MARKER)
 	mkdir -p shared/build
 	$(CXX) $(CXXFLAGS) $(NAPI_INCLUDE) -DNAPI_VERSION=8 \
 		-c lynxtron/library_entry.cc -o $@
 
-shared/build/NativePowerSyncModule.o: shared/nativeModule/NativePowerSyncModule.cc $(NODE_VENDOR)
+shared/build/NativePowerSyncModule.o: shared/nativeModule/NativePowerSyncModule.cc \
+		shared/nativeModule/NativePowerSyncModule.h shared/nativeModule/core_path.h \
+		shared/nativeModule/db_location.h shared/nativeModule/desktop_sync_http.h \
+		shared/sync_http_policy.h shared/win_utf8.h $(NODE_VENDOR_MARKER)
 	mkdir -p shared/build
 	$(CXX) $(CXXFLAGS) $(SQLITE_FLAGS) $(NAPI_INCLUDE) -DNAPI_VERSION=8 \
 		-DUSE_WEAK_SUFFIX_NAPI -Ishared/nativeModule \
 		-c shared/nativeModule/NativePowerSyncModule.cc -o $@
 
-$(NODE): deps $(NODE_VENDOR) shared/build/ps_sql.o shared/build/NativePowerSyncModule.o shared/build/library_entry.o $(SQLITE_DIR)/sqlite3.o
+$(NODE): deps $(NODE_VENDOR_MARKER) shared/build/ps_sql.o shared/build/NativePowerSyncModule.o \
+		$(DESKTOP_HTTP_OBJS) shared/build/library_entry.o $(SQLITE_DIR)/sqlite3.o
 	mkdir -p dist/macos/arm64
 	$(CXX) -std=c++17 -fPIC -O2 -shared -Wl,-undefined,dynamic_lookup \
-		shared/build/NativePowerSyncModule.o shared/build/library_entry.o \
-		shared/build/ps_sql.o $(SQLITE_DIR)/sqlite3.o \
-		$(LDFLAGS) -o $@
+		shared/build/NativePowerSyncModule.o $(DESKTOP_HTTP_OBJS) \
+		shared/build/library_entry.o shared/build/ps_sql.o $(SQLITE_DIR)/sqlite3.o \
+		$(LDFLAGS) $(MACOS_LDFLAGS) -o $@
 
 node: $(NODE)
-
-WIN_ZIG ?= $(firstword $(wildcard /tmp/zig-macos-aarch64-0.14.0/zig) $(wildcard $(ZIG)))
-
-win-node: deps $(NODE_VENDOR) $(SQLITE_DIR)/sqlite3.c
-	@if [ -z "$(WIN_ZIG)" ] || [ ! -x "$(WIN_ZIG)" ]; then \
-		echo "zig not found; cannot cross-compile $(WIN_NODE)"; exit 1; \
-	fi
-	mkdir -p shared/build/win dist/windows/x64
-	$(WIN_ZIG) cc -target x86_64-windows-gnu -std=c11 -fPIC -O2 -g0 \
-		-I$(SQLITE_DIR) $(SQLITE_FLAGS) \
-		-c $(SQLITE_DIR)/sqlite3.c -o shared/build/win/sqlite3.o
-	$(WIN_ZIG) c++ -target x86_64-windows-gnu -std=c++17 -fPIC -O2 -g0 \
-		-Ishared -I$(SQLITE_DIR) $(SQLITE_FLAGS) \
-		-c shared/ps_sql.cc -o shared/build/win/ps_sql.o
-	$(WIN_ZIG) c++ -target x86_64-windows-gnu -std=c++17 -fPIC -O2 -g0 \
-		-Ishared -I$(SQLITE_DIR) $(SQLITE_FLAGS) $(NAPI_INCLUDE) -DNAPI_VERSION=8 \
-		-c lynxtron/library_entry.cc -o shared/build/win/library_entry.o
-	$(WIN_ZIG) c++ -target x86_64-windows-gnu -std=c++17 -fPIC -O2 -g0 \
-		-Ishared -Ishared/nativeModule -I$(SQLITE_DIR) $(SQLITE_FLAGS) $(NAPI_INCLUDE) -DNAPI_VERSION=8 \
-		-DUSE_WEAK_SUFFIX_NAPI \
-		-c shared/nativeModule/NativePowerSyncModule.cc -o shared/build/win/NativePowerSyncModule.o
-	$(WIN_ZIG) cc -target x86_64-windows-gnu -std=c11 -fPIC -O2 -g0 \
-		-c shared/win_host_stubs.c -o shared/build/win/win_host_stubs.o
-	$(WIN_ZIG) c++ -target x86_64-windows-gnu -std=c++17 -shared -O2 -g0 \
-		-Wl,-s \
-		shared/build/win/NativePowerSyncModule.o \
-		shared/build/win/library_entry.o \
-		shared/build/win/ps_sql.o \
-		shared/build/win/sqlite3.o \
-		shared/build/win/win_host_stubs.o \
-		-Wl,--out-implib,shared/build/win/powersync-lynx.lib \
-		-o $(WIN_NODE)
-	rm -f dist/windows/x64/*.pdb dist/windows/x64/*.lib dist/windows/x64/*.exp
-	node scripts/check-native-artifacts.mjs

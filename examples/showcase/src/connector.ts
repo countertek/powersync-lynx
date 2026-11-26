@@ -45,7 +45,7 @@ export function crudUploadEntries(
 }
 
 export async function fetchDemoCredentials(): Promise<DemoCredentials | null> {
-  const response = await fetch(`${demoApiUrl()}/token`);
+  const response = await demoFetch(`${demoApiUrl()}/token`);
   if (!response.ok) {
     throw new Error(`demo token endpoint HTTP ${response.status}`);
   }
