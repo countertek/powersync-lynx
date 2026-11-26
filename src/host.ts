@@ -115,6 +115,22 @@ function addUniqueEmitter(
   }
 }
 
+function publishDesktopStreamEmitter(emitter: LynxGlobalEventEmitter): void {
+  try {
+    // Expose the lexical BTS GlobalEventEmitter non-enumerably on globalThis
+    // (scoped per-LynxView / Napi::Env) so Desktop N-API NativePowerSyncModule
+    // can resolve it without host wiring even when `lynx` is closure-scoped.
+    Object.defineProperty(globalThis, "__psLynxGlobalEventEmitter", {
+      value: emitter,
+      configurable: true,
+      writable: true,
+      enumerable: false,
+    });
+  } catch {
+    // Read-only globalThis in restricted test environments.
+  }
+}
+
 function callGetJSModule(runtime: LynxRuntime, name: string): LynxGlobalEventEmitter | undefined {
   const getJSModule = runtime.getJSModule;
   if (getJSModule == null) {
@@ -211,7 +227,11 @@ export class PrimJSLynxHost implements LynxHost {
   }
 
   globalEventEmitters(): LynxGlobalEventEmitter[] {
-    return collectGlobalEventEmitters(this.runtime());
+    const emitters = collectGlobalEventEmitters(this.runtime());
+    if (emitters.length > 0) {
+      publishDesktopStreamEmitter(emitters[0]!);
+    }
+    return emitters;
   }
 
   platform(): string | undefined {

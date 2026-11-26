@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import { LynxRemote } from "../src/sync/LynxRemote.ts";
 import { responseFromLynxFetchSuccess } from "../src/sync/transport/LynxFetchModule.ts";
-import { responseFromNativeHttpEnvelope } from "../src/sync/transport/NativeHttpFetch.ts";
+import { nativeHttpFetchTransport } from "../src/sync/transport/NativeHttpFetch.ts";
 import { syncStreamResponse } from "../src/sync/transport/response.ts";
 import {
   headerMap,
@@ -306,31 +306,44 @@ test("preferNdjsonAccept is a named rewrite, not implicit headerMap behavior", (
 });
 
 test("NativeHttpFetch owns the httpFetch envelope and returns a finished Response", async () => {
+  let call = 0;
   await withFakeLynxHost(
     {
       emitter: { addListener() {} },
+      nativeModules: {
+        NativePowerSyncModule: nativeWithHttp({
+          httpFetch(_request, callback) {
+            call += 1;
+            if (call === 1) {
+              callback({
+                ok: true,
+                status: 200,
+                statusText: "OK",
+                contentType: "application/x-ndjson",
+                body: '{"checkpoint":{"last_op_id":"1"}}\n',
+                idleComplete: true,
+              });
+              return;
+            }
+            callback({
+              ok: true,
+              status: 200,
+              streamingId: "NativePowerSyncHttpStream-own",
+              body: "",
+            });
+          },
+        }),
+      },
     },
     async () => {
-      const idle = responseFromNativeHttpEnvelope({
-        ok: true,
-        status: 200,
-        statusText: "OK",
-        contentType: "application/x-ndjson",
-        body: '{"checkpoint":{"last_op_id":"1"}}\n',
-        idleComplete: true,
-      });
+      const idle = await nativeHttpFetchTransport.fetch(streamingRequest());
       assert.equal(idle.ok, true);
       assert.equal(idle.status, 200);
       assert.equal(idle.headers.get("content-type"), "application/x-ndjson");
       const idleFirst = await idle.body!.getReader().read();
       assert.equal(idleFirst.done, false);
 
-      const streamed = responseFromNativeHttpEnvelope({
-        ok: true,
-        status: 200,
-        streamingId: "NativePowerSyncHttpStream-own",
-        body: "",
-      });
+      const streamed = await nativeHttpFetchTransport.fetch(streamingRequest());
       assert.equal(streamed.ok, true);
       assert.equal(streamed.body != null, true);
     },
@@ -415,28 +428,30 @@ test("syncStreamResponse accepts a caller-owned reader without GlobalEventEmitte
   assert.equal(new TextDecoder().decode(first.value), '{"ok":1}\n');
 });
 
-test("responseFromNativeHttpEnvelope cancels via the supplied native module once", async () => {
+test("nativeHttpFetchTransport cancels via httpFetchAbort once", async () => {
   const abortIds: string[] = [];
   await withFakeLynxHost(
     {
       emitter: { addListener() {} },
-    },
-    async () => {
-      const response = responseFromNativeHttpEnvelope(
-        {
-          ok: true,
-          status: 200,
-          streamingId: "NativePowerSyncHttpStream-cancel-once",
-          body: "",
-        },
-        {
-          httpFetch() {},
+      nativeModules: {
+        NativePowerSyncModule: nativeWithHttp({
+          httpFetch(_request, callback) {
+            callback({
+              ok: true,
+              status: 200,
+              streamingId: "NativePowerSyncHttpStream-cancel-once",
+              body: "",
+            });
+          },
           httpFetchAbort(streamId, callback) {
             abortIds.push(streamId);
             callback({ ok: true });
           },
-        },
-      );
+        }),
+      },
+    },
+    async () => {
+      const response = await nativeHttpFetchTransport.fetch(streamingRequest());
       const reader = response.body!.getReader();
       await reader.cancel();
       await reader.cancel();

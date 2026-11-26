@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import { isString } from "../src/type-guards.ts";
 import { LynxRemote } from "../src/sync/LynxRemote.ts";
-import { MAX_EARLY_EVENTS_PER_STREAM } from "../src/sync/transport/events.ts";
+import { MAX_EARLY_EVENTS_PER_STREAM } from "../src/sync/transport/NativeHttpFetch.ts";
 import type { LynxFetchSuccessPayload } from "../src/sync/transport/http-types.ts";
 import type {
   NativeHttpFetchCallback,
@@ -1048,12 +1048,48 @@ test("fetchStream abort before headers cancels a late streamingId and does not l
         event: "onData",
         data: '{"checkpoint":{"last_op_id":"1"}}\n',
       });
+      emitter.emit?.(streamingId, { event: "onEnd" });
       assert.deepEqual(abortIds, [streamingId]);
       assert.equal(
         (listeners.get(streamingId) ?? []).length,
         0,
         "late headers after abort must not attach a streaming reader",
       );
+
+      // Reusing the same streamingId on a subsequent fetch must NOT replay the
+      // retired pre-headers-aborted onData/onEnd events from early capture.
+      let secondHeaders: NativeHttpFetchCallback | undefined;
+      const freshFetch = remote.fetchStream({
+        path: "/sync/stream",
+        data: {},
+        abortSignal: new AbortController().signal,
+      });
+      await waitUntil(
+        () => headersCallback !== lateHeaders && headersCallback != null,
+        "second httpFetch dispatches",
+      );
+      secondHeaders = headersCallback;
+      secondHeaders!({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        contentType: "application/x-ndjson",
+        body: "",
+        streamingId,
+        idleComplete: false,
+      });
+      emitter.emit?.(streamingId, { event: "onData", data: '{"fresh":true}\n' });
+      emitter.emit?.(streamingId, { event: "onEnd" });
+      const freshStream = await freshFetch;
+      const lines: unknown[] = [];
+      for (;;) {
+        const next = await freshStream.next();
+        if (next.done) {
+          break;
+        }
+        lines.push(next.value);
+      }
+      assert.deepEqual(lines, ['{"fresh":true}']);
     },
   );
 });

@@ -138,6 +138,48 @@ test("hostIsIOS matches iOS case-insensitively and rejects desktop platforms", (
   assert.equal(hostIsIOS(new FakeLynxHost({ platform: "Android" })), false);
 });
 
+test("PrimJSLynxHost.globalEventEmitters publishes __psLynxGlobalEventEmitter non-enumerably while FakeLynxHost does not", () => {
+  const globalBag = globalThis as Record<string, unknown>;
+  const previousLynx = globalBag.lynx;
+  const previousPublished = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "__psLynxGlobalEventEmitter",
+  );
+  try {
+    delete globalBag.__psLynxGlobalEventEmitter;
+    const { emitter: fakeEmitter } = createFakeEmitter();
+    const fakeHost = new FakeLynxHost({ emitter: fakeEmitter });
+    assert.deepEqual(fakeHost.globalEventEmitters(), [fakeEmitter]);
+    assert.equal(
+      Object.getOwnPropertyDescriptor(globalThis, "__psLynxGlobalEventEmitter"),
+      undefined,
+    );
+
+    const { emitter: primEmitter } = createFakeEmitter();
+    globalBag.lynx = {
+      getJSModule(name: string) {
+        return name === "GlobalEventEmitter" ? primEmitter : undefined;
+      },
+    };
+    const primHost = new PrimJSLynxHost();
+    assert.deepEqual(primHost.globalEventEmitters(), [primEmitter]);
+    const desc = Object.getOwnPropertyDescriptor(globalThis, "__psLynxGlobalEventEmitter");
+    assert.equal(desc?.value, primEmitter);
+    assert.equal(desc?.enumerable, false);
+  } finally {
+    if (previousLynx === undefined) {
+      delete globalBag.lynx;
+    } else {
+      globalBag.lynx = previousLynx;
+    }
+    if (previousPublished == null) {
+      delete globalBag.__psLynxGlobalEventEmitter;
+    } else {
+      Object.defineProperty(globalThis, "__psLynxGlobalEventEmitter", previousPublished);
+    }
+  }
+});
+
 test("installAbortControllerPolyfill replaces broken splice-during-emit AbortController and preserves native Node AbortController", () => {
   const OriginalAC = globalThis.AbortController;
   const OriginalAS = globalThis.AbortSignal;
