@@ -59,22 +59,17 @@ export class LynxDBAdapter extends DBAdapter {
   writeConnection: Semaphore<LynxConnection> | null = null;
   abortController: AbortController;
   options: LynxAdapterOpenOptions;
-  private readonly tabs: TabCoordinator;
+  readonly tabs: TabCoordinator;
 
-  constructor(options: LynxAdapterOpenOptions, tabs?: TabCoordinator) {
+  constructor(options: LynxAdapterOpenOptions) {
     super();
     this.options = options;
     this.name = options.name;
-    this.tabs = tabs ?? new TabCoordinator(options);
+    this.tabs = new TabCoordinator(options, { waitForAdapter: true });
     this.abortController = new AbortController();
     this.initialized = this.init();
-    this.tabs.attachAdapter(
-      this.initialized,
-      () => getLynxHost().tabs(),
-      (change) => {
-        this.iterateListeners((l) => l.tablesUpdated?.(change));
-      },
-    );
+    // Prevent unhandled rejection when callers construct the Adapter before awaiting initialized.
+    this.initialized.catch(() => {});
   }
 
   async init(): Promise<void> {
@@ -88,9 +83,12 @@ export class LynxDBAdapter extends DBAdapter {
     } = DEFAULT_SQLITE_OPTIONS;
     const dbFilename = this.options.name;
     const opened: LynxConnection[] = [];
+    let sharedWithTabs = false;
 
     try {
-      const underlyingWriteConnection = await this.openConnection(false, dbFilename);
+      const writeOpened = await this.openConnection(false, dbFilename);
+      const underlyingWriteConnection = writeOpened.connection;
+      sharedWithTabs ||= writeOpened.multiTab;
       opened.push(underlyingWriteConnection);
 
       const baseStatements = [
@@ -123,7 +121,9 @@ export class LynxDBAdapter extends DBAdapter {
 
       const underlyingReadConnections: LynxConnection[] = [];
       for (let i = 0; i < READ_CONNECTIONS; i++) {
-        const conn = await this.openConnection(true, dbFilename);
+        const readOpened = await this.openConnection(true, dbFilename);
+        const conn = readOpened.connection;
+        sharedWithTabs ||= readOpened.multiTab;
         opened.push(conn);
         for (const statement of baseStatements) {
           await conn.execute(statement);
@@ -133,22 +133,26 @@ export class LynxDBAdapter extends DBAdapter {
 
       this.writeConnection = new Semaphore([underlyingWriteConnection]);
       this.readConnections = new Semaphore(underlyingReadConnections);
+      this.tabs.adapterReady(sharedWithTabs, getLynxHost().tabs(), (change) => {
+        this.iterateListeners((l) => l.tablesUpdated?.(change));
+      });
     } catch (error) {
+      this.tabs.adapterFailed();
       await Promise.allSettled(opened.map((conn) => conn.close()));
       throw error;
     }
   }
 
-  private async openConnection(readOnly: boolean, dbFilename: string): Promise<LynxConnection> {
+  private async openConnection(
+    readOnly: boolean,
+    dbFilename: string,
+  ): Promise<{ connection: LynxConnection; multiTab: boolean }> {
     const payload: OpenPayload = { dbFilename, readOnly };
     if (this.options.dbLocation != null) {
       payload.dbLocation = this.options.dbLocation;
     }
     const { dbId, multiTab } = await nativeSql.open(payload);
-    if (multiTab) {
-      this.tabs.markShared();
-    }
-    return new LynxConnection(dbId);
+    return { connection: new LynxConnection(dbId), multiTab };
   }
 
   private writers(): Semaphore<LynxConnection> {
