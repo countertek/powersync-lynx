@@ -6,7 +6,7 @@ The **Client** is official PowerSync JavaScript on Lynx: one Autolink npm, one J
 
 Placeholder npm name: `powersync-lynx`. License: Apache-2.0. Lynx **4.0+**. The real npm scope is a later publish decision, not this spec.
 
-Glossary: [`CONTEXT.md`](../CONTEXT.md). Why the Native Module, Host helper, and native sync HTTP look this way: [ADR 0001](adr/0001-native-module-is-async-sql-rpc.md), [ADR 0002](adr/0002-host-helper-is-wasqlite-sql-rpc.md), [ADR 0003](adr/0003-native-module-http-is-streaming-fallback.md), [ADR 0004](adr/0004-lynx-fetch-module-is-json-only.md).
+Glossary: [`CONTEXT.md`](../CONTEXT.md). Why the Native Module, Host helper, native sync HTTP, and 0.3.0 desktop tiers look this way: [ADR 0001](adr/0001-native-module-is-async-sql-rpc.md), [ADR 0002](adr/0002-host-helper-is-wasqlite-sql-rpc.md), [ADR 0003](adr/0003-native-module-http-is-streaming-fallback.md), [ADR 0004](adr/0004-lynx-fetch-module-is-json-only.md), [ADR 0005](adr/0005-desktop-first-class-native-and-lynxtron.md).
 
 ---
 
@@ -18,7 +18,7 @@ ReactLynx apps import `powersync-lynx` and use official JavaScript names for thi
 |---|---|
 | Lynx bundle | `export *` from `@powersync/common` plus Lynx `PowerSyncDatabase` (published type `CommonPowerSyncDatabase`) |
 | Host page (Lynx-for-Web only) | `import { attach } from 'powersync-lynx/web-host'` |
-| Autolink (not app code) | `pluginLynxtron()` loads `powersync-lynx/lynxtron`; native lookup `NativePowerSyncModule` |
+| Autolink / Native host (not app code) | `pluginLynxtron()` loads `powersync-lynx/lynxtron`; native CMake `LynxView` links `powersync_lynx_native` + `RegisterNativeModule`; native lookup `NativePowerSyncModule` |
 
 App code never calls `NativeModules`. There is no class named `Connector`; the object type is `PowerSyncBackendConnector`. There is no second `PowerSyncDatabase` on the host page.
 
@@ -178,7 +178,7 @@ Default `connect` `connectionMethod`: **HTTP** (`BasePowerSyncDatabase` default)
 | Host | Streaming download | Connector JSON (`fetchCredentials` / `uploadData`) |
 |---|---|---|
 | iOS / Android | Native Module HTTP (`httpFetch` + `streamingId` / GlobalEventEmitter). Idle-complete UTF-8 body is fallback when no event sender is registered. Stock Lynx fetch is not the live NDJSON path. `LynxFetchModule` is never a stream transport ([ADR 0004](adr/0004-lynx-fetch-module-is-json-only.md)). | Ordinary JSON `fetch` (host HTTP Service). Android write-checkpoint / JSON GETs use `LynxFetchModule`. |
-| Windows / macOS | Identifier `fetch` (host `LynxHttpService`). Desktop N-API is SQL-only — no Native Module HTTP. Streaming is undocumented and unverified. | Ordinary JSON `fetch`. |
+| Windows / macOS | Identifier `fetch` (host `LynxHttpService`). Desktop N-API starts SQL-only; `0.3.0` verifies live NDJSON + `AbortSignal` on Lynxtron and native CMake `LynxHttpService` first, lifting the SQL-only lock for Desktop Native Module `httpFetch` only if stock streaming or abort fails ([ADR 0005](adr/0005-desktop-first-class-native-and-lynxtron.md)). | Ordinary JSON `fetch`. |
 | Lynx-for-Web | Browser `fetch` in the Lynx bundle (CORS applies). No Native Module HTTP. | Browser `fetch`. |
 
 Mobile hosts still register a Lynx HTTP Service for Connector traffic: iOS `LynxService` `Http` subspec; Android `org.lynxsdk.lynx:lynx-service-http` + `LynxServiceCenter`. Native Module Autolink does not replace that.
@@ -240,7 +240,7 @@ Last argument is a `function` callback that receives the envelope. The Native Mo
 
 Native `open` opens SQLite **and** loads `powersync-sqlite-core` (entry `sqlite3_powersync_init`).
 
-SQL RPC has no `/sync/stream`, no `readLock`/`writeLock`, no `onTablesUpdated` callback. Native Module HTTP (`httpFetch` / `httpFetchAbort`) is a separate sub-interface on the iOS/Android Autolink class — see [Sync transport](#sync-transport) and [ADR 0003](adr/0003-native-module-http-is-streaming-fallback.md). Desktop N-API does not implement it.
+SQL RPC has no `/sync/stream`, no `readLock`/`writeLock`, no `onTablesUpdated` callback. Native Module HTTP (`httpFetch` / `httpFetchAbort`) is a separate sub-interface on the iOS/Android Autolink class — see [Sync transport](#sync-transport) and [ADR 0003](adr/0003-native-module-http-is-streaming-fallback.md). Desktop N-API starts SQL-only, subject to the `0.3.0` desktop streaming verification gate ([ADR 0005](adr/0005-desktop-first-class-native-and-lynxtron.md)).
 
 ### Connections (official RN)
 
@@ -262,9 +262,9 @@ Apache-2.0 core. Entry `sqlite3_powersync_init`. SQLite **3.44+**, **never** App
 | Host | SQLite | Core |
 |---|---|---|
 | iOS | Client-bundled 3.44+ | CocoaPods/SPM XCFramework + `sqlite3_auto_extension` |
-| macOS | same as iOS | same static auto-extension |
+| macOS | Client-bundled 3.44+ | Dynamic `libpowersync_aarch64.macos.dylib` + `dlopen` / `sqlite3_auto_extension` (`POWERSYNC_CORE_PATH`, `ModuleDirectory()`, `../Frameworks/`) |
 | Android | Client-bundled 3.44+ (same amalgamation as iOS/desktop, JNI `ps_sql`) | Maven AAR `com.powersync:powersync-sqlite-core` → `libpowersync.so` + `loadExtension(..., "sqlite3_powersync_init")` |
-| Windows | bundled SQLite with `ENABLE_LOAD_EXTENSION` | GitHub loadable `powersync_{x64,x86,aarch64}.dll` + `loadExtension` |
+| Windows | bundled SQLite with `ENABLE_LOAD_EXTENSION` | GitHub loadable `powersync_x64.dll` + `loadExtension` (`0.3.0` target: `windows/x64`; `x86` / `arm64` deferred) |
 
 JS never calls `loadExtension`.
 
@@ -276,15 +276,18 @@ Host binders (iOS ObjC, Android JNI, desktop N-API) call this shared `ps_sql` en
 |---|---|---|
 | iOS | tagged `{ __psBig: true, v: decimal }` | Documents directory |
 | Android | Lynx `Long` | `Context.getDatabasePath` |
-| Desktop N-API | N-API `BigInt` | filename as given |
+| Desktop N-API | N-API `BigInt` | OS app-data dir (`~/Library/Application Support/<app>/` from `CFBundleIdentifier` or executable name on macOS; `%LOCALAPPDATA%\<app>\` from executable stem on Windows; fallback `powersync-lynx`; auto-created; `:memory:`, `file:`, and absolute paths unchanged) |
 
 Lynx `ReadableArray` / `NS*` / N-API bind parsing stays in each binder. The JS Adapter already accepts Lynx BigInt, tagged `{ __psBig, v }`, and N-API BigInt via `decodeCell`.
 
 ### Registration
 
-Supported path: Autolink `lynx.lib.json` on Android 4.0 + iOS 4.0, and Lynxtron `pluginLynxtron()` when that host is the desktop. Lookup name **`NativePowerSyncModule`**.
+Supported paths:
 
-Manual `registerModule` / `LynxEnv.RegisterNativeModule("NativePowerSyncModule", …)` is the documented fallback for CMake embedders and missing Autolink tooling — not a second product floor. Web is the Host helper, not `registerModule`.
+- **Mobile:** Autolink `lynx.lib.json` on Android 4.0 + iOS 4.0.
+- **Desktop (`0.3.0`, `macos/arm64` + `windows/x64`, [ADR 0005](adr/0005-desktop-first-class-native-and-lynxtron.md)):** Both **Lynxtron Autolink** (`pluginLynxtron()`) and **native CMake `LynxView`** (`add_subdirectory(<pkg>/shared)` linking `powersync_lynx_native` + `LynxEnv::GetInstance().RegisterNativeModule("NativePowerSyncModule", CreateNativePowerSyncModule, nullptr)` + core-staging helper) are first-class supported host tiers.
+
+Lookup name **`NativePowerSyncModule`**. Manual mobile `registerModule` remains a documented fallback. Web is the Host helper, not `registerModule`.
 
 ---
 
@@ -418,7 +421,7 @@ Encode on the way in (params) and on the way out (`rawRows`). Do not throw acros
 
 ## Package, Autolink, and version floors
 
-One Autolink npm (`powersync-lynx`). `"type": "module"`. Lynxtron Autolink is the **supported desktop path**. CMake `LynxEnv.RegisterNativeModule("NativePowerSyncModule", …)` is the documented fallback, not a second product. `@powersync/node` is not the desktop Client.
+One Autolink npm (`powersync-lynx`). `"type": "module"`. On desktop (`0.3.0`, `macos/arm64` + `windows/x64`), **both** Lynxtron Autolink and native CMake `LynxView` (`powersync_lynx_native` + `LynxEnv.RegisterNativeModule("NativePowerSyncModule", …)`) are first-class supported host tiers ([ADR 0005](adr/0005-desktop-first-class-native-and-lynxtron.md)). `@powersync/node` is not the desktop Client.
 
 ### Native Module export name
 
@@ -532,13 +535,17 @@ powersync-lynx/
     index.cjs
   android/                # com.powersync.lynx
   ios/
-  shared/                 # desktop N-API / C++ (macos + windows)
+  shared/                 # desktop N-API / C++ (macos + windows); exposes powersync_lynx_native + powersync_lynx_napi
   dist/
-    macos/arm64/powersync-lynx.node
-    windows/x64/powersync-lynx.node
+    macos/arm64/
+      powersync-lynx.node               # ad-hoc signed
+      libpowersync_aarch64.macos.dylib
+    windows/x64/
+      powersync-lynx.node               # native MSVC + CMake (lynx_link_lynxtron_runtime)
+      powersync_x64.dll
 ```
 
-Documented Autolink artifact layout is `macos/arm64` and `windows/x64`. Extra arches may ship when `powersync-sqlite-core` binaries exist (e.g. `macos/x64`, `windows/arm64`).
+`0.3.0` ships prebuilt desktop binaries for **`macos/arm64`** and **`windows/x64`** only inside the single `powersync-lynx` tarball via a multi-OS release workflow (`macos/x64` dropped; `windows/arm64` and `windows/x86` deferred; release checks reject stray `macos/x64` or `linux/x64` files). Downstream macOS apps handle Developer ID signing/notarization during app packaging.
 
 ### Version matrix
 
@@ -573,7 +580,8 @@ PowerSync all-SDK floors; Lynx 4.0 does not raise them.
 - nijika-os PMS domain (Stay, Folio, Organization)
 - Encryption / SQLCipher
 - PowerSync Service / Open Edition ops (that is the consumer app)
-- Desktop Native Module HTTP (N-API stays SQL-only; identifier `fetch` is the desktop stream path)
+- Desktop Native Module HTTP unless `0.3.0` desktop verification shows stock `fetch` / `LynxHttpService` cannot stream live NDJSON or cancel via `AbortSignal` ([ADR 0005](adr/0005-desktop-first-class-native-and-lynxtron.md))
+- `macos/x64`, `windows/arm64`, and `windows/x86` desktop binaries in `0.3.0`
 - User-supplied SQLite extensions
 - Experimental WASQLite `InMemoryWriteAheadLogPool` / COOP / COEP
 
@@ -581,6 +589,6 @@ PowerSync all-SDK floors; Lynx 4.0 does not raise them.
 
 ## Provenance (informative)
 
-This file is the source of truth. Wayfinder ticket history under `.scratch/lynx-powersync-client-spec/` is not a second spec.
+This file is the source of truth. Wayfinder ticket history under `.scratch/lynx-powersync-client-spec/` and `.scratch/desktop-0.3.0/` is not a second spec.
 
-Research notes under [`docs/research/`](research/) are facts that fed the locks; they are not normative. ADRs 0001–0003 record *why* SQL RPC, the Host helper, and native sync HTTP split this way.
+Research notes under [`docs/research/`](research/) are facts that fed the locks; they are not normative. ADRs 0001–0005 record *why* SQL RPC, the Host helper, native sync HTTP, `LynxFetchModule`, and `0.3.0` desktop support split this way.
