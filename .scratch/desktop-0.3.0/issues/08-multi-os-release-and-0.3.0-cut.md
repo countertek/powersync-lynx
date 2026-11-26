@@ -1,7 +1,7 @@
 # 08: Multi-OS `release.yml`, tarball hygiene, docs bump, and `0.3.0` release cut
 
 Type: task
-Status: ready-for-agent
+Status: resolved
 Blocked by: 06, 07
 Spec: ../spec.md (#68)
 GitHub: #75

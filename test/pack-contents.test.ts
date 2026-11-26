@@ -225,9 +225,29 @@ test("packed tarball ships iOS build inputs and omits host/build residue", async
       "iOS NativePowerSyncModule sources ship for Autolink",
     );
     assert.equal(
+      has("shared/win_utf8.h"),
+      true,
+      "Windows UTF-8 path helper shared/win_utf8.h must ship",
+    );
+    assert.equal(
+      has("lynxtron/index.cjs"),
+      true,
+      "Lynxtron CJS loader entry lynxtron/index.cjs must ship",
+    );
+    assert.equal(
       has("dist/web-host/factory.js"),
       true,
       "attach factory URL needs the bundled ESM entry",
+    );
+    assert.equal(
+      files.some((file) => file.startsWith("dist/macos/x64/")),
+      false,
+      "dropped macos/x64 binaries must never ship in tarball",
+    );
+    assert.equal(
+      files.some((file) => file.startsWith("dist/linux/")),
+      false,
+      "linux test binaries must never ship in tarball",
     );
     assert.equal(
       has("android/consumer-rules.pro"),

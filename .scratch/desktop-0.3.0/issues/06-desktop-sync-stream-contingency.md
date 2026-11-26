@@ -1,7 +1,7 @@
 # 06: Desktop `/sync/stream` verification gate & conditional Native Module HTTP (`httpFetch`)
 
 Type: task
-Status: ready-for-agent
+Status: resolved
 Blocked by: 04, 05
 Spec: ../spec.md (#68)
 GitHub: #73

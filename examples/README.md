@@ -51,9 +51,9 @@ Read this before treating a green web preview as "sync works".
 | Live `/sync/stream` download on iOS | **Same Native Module HTTP path as Android**. Rebuild showcase + `pod install` + xcodebuild. Expect `ps_buckets > 0`. See [`hosts/ios/README.md`](hosts/ios/README.md). |
 | `disconnect()` cancelling a live native stream | Same ReactLynx control. **JS abort is tested** in [#36](https://github.com/countertek/powersync-lynx/pull/36) (`httpFetchAbort` when the streaming reader is cancelled / `fetchStream` abort). In-app Go offline is **not re-tapped** this checkout |
 | Physical iOS / Android Autolink host run | **Documented**. Simulator / emulator is what this checkout exercises |
-| Windows / macOS Autolink host run | **Lynxtron host runnable on macOS arm64** (`examples/hosts/lynxtron/`): Autolink `NativePowerSyncModule` + SQLite + restart persistence **verified**; stock Lynxtron `0.0.31` `fetch` / `/sync/stream` **fails** (triggers Gate #73 Native Module HTTP). Windows x64 + native CMake `macos/` & `windows/` hosts tracked in #72–#74 |
+| macOS `arm64` & Windows `x64` hosts (native CMake `LynxView` & Lynxtron Autolink) | **Runnable & CI-verified** ([`hosts/macos/README.md`](hosts/macos/README.md), [`hosts/windows/README.md`](hosts/windows/README.md), [`hosts/lynxtron/README.md`](hosts/lynxtron/README.md)). Desktop `NativePowerSyncModule` uses `NSURLSession` (macOS) and `WinHTTP` (Windows) for incremental `/sync/stream` + `httpFetchAbort`, verified by headless two-client E2E sync (`examples/scripts/e2e-desktop-sync.mjs`) in `.github/workflows/ci.yml`. |
 | Lynx Explorer | **Will not work** for SQL: Explorer does not register `NativePowerSyncModule` |
-| `pnpm publish` to npmjs | **Workflow checked in** (`.github/workflows/release.yml`, `release` published). **Not run** from this task |
+| `npm publish` to npmjs | **Multi-OS workflow checked in** (`.github/workflows/release.yml`: `build-macos` + `build-windows` → `publish`, provenance + strict `dist/` tarball hygiene). |
 | Publish dry-run to local Verdaccio | **Scripted** (`pnpm publish-dry-run`). Requires compose profile `registry` |
 
 Do not treat a successful web build as proof of per-platform sync.
@@ -66,6 +66,9 @@ Do not treat a successful web build as proof of per-platform sync.
 - Two browser windows for the web money shot
 - iOS Simulator: Xcode 16+, CocoaPods, `gem install cocoapods-lynx-library` — [`hosts/ios/README.md`](hosts/ios/README.md)
 - Android Emulator: JDK 17, Android SDK, an ARM64 AVD — [`hosts/android/README.md`](hosts/android/README.md)
+- macOS native (`arm64`, 14.0+): Xcode Command Line Tools, CMake 3.22+ — [`hosts/macos/README.md`](hosts/macos/README.md)
+- Windows native (`x64`, 10+): Visual Studio 2022 (MSVC), CMake 3.22+ — [`hosts/windows/README.md`](hosts/windows/README.md)
+- Lynxtron desktop (`macos/arm64` & `windows/x64`): Node >= 22.18, pnpm 12 — [`hosts/lynxtron/README.md`](hosts/lynxtron/README.md)
 
 ## 1. Start the local sync stack
 
@@ -168,20 +171,23 @@ docker compose --profile sync --profile registry up --build
 
 `uploadData` writes Postgres through `demo-api`. It does not POST to a cloud backend.
 
-## Run: iOS / Android
+## Run: iOS / Android / Desktop
 
-Web is the fastest path. iOS Simulator and Android Emulator are **runnable apps**
-that load the same ReactLynx TODO bundle (`examples/showcase`) via Autolink.
+Web is the fastest path. iOS Simulator, Android Emulator, macOS native, Windows
+native, and Lynxtron desktop are **runnable apps** that load the same ReactLynx
+TODO bundle (`examples/showcase`) with `NativePowerSyncModule`.
 
 - iOS: [`hosts/ios/README.md`](hosts/ios/README.md)
 - Android: [`hosts/android/README.md`](hosts/android/README.md)
-- Desktop (Lynxtron, macOS & Windows): [`hosts/lynxtron/README.md`](hosts/lynxtron/README.md) (native CMake `hosts/macos/` and `hosts/windows/` are separate native embedder hosts)
+- macOS native (CMake `LynxView`): [`hosts/macos/README.md`](hosts/macos/README.md)
+- Windows native (CMake `LynxView`): [`hosts/windows/README.md`](hosts/windows/README.md)
+- Lynxtron desktop (Autolink, macOS & Windows): [`hosts/lynxtron/README.md`](hosts/lynxtron/README.md)
 
 Native hosts inject `device`, `demoApiUrl`, and `powersyncUrl` through Lynx
 `globalProps`. The Android emulator default is `http://10.0.2.2:8081` / `:8080`.
-iOS Simulator and web keep `http://127.0.0.1:8081` / `:8080`. Override via
-Info.plist / `strings.xml`, `simctl` argv/env, or `adb` extras — do not hard-code
-a laptop LAN IP.
+iOS Simulator, desktop hosts, and web keep `http://127.0.0.1:8081` / `:8080`.
+Override via Info.plist / `strings.xml`, CLI flags / env vars, `simctl`, or
+`adb` extras — do not hard-code a laptop LAN IP.
 
 ```bash
 # shared: bundle the ReactLynx app, then Autolink scan roots
@@ -193,9 +199,7 @@ pnpm --dir examples/hosts install
 Two-client: one native store + `http://localhost:4173/?device=web-b`, or two
 native launches with different `device` values. Filter pills stay local.
 
-**Streaming:** native hosts use **`NativePowerSyncModule.httpFetch`** (`streamingId` + GlobalEventEmitter `onData` before `onEnd`; idle-complete is fallback). LynxEnv `enable_fetch_api_standard_streaming` is still set so stock Fetch uses the standard stream path (LynxSDK 3.7+) — a prerequisite, not by itself proof of incremental `/sync/stream`. Abort of a live native stream is covered by [#36](https://github.com/countertek/powersync-lynx/pull/36) tests; do not treat in-app Go offline as that proof.
-
-**Desktop (Lynxtron macOS arm64):** Autolink `NativePowerSyncModule` SQLite + persistence are verified in [`hosts/lynxtron/README.md`](hosts/lynxtron/README.md); stock Lynxtron `0.0.31` `fetch` does not resolve callbacks or cancel native streams on `AbortSignal`, triggering Gate #73 (Desktop Native Module HTTP).
+**Streaming:** native mobile and desktop hosts use **`NativePowerSyncModule.httpFetch`** (`streamingId` + GlobalEventEmitter `onData` before `onEnd`; idle-complete is fallback). macOS uses `NSURLSession` and Windows uses `WinHTTP` (`shared/nativeModule/desktop_sync_http.*`), sharing `shared/sync_http_session.h`, `shared/utf8_hold.h`, and `shared/sync_http_policy.h`. Abort of a live native stream is verified in `make test` and headless desktop E2E (`examples/scripts/e2e-desktop-sync.mjs`).
 
 ## Lint / format
 
@@ -222,5 +226,5 @@ examples/
   showcase/                 ReactLynx TODO + Lynx-for-Web host
     src/                    Schema, Connector, UI, log drawer
     host/                   attach() page (Vite)
-  hosts/                    Autolink iOS, Android, and Lynxtron desktop apps
+  hosts/                    iOS, Android, macOS, Windows, and Lynxtron desktop apps
 ```

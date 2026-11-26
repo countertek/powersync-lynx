@@ -1,7 +1,7 @@
 # 07: macOS & Windows CI builds, native tests, and headless Windows E2E sync
 
 Type: task
-Status: ready-for-agent
+Status: resolved
 Blocked by: 04, 05, 06
 Spec: ../spec.md (#68)
 GitHub: #74

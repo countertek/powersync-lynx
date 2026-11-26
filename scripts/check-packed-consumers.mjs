@@ -9,7 +9,7 @@
  * a literal `import("@powersync/web")` for bundler resolution.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { cp, mkdtemp, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -22,6 +22,15 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const configsDir = path.join(root, "scripts/packed-consumers");
 const webPeer = "@powersync/web@2.7.0";
 const require = createRequire(import.meta.url);
+
+export const EXPECTED_DESKTOP_DIST_FILES = [
+  "dist/macos/arm64/powersync-lynx.node",
+  "dist/macos/arm64/libpowersync_aarch64.macos.dylib",
+  "dist/windows/x64/powersync-lynx.node",
+  "dist/windows/x64/powersync_x64.dll",
+];
+
+const ALLOWED_DIST_FILES = new Set(["dist/web-host/factory.js", ...EXPECTED_DESKTOP_DIST_FILES]);
 
 function pnpmArgs(args) {
   try {
@@ -67,6 +76,40 @@ function packTarball(dest) {
     throw new Error(`pnpm pack did not print a tarball path:\n${packed}`);
   }
   return path.isAbsolute(tarball) ? tarball : path.join(dest, path.basename(tarball));
+}
+
+function listTarballFiles(tarball) {
+  const listing = run("tar", ["-tzf", tarball], path.dirname(tarball));
+  return listing
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && line.endsWith("/") === false)
+    .map((line) => line.replace(/^\.\//, "").replace(/^package\//, ""));
+}
+
+export function assertTarballDistHygiene(packedFiles, options = {}) {
+  const { requireDesktopBinaries = false } = options;
+  const distFiles = packedFiles.filter((file) => file.startsWith("dist/"));
+
+  if (distFiles.includes("dist/web-host/factory.js") === false) {
+    throw new Error("published tarball is missing dist/web-host/factory.js");
+  }
+
+  const unexpected = distFiles.filter((file) => ALLOWED_DIST_FILES.has(file) === false);
+  if (unexpected.length > 0) {
+    throw new Error(
+      `published tarball contains unexpected dist/ files (disallowed architectures or residue): ${unexpected.join(", ")}`,
+    );
+  }
+
+  if (requireDesktopBinaries) {
+    const missing = EXPECTED_DESKTOP_DIST_FILES.filter((file) => distFiles.includes(file) === false);
+    if (missing.length > 0) {
+      throw new Error(
+        `published tarball is missing required desktop binaries: ${missing.join(", ")}`,
+      );
+    }
+  }
 }
 
 function writeConsumerPackage(dest, name) {
@@ -124,6 +167,17 @@ async function assertBundlerResolvesWebImport(attachPath) {
   if (text.includes("@powersync/web") === false) {
     throw new Error("bundling packed attach.ts dropped the literal @powersync/web import");
   }
+  for (const forbidden of [
+    "powersync-lynx.node",
+    "libpowersync_aarch64",
+    "powersync_x64.dll",
+  ]) {
+    if (text.includes(forbidden)) {
+      throw new Error(
+        `web consumer bundle unexpectedly leaked desktop binary reference: ${forbidden}`,
+      );
+    }
+  }
 }
 
 async function assertFactoryImportable(packageRoot) {
@@ -135,6 +189,19 @@ async function assertFactoryImportable(packageRoot) {
   if (factory.default instanceof Function === false) {
     throw new Error("factory.js default export is not a function");
   }
+}
+
+function assertLynxtronExportResolves(consumerDir, packageRoot) {
+  const consumerRequire = createRequire(path.join(consumerDir, "package.json"));
+  const resolved = consumerRequire.resolve("powersync-lynx/lynxtron");
+  const expected = path.join(packageRoot, "lynxtron/index.cjs");
+  if (existsSync(resolved) === false) {
+    throw new Error(`powersync-lynx/lynxtron resolved to missing file: ${resolved}`);
+  }
+  if (realpathSync(resolved) !== realpathSync(expected)) {
+    throw new Error(`powersync-lynx/lynxtron resolved to ${resolved}, expected ${expected}`);
+  }
+  run(process.execPath, ["--check", resolved], consumerDir);
 }
 
 async function installConsumer(dest, name, tarball, extraDeps) {
@@ -150,7 +217,9 @@ async function installConsumer(dest, name, tarball, extraDeps) {
   return path.join(dest, "node_modules/powersync-lynx");
 }
 
-export async function checkPackedConsumers() {
+export async function checkPackedConsumers(options = {}) {
+  const { requireDesktopBinaries = false } = options;
+
   if (existsSync(path.join(root, "dist/web-host/factory.js")) === false) {
     await bundleWebHostFactory();
   }
@@ -158,6 +227,9 @@ export async function checkPackedConsumers() {
   const work = await mkdtemp(path.join(tmpdir(), "ps-lynx-packed-"));
   try {
     const tarball = packTarball(work);
+    const packedFiles = listTarballFiles(tarball);
+    assertTarballDistHygiene(packedFiles, { requireDesktopBinaries });
+
     const nativeDir = path.join(work, "native");
     const webDir = path.join(work, "web");
 
@@ -169,6 +241,7 @@ export async function checkPackedConsumers() {
       throw new Error("packed-consumer check must not add @powersync/web to the library graph");
     }
     typecheckConsumer(nativeDir);
+    assertLynxtronExportResolves(nativeDir, nativePkg);
 
     const webPkg = await installConsumer(webDir, "web", tarball, [webPeer]);
     if (installedWebPeer(webDir) === false) {
@@ -193,6 +266,7 @@ export async function checkPackedConsumers() {
       tarball,
       nativeDir,
       webDir,
+      packedFiles,
     };
   } finally {
     await rm(work, { recursive: true, force: true });
@@ -202,9 +276,21 @@ export async function checkPackedConsumers() {
 const invoked =
   process.argv[1] != null && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (invoked) {
-  checkPackedConsumers()
+  let requireDesktopBinaries = false;
+  for (const arg of process.argv.slice(2)) {
+    if (arg === "--require-desktop-binaries") {
+      requireDesktopBinaries = true;
+    } else {
+      console.error(`Unknown argument: ${arg}. Expected optional --require-desktop-binaries`);
+      process.exit(1);
+    }
+  }
+
+  checkPackedConsumers({ requireDesktopBinaries })
     .then(() => {
-      console.log("packed-consumers: native and web typecheck passed");
+      console.log(
+        `packed-consumers: native and web typecheck, tarball dist/ hygiene${requireDesktopBinaries ? " (with desktop binaries)" : ""}, and lynxtron export passed`,
+      );
     })
     .catch((err) => {
       console.error(err instanceof Error ? err.message : err);
