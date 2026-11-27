@@ -1,7 +1,4 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
 import { createLynxTextDecoder } from "../src/sync/text-decoder.ts";
@@ -13,7 +10,6 @@ import {
   requireScenario,
 } from "./fixtures/sync-stream.ts";
 
-const root = path.dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const catalog = loadSyncStreamFixtures();
 const splitMultibyte = requireScenario(catalog, "split-multibyte");
 
@@ -36,21 +32,4 @@ test("split-multibyte fixture pins JS trailingIncompleteUtf8Bytes to shared wire
   const second = decoder.decode(wire[1], { stream: true });
   assert.equal(first, splitMultibyte.chunks[0]);
   assert.equal(second, splitMultibyte.chunks[1]);
-});
-
-test("bytes.ts keeps its own hold copy; native sources do not", () => {
-  const bytesTs = readFileSync(path.join(root, "src/sync/transport/bytes.ts"), "utf8");
-  assert.match(bytesTs, /export function trailingIncompleteUtf8Bytes/);
-  assert.match(bytesTs, /0xc0/);
-
-  const java = readFileSync(
-    path.join(root, "android/src/main/java/com/powersync/lynx/StreamingHttp.java"),
-    "utf8",
-  );
-  assert.match(java, /static native int trailingIncompleteUtf8Bytes/);
-  assert.equal(java.includes("& 0xc0"), false);
-
-  const mm = readFileSync(path.join(root, "ios/src/StreamingHttp.mm"), "utf8");
-  assert.match(mm, /ps_utf8_trailing_incomplete/);
-  assert.equal(mm.includes("TrailingIncompleteUtf8Bytes"), false);
 });

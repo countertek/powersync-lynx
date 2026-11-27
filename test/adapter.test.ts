@@ -1,12 +1,8 @@
-// @ts-nocheck
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { LynxDBAdapter } from "../src/adapter/LynxDBAdapter.ts";
 import {
-  blobToArrayBuffer,
-  nativeSql,
-  decodeCell,
-  encodeBindParams,
+  NativeModuleError,
   type BindValueRows,
   type BindValues,
   type NativeCallback,
@@ -14,21 +10,25 @@ import {
   type NativeWireEnvelope,
   type OpenPayload,
 } from "../src/adapter/native.ts";
-
-function isArrayBuffer(value: ArrayBuffer | Uint8Array | number[] | string | null): boolean {
-  return value instanceof ArrayBuffer;
-}
+import { withFakeLynxHost } from "./fake-lynx-host.ts";
 
 interface ExecuteRequest {
   dbId: string;
   sql: string;
-  params: BindValues | BindValueRows;
+  params: BindValues;
+}
+
+interface BatchRequest {
+  dbId: string;
+  sql: string;
+  params: BindValueRows;
 }
 
 interface NativeOverrides {
-  execute?: (request: ExecuteRequest) => NativeWireEnvelope;
-  executeBatch?: (request: ExecuteRequest) => NativeWireEnvelope;
   open?: NativePowerSyncModule["open"];
+  close?: NativePowerSyncModule["close"];
+  execute?: (request: ExecuteRequest) => NativeWireEnvelope;
+  executeBatch?: (request: BatchRequest) => NativeWireEnvelope;
 }
 
 interface OpenCall {
@@ -56,62 +56,41 @@ interface BatchCall {
   callback: boolean;
 }
 
-function requireNative(): NativePowerSyncModule {
-  const native = globalThis.NativeModules?.NativePowerSyncModule;
-  if (native == null) {
-    throw new Error("NativePowerSyncModule is not registered");
-  }
-  return native;
-}
-
-function installMockNative(overrides: NativeOverrides = {}) {
+function createFakeSqlModule(overrides: NativeOverrides = {}) {
   let nextId = 1;
   const opens: OpenCall[] = [];
   const executes: ExecuteCall[] = [];
   const batches: BatchCall[] = [];
   const closes: CloseCall[] = [];
-  const inFlightByDb = new Map<string, number>();
 
-  function trackStart(dbId: string) {
-    const n = (inFlightByDb.get(dbId) ?? 0) + 1;
-    inFlightByDb.set(dbId, n);
-    if (n > 1) {
-      overlappingSameDb += 1;
-    }
-  }
-
-  function trackEnd(dbId: string) {
-    inFlightByDb.set(dbId, (inFlightByDb.get(dbId) ?? 1) - 1);
-  }
-
-  let overlappingSameDb = 0;
-  let maxConcurrentOpens = 0;
-  let currentOpens = 0;
-
-  const native = {
+  const native: NativePowerSyncModule = {
     open(payload: OpenPayload, cb: NativeCallback) {
-      currentOpens += 1;
-      maxConcurrentOpens = Math.max(maxConcurrentOpens, currentOpens);
+      if (overrides.open != null) {
+        overrides.open(payload, cb);
+        return;
+      }
       const dbId = `db-${nextId++}`;
       opens.push({ payload, dbId, callback: cb instanceof Function });
       queueMicrotask(() => {
-        currentOpens -= 1;
         cb({ ok: true, dbId });
       });
+      // Native modules are callback-only; return a Promise-like value to prove it is ignored.
       return Promise.resolve("must-not-await-native-return");
     },
     close(dbId: string, cb: NativeCallback) {
       closes.push({ dbId, callback: cb instanceof Function });
+      if (overrides.close != null) {
+        overrides.close(dbId, cb);
+        return;
+      }
       queueMicrotask(() => cb({ ok: true }));
       return Promise.resolve("must-not-await-native-return");
     },
     execute(dbId: string, sql: string, params: BindValues, cb: NativeCallback) {
       assert.ok(cb instanceof Function);
-      trackStart(dbId);
       executes.push({ dbId, sql, params, callback: cb instanceof Function });
       queueMicrotask(() => {
-        trackEnd(dbId);
-        if (overrides.execute) {
+        if (overrides.execute != null) {
           cb(overrides.execute({ dbId, sql, params }));
           return;
         }
@@ -149,14 +128,14 @@ function installMockNative(overrides: NativeOverrides = {}) {
       assert.ok(cb instanceof Function);
       batches.push({ dbId, sql, params, callback: cb instanceof Function });
       queueMicrotask(() => {
-        if (overrides.executeBatch) {
+        if (overrides.executeBatch != null) {
           cb(overrides.executeBatch({ dbId, sql, params }));
           return;
         }
         cb({
           ok: true,
           insertId: 0,
-          rowsAffected: params?.length ?? 0,
+          rowsAffected: params.length,
           columnNames: [],
           rawRows: [],
         });
@@ -165,352 +144,371 @@ function installMockNative(overrides: NativeOverrides = {}) {
     },
   };
 
-  globalThis.NativeModules = { NativePowerSyncModule: native };
-  return {
-    opens,
-    executes,
-    batches,
-    closes,
-    stats: () => ({ overlappingSameDb, maxConcurrentOpens }),
-  };
+  return { native, opens, executes, batches, closes };
 }
 
-async function openAdapter() {
-  const mock = installMockNative();
-  const adapter = new LynxDBAdapter({ name: "app.db", dbLocation: "/tmp/ps" });
-  await adapter.initialized;
-  return { adapter, mock };
-}
-
-test("opens 1 write + 5 read connections per file and never loadExtension", async () => {
-  const { adapter, mock } = await openAdapter();
-  assert.equal(mock.opens.length, 6);
-  assert.equal(mock.opens.filter((o) => o.payload.readOnly === false).length, 1);
-  assert.equal(mock.opens.filter((o) => o.payload.readOnly === true).length, 5);
-  for (const open of mock.opens) {
-    assert.equal(open.payload.dbFilename, "app.db");
-    assert.equal(open.payload.dbLocation, "/tmp/ps");
-    assert.equal(open.callback, true);
-  }
-  const sql = mock.executes.map((e) => e.sql);
-  assert.ok(sql.some((s) => s.includes("PRAGMA busy_timeout = 30000")));
-  assert.ok(sql.some((s) => s.includes("PRAGMA cache_size = -51200")));
-  assert.ok(sql.some((s) => s.includes("PRAGMA temp_store = memory")));
-  const writeDb = mock.opens.find((o) => o.payload.readOnly === false).dbId;
-  const writeSql = mock.executes.filter((e) => e.dbId === writeDb).map((e) => e.sql);
-  assert.ok(writeSql.some((s) => s.includes("PRAGMA journal_mode = WAL")));
-  assert.ok(writeSql.some((s) => s.includes("PRAGMA journal_size_limit = 6291456")));
-  assert.ok(writeSql.some((s) => s.includes("PRAGMA synchronous = NORMAL")));
-  assert.ok(writeSql.some((s) => s.includes("powersync_update_hooks('install')")));
-  const readDb = mock.opens.find((o) => o.payload.readOnly === true).dbId;
-  const readSql = mock.executes.filter((e) => e.dbId === readDb).map((e) => e.sql);
-  assert.ok(!readSql.some((s) => s.includes("powersync_update_hooks('install')")));
-  assert.ok(!sql.some((s) => /loadExtension/i.test(s)));
-  assert.equal("loadExtension" in requireNative(), false);
-  await adapter.close();
-  assert.equal(mock.closes.length, 6);
-});
-
-test("Native Module methods are invoked with a callback and the return value is ignored", async () => {
-  installMockNative();
-  const envelope = await nativeSql.open({ dbFilename: "x.db", readOnly: true });
-  assert.equal(envelope.ok, true);
-  assert.match(envelope.dbId, /^db-/);
-});
-
-test("throws a JS Error when the envelope is { ok: false }", async () => {
-  installMockNative({
-    execute: () => ({ ok: false, message: "disk I/O error", code: 778 }),
+async function withAdapter(
+  overrides: NativeOverrides,
+  run: (ctx: {
+    adapter: LynxDBAdapter;
+    mock: ReturnType<typeof createFakeSqlModule>;
+  }) => Promise<void>,
+): Promise<void> {
+  const mock = createFakeSqlModule(overrides);
+  await withFakeLynxHost({ nativeModules: { NativePowerSyncModule: mock.native } }, async () => {
+    const adapter = new LynxDBAdapter({ name: "app.db", dbLocation: "/tmp/ps" });
+    await adapter.initialized;
+    await run({ adapter, mock });
   });
-  await assert.rejects(
-    () => nativeSql.execute("db-1", "SELECT 1", []),
-    (err) => {
-      assert.equal(err instanceof Error, true);
-      assert.equal(err.message, "disk I/O error");
-      assert.equal(err.code, 778);
-      return true;
+}
+
+test("opens 1 write + 5 read connections per file and never calls loadExtension", async () => {
+  await withAdapter({}, async ({ adapter, mock }) => {
+    assert.equal(mock.opens.length, 6);
+    assert.equal(mock.opens.filter((o) => o.payload.readOnly === false).length, 1);
+    assert.equal(mock.opens.filter((o) => o.payload.readOnly === true).length, 5);
+    for (const open of mock.opens) {
+      assert.equal(open.payload.dbFilename, "app.db");
+      assert.equal(open.payload.dbLocation, "/tmp/ps");
+      assert.equal(open.callback, true);
+    }
+    const sql = mock.executes.map((e) => e.sql);
+    assert.ok(sql.some((s) => s.includes("PRAGMA busy_timeout = 30000")));
+    assert.ok(sql.some((s) => s.includes("PRAGMA cache_size = -51200")));
+    assert.ok(sql.some((s) => s.includes("PRAGMA temp_store = memory")));
+    const writeDb = mock.opens.find((o) => o.payload.readOnly === false)?.dbId;
+    assert.ok(writeDb != null);
+    const writeSql = mock.executes.filter((e) => e.dbId === writeDb).map((e) => e.sql);
+    assert.ok(writeSql.some((s) => s.includes("PRAGMA journal_mode = WAL")));
+    assert.ok(writeSql.some((s) => s.includes("PRAGMA journal_size_limit = 6291456")));
+    assert.ok(writeSql.some((s) => s.includes("PRAGMA synchronous = NORMAL")));
+    assert.ok(writeSql.some((s) => s.includes("powersync_update_hooks('install')")));
+    const readDb = mock.opens.find((o) => o.payload.readOnly === true)?.dbId;
+    assert.ok(readDb != null);
+    const readSql = mock.executes.filter((e) => e.dbId === readDb).map((e) => e.sql);
+    assert.ok(!readSql.some((s) => s.includes("powersync_update_hooks('install')")));
+    assert.ok(!sql.some((s) => /loadExtension/i.test(s)));
+    assert.equal("loadExtension" in mock.native, false);
+    await adapter.close();
+    assert.equal(mock.closes.length, 6);
+  });
+});
+
+test("rejects with NativeModuleError when Native Module returns { ok: false, code }", async () => {
+  await withAdapter(
+    {
+      execute: ({ sql }) => {
+        if (sql.startsWith("SELECT fail")) {
+          return { ok: false, message: "disk I/O error", code: 778 };
+        }
+        if (sql.includes("powersync_update_hooks('get')")) {
+          return {
+            ok: true,
+            insertId: 0,
+            rowsAffected: 0,
+            columnNames: ["powersync_update_hooks"],
+            rawRows: [["[]"]],
+          };
+        }
+        return { ok: true, insertId: 0, rowsAffected: 0, columnNames: [], rawRows: [] };
+      },
+    },
+    async ({ adapter }) => {
+      await assert.rejects(
+        () => adapter.execute("SELECT fail"),
+        (err) => {
+          assert.ok(err instanceof NativeModuleError);
+          assert.equal(err.message, "disk I/O error");
+          assert.equal(err.code, 778);
+          return true;
+        },
+      );
+      await adapter.close();
     },
   );
 });
 
-test("nativeSql is four typed promise ops over the callback SQL RPC", async () => {
-  const mock = installMockNative();
-  const opened = await nativeSql.open({ dbFilename: "ops.db", readOnly: false });
-  assert.equal(opened.ok, true);
-  assert.match(opened.dbId, /^db-/);
-  assert.equal(mock.opens.length, 1);
-  assert.equal(mock.opens[0].callback, true);
+test("fails init when NativePowerSyncModule is not registered or open omits dbId", async () => {
+  await withFakeLynxHost({ nativeModules: {} }, async () => {
+    const adapter = new LynxDBAdapter({ name: "missing.db" });
+    await assert.rejects(() => adapter.initialized, {
+      message: "NativePowerSyncModule is not registered",
+    });
+  });
 
-  const executed = await nativeSql.execute(opened.dbId, "SELECT 1", []);
-  assert.equal(executed.ok, true);
-  assert.equal(mock.executes.length, 1);
-  assert.equal(mock.executes[0].callback, true);
-  assert.equal(mock.executes[0].sql, "SELECT 1");
-
-  const batched = await nativeSql.executeBatch(opened.dbId, "INSERT INTO t VALUES (?)", [[1], [2]]);
-  assert.equal(batched.ok, true);
-  assert.equal(batched.rowsAffected, 2);
-  assert.equal(mock.batches.length, 1);
-  assert.equal(mock.batches[0].callback, true);
-
-  const closed = await nativeSql.close(opened.dbId);
-  assert.equal(closed.ok, true);
-  assert.equal(mock.closes.length, 1);
-  assert.equal(mock.closes[0].dbId, opened.dbId);
-  assert.equal(mock.closes[0].callback, true);
-});
-
-test("nativeSql throws when NativePowerSyncModule is not registered", async () => {
-  globalThis.NativeModules = {};
-  await assert.rejects(() => nativeSql.open({ dbFilename: "missing.db", readOnly: true }), {
-    message: "NativePowerSyncModule is not registered",
+  const noDbId = createFakeSqlModule({
+    open(_payload, cb) {
+      queueMicrotask(() => cb({ ok: true }));
+    },
+  });
+  await withFakeLynxHost({ nativeModules: { NativePowerSyncModule: noDbId.native } }, async () => {
+    const adapter = new LynxDBAdapter({ name: "no-id.db" });
+    await assert.rejects(() => adapter.initialized, {
+      message: "NativePowerSyncModule.open did not return dbId",
+    });
   });
 });
 
-test("converts Uint8Array and number[] blobs to ArrayBuffer inbound and ArrayBuffer to Uint8Array outbound", () => {
-  const fromBytes = blobToArrayBuffer(new Uint8Array([1, 2, 3]));
-  const fromArray = blobToArrayBuffer([4, 5]);
-  assert.ok(isArrayBuffer(fromBytes));
-  assert.deepEqual([...new Uint8Array(fromBytes)], [1, 2, 3]);
-  assert.ok(isArrayBuffer(fromArray));
-  assert.deepEqual([...new Uint8Array(fromArray)], [4, 5]);
-  const encoded = encodeBindParams(["ok", 1n, new Uint8Array([9]), [7, 8], null]);
-  assert.equal(encoded[0], "ok");
-  assert.deepEqual(encoded[1], { __psBig: true, v: "1" });
-  assert.ok(isArrayBuffer(encoded[2]));
-  assert.ok(isArrayBuffer(encoded[3]));
-  assert.equal(encoded[4], null);
-  const out = decodeCell(Uint8Array.from([1, 2]).buffer);
-  assert.ok(out instanceof Uint8Array);
-  assert.deepEqual([...out], [1, 2]);
-  assert.equal(decodeCell({ __psBig: true, v: "9007199254740993" }), 9007199254740993n);
-  assert.equal(decodeCell("9007199254740993"), "9007199254740993");
-});
+test("encodes Uint8Array, number[], and BigInt inbound and decodes ArrayBuffer and tagged BigInt outbound", async () => {
+  interface RoundTripRow {
+    blob: Uint8Array;
+    big: bigint;
+    snowflake: string;
+  }
+  let sawInsertParams: BindValues = [];
+  await withAdapter(
+    {
+      execute: ({ sql, params }) => {
+        if (sql.includes("powersync_update_hooks('get')")) {
+          return {
+            ok: true,
+            insertId: 0,
+            rowsAffected: 0,
+            columnNames: ["powersync_update_hooks"],
+            rawRows: [["[]"]],
+          };
+        }
+        if (sql.startsWith("INSERT")) {
+          sawInsertParams = params;
+          const blobParam = params[0];
+          assert.ok(blobParam instanceof ArrayBuffer);
+          return {
+            ok: true,
+            insertId: 1,
+            rowsAffected: 1,
+            columnNames: ["blob", "big", "snowflake"],
+            rawRows: [[blobParam, { __psBig: true, v: "9007199254740993" }, "9007199254740993"]],
+          };
+        }
+        return { ok: true, insertId: 0, rowsAffected: 0, columnNames: [], rawRows: [] };
+      },
+    },
+    async ({ adapter }) => {
+      const result = await adapter.execute("INSERT INTO t VALUES (?, ?, ?, ?)", [
+        new Uint8Array([1, 2]),
+        [3, 4],
+        9007199254740993n,
+        null,
+      ]);
+      assert.ok(sawInsertParams[0] instanceof ArrayBuffer);
+      assert.deepEqual([...new Uint8Array(sawInsertParams[0])], [1, 2]);
+      assert.ok(sawInsertParams[1] instanceof ArrayBuffer);
+      assert.deepEqual([...new Uint8Array(sawInsertParams[1])], [3, 4]);
+      assert.deepEqual(sawInsertParams[2], { __psBig: true, v: "9007199254740993" });
+      assert.equal(sawInsertParams[3], null);
 
-test("execute sends ArrayBuffers and returns Uint8Array cells", async () => {
-  const { adapter, mock } = await openAdapter();
-  mock.executes.length = 0;
-  const original = globalThis.NativeModules.NativePowerSyncModule.execute;
-  globalThis.NativeModules.NativePowerSyncModule.execute = (dbId, sql, params, cb) => {
-    original(dbId, sql, params, (envelope) => {
-      if (sql.startsWith("INSERT")) {
-        assert.ok(params[0] instanceof ArrayBuffer);
-        assert.ok(params[1] instanceof ArrayBuffer);
-        cb({
-          ok: true,
-          insertId: 1,
-          rowsAffected: 1,
-          columnNames: ["blob"],
-          rawRows: [[params[0]]],
-        });
-        return;
-      }
-      cb(envelope);
-    });
-    return Promise.resolve("must-not-await-native-return");
-  };
-  const result = await adapter.execute("INSERT INTO t VALUES (?, ?)", [
-    new Uint8Array([1, 2]),
-    [3, 4],
-  ]);
-  assert.ok(result.rows.item(0).blob instanceof Uint8Array);
-  assert.deepEqual([...result.rows.item(0).blob], [1, 2]);
-  await adapter.close();
+      const first = result.rows?.item(0);
+      assert.ok(first != null);
+      // SAFETY: SELECT/INSERT row columns match the fake NativePowerSyncModule response schema above.
+      const row = first as RoundTripRow;
+      assert.ok(row.blob instanceof Uint8Array);
+      assert.deepEqual([...row.blob], [1, 2]);
+      assert.equal(row.big, 9007199254740993n);
+      assert.equal(row.snowflake, "9007199254740993");
+      await adapter.close();
+    },
+  );
 });
 
 test("writeLock serializes writers and notifies tablesUpdated from powersync_update_hooks get", async () => {
-  const { adapter } = await openAdapter();
-  const original = globalThis.NativeModules.NativePowerSyncModule.execute;
-  globalThis.NativeModules.NativePowerSyncModule.execute = (dbId, sql, params, cb) => {
-    if (sql.includes("powersync_update_hooks('get')")) {
-      queueMicrotask(() =>
-        cb({
-          ok: true,
-          insertId: 0,
-          rowsAffected: 0,
-          columnNames: ["powersync_update_hooks"],
-          rawRows: [['["lists"]']],
+  await withAdapter(
+    {
+      execute: ({ sql }) => {
+        if (sql.includes("powersync_update_hooks('get')")) {
+          return {
+            ok: true,
+            insertId: 0,
+            rowsAffected: 0,
+            columnNames: ["powersync_update_hooks"],
+            rawRows: [['["lists"]']],
+          };
+        }
+        return { ok: true, insertId: 0, rowsAffected: 0, columnNames: [], rawRows: [] };
+      },
+    },
+    async ({ adapter }) => {
+      const seen: string[][] = [];
+      adapter.registerListener({
+        tablesUpdated: (n) => seen.push(n.tables),
+      });
+
+      let writerCount = 0;
+      let maxWriters = 0;
+      await Promise.all([
+        adapter.writeLock(async () => {
+          writerCount += 1;
+          maxWriters = Math.max(maxWriters, writerCount);
+          await new Promise((r) => setTimeout(r, 20));
+          writerCount -= 1;
         }),
-      );
-      return Promise.resolve("must-not-await-native-return");
-    }
-    return original(dbId, sql, params, cb);
-  };
-
-  const seen = [];
-  adapter.registerListener({
-    tablesUpdated: (n) => seen.push(n.tables),
-  });
-
-  let writerCount = 0;
-  let maxWriters = 0;
-  await Promise.all([
-    adapter.writeLock(async () => {
-      writerCount += 1;
-      maxWriters = Math.max(maxWriters, writerCount);
-      await new Promise((r) => setTimeout(r, 20));
-      writerCount -= 1;
-    }),
-    adapter.writeLock(async () => {
-      writerCount += 1;
-      maxWriters = Math.max(maxWriters, writerCount);
-      writerCount -= 1;
-    }),
-  ]);
-  assert.equal(maxWriters, 1);
-  assert.deepEqual(seen, [["lists"], ["lists"]]);
-  await adapter.close();
+        adapter.writeLock(async () => {
+          writerCount += 1;
+          maxWriters = Math.max(maxWriters, writerCount);
+          writerCount -= 1;
+        }),
+      ]);
+      assert.equal(maxWriters, 1);
+      assert.deepEqual(seen, [["lists"], ["lists"]]);
+      await adapter.close();
+    },
+  );
 });
 
 test("readLock allows five concurrent readers and a sixth waits", async () => {
-  const { adapter } = await openAdapter();
-  let active = 0;
-  let maxActive = 0;
-  let sixthStarted = false;
-  const gate =
-    Promise.withResolvers instanceof Function
-      ? Promise.withResolvers()
-      : (() => {
-          let resolve;
-          const promise = new Promise((r) => (resolve = r));
-          return { promise, resolve };
-        })();
+  await withAdapter({}, async ({ adapter }) => {
+    let active = 0;
+    let maxActive = 0;
+    let sixthStarted = false;
+    let releaseGate = (): void => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseGate = resolve;
+    });
 
-  const readers = [];
-  for (let i = 0; i < 5; i++) {
-    readers.push(
-      adapter.readLock(async () => {
-        active += 1;
-        maxActive = Math.max(maxActive, active);
-        await gate.promise;
-        active -= 1;
-      }),
-    );
-  }
-  await new Promise((r) => setTimeout(r, 30));
-  const sixth = adapter.readLock(async () => {
-    sixthStarted = true;
-    active += 1;
-    maxActive = Math.max(maxActive, active);
-    active -= 1;
+    const readers: Promise<void>[] = [];
+    for (let i = 0; i < 5; i++) {
+      readers.push(
+        adapter.readLock(async () => {
+          active += 1;
+          maxActive = Math.max(maxActive, active);
+          await gate;
+          active -= 1;
+        }),
+      );
+    }
+    await new Promise((r) => setTimeout(r, 30));
+    const sixth = adapter.readLock(async () => {
+      sixthStarted = true;
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      active -= 1;
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(sixthStarted, false);
+    assert.equal(maxActive, 5);
+    releaseGate();
+    await Promise.all([...readers, sixth]);
+    assert.equal(sixthStarted, true);
+    assert.equal(maxActive, 5);
+    await adapter.close();
   });
-  await new Promise((r) => setTimeout(r, 30));
-  assert.equal(sixthStarted, false);
-  assert.equal(maxActive, 5);
-  gate.resolve();
-  await Promise.all([...readers, sixth]);
-  assert.equal(sixthStarted, true);
-  assert.equal(maxActive, 5);
-  await adapter.close();
 });
 
 test("closes opened dbIds when init fails after write open", async () => {
-  const mock = installMockNative({
+  const mock = createFakeSqlModule({
     execute: ({ sql }) => {
       if (sql.includes("powersync_update_hooks('install')")) {
         return { ok: false, message: "no such function: powersync_update_hooks" };
       }
-      return {
-        ok: true,
-        insertId: 0,
-        rowsAffected: 0,
-        columnNames: [],
-        rawRows: [],
-      };
+      return { ok: true, insertId: 0, rowsAffected: 0, columnNames: [], rawRows: [] };
     },
   });
-  const adapter = new LynxDBAdapter({ name: "app.db" });
-  await assert.rejects(() => adapter.initialized, /no such function: powersync_update_hooks/);
-  assert.equal(mock.opens.length, 1);
-  assert.deepEqual(
-    mock.closes.map((c) => c.dbId),
-    mock.opens.map((o) => o.dbId),
-  );
+  await withFakeLynxHost({ nativeModules: { NativePowerSyncModule: mock.native } }, async () => {
+    const adapter = new LynxDBAdapter({ name: "app.db" });
+    await assert.rejects(() => adapter.initialized, /no such function: powersync_update_hooks/);
+    assert.equal(mock.opens.length, 1);
+    assert.deepEqual(
+      mock.closes.map((c) => c.dbId),
+      mock.opens.map((o) => o.dbId),
+    );
+  });
 });
 
 test("closes already-opened dbIds when a later read open fails", async () => {
-  const mock = installMockNative();
-  const originalOpen = globalThis.NativeModules.NativePowerSyncModule.open;
-  globalThis.NativeModules.NativePowerSyncModule.open = (payload, cb) => {
-    if (payload.readOnly === true) {
-      queueMicrotask(() => cb({ ok: false, message: "unable to open database file" }));
-      return Promise.resolve("must-not-await-native-return");
-    }
-    return originalOpen(payload, cb);
-  };
-  const adapter = new LynxDBAdapter({ name: "app.db" });
-  await assert.rejects(() => adapter.initialized, /unable to open database file/);
-  assert.equal(mock.opens.length, 1);
-  assert.equal(mock.opens[0].payload.readOnly, false);
-  assert.deepEqual(
-    mock.closes.map((c) => c.dbId),
-    mock.opens.map((o) => o.dbId),
-  );
+  let nextId = 1;
+  const opens: OpenCall[] = [];
+  const mock = createFakeSqlModule({
+    open(payload, cb) {
+      if (payload.readOnly) {
+        queueMicrotask(() => cb({ ok: false, message: "unable to open database file" }));
+        return;
+      }
+      const dbId = `db-${nextId++}`;
+      opens.push({ payload, dbId, callback: cb instanceof Function });
+      queueMicrotask(() => cb({ ok: true, dbId }));
+    },
+  });
+  await withFakeLynxHost({ nativeModules: { NativePowerSyncModule: mock.native } }, async () => {
+    const adapter = new LynxDBAdapter({ name: "app.db" });
+    await assert.rejects(() => adapter.initialized, /unable to open database file/);
+    assert.equal(opens.length, 1);
+    assert.equal(opens[0]!.payload.readOnly, false);
+    assert.deepEqual(
+      mock.closes.map((c) => c.dbId),
+      opens.map((o) => o.dbId),
+    );
+  });
 });
 
-test("executeBatch returns QueryResult without rows", async () => {
-  const { adapter, mock } = await openAdapter();
-  const result = await adapter.executeBatch("INSERT INTO t VALUES (?)", [[1], [2]]);
-  assert.deepEqual(result.array, []);
-  assert.equal(result.rowsAffected, 2);
-  const iterated = [];
-  for (const row of result) {
-    iterated.push(row);
-  }
-  assert.deepEqual(iterated, []);
-  assert.equal(mock.batches.length, 1);
-  assert.equal(mock.batches[0].sql, "INSERT INTO t VALUES (?)");
-  await adapter.close();
+test("executeBatch encodes row params and returns QueryResult without rows", async () => {
+  await withAdapter({}, async ({ adapter, mock }) => {
+    const result = await adapter.executeBatch("INSERT INTO t VALUES (?, ?)", [
+      [1n, new Uint8Array([9])],
+      [2n, [7, 8]],
+    ]);
+    assert.deepEqual(result.rows?._array ?? [], []);
+    assert.equal(result.rowsAffected, 2);
+    assert.equal(mock.batches.length, 1);
+    assert.equal(mock.batches[0]!.sql, "INSERT INTO t VALUES (?, ?)");
+    assert.deepEqual(mock.batches[0]!.params[0]![0], { __psBig: true, v: "1" });
+    assert.ok(mock.batches[0]!.params[0]![1] instanceof ArrayBuffer);
+    assert.ok(mock.batches[0]!.params[1]![1] instanceof ArrayBuffer);
+    await adapter.close();
+  });
 });
 
 test("partial close retries only remaining native connections", async () => {
-  const { adapter, mock } = await openAdapter();
-  const writeDbId = mock.opens.find((open) => open.payload.readOnly === false).dbId;
-  const failReaderId = mock.opens.find((open) => open.payload.readOnly === true).dbId;
+  let failReaderId = "";
   let failReaderCloses = 0;
+  await withAdapter(
+    {
+      close(dbId, cb) {
+        queueMicrotask(() => {
+          if (dbId === failReaderId && failReaderCloses === 0) {
+            failReaderCloses += 1;
+            cb({ ok: false, message: "reader close failed" });
+            return;
+          }
+          cb({ ok: true });
+        });
+      },
+    },
+    async ({ adapter, mock }) => {
+      const writeDbId = mock.opens.find((open) => open.payload.readOnly === false)!.dbId;
+      failReaderId = mock.opens.find((open) => open.payload.readOnly === true)!.dbId;
 
-  globalThis.NativeModules.NativePowerSyncModule.close = (dbId, cb) => {
-    mock.closes.push({ dbId, callback: cb instanceof Function });
-    queueMicrotask(() => {
-      if (dbId === failReaderId && failReaderCloses === 0) {
-        failReaderCloses += 1;
-        cb({ ok: false, message: "reader close failed" });
-        return;
-      }
-      cb({ ok: true });
-    });
-    return Promise.resolve("must-not-await-native-return");
-  };
+      await assert.rejects(() => adapter.close(), /reader close failed/);
+      assert.equal(mock.closes.length, mock.opens.length);
+      assert.equal(mock.closes.filter((close) => close.dbId === writeDbId).length, 1);
+      assert.equal(mock.closes.filter((close) => close.dbId === failReaderId).length, 1);
 
-  await assert.rejects(() => adapter.close(), /reader close failed/);
-  assert.equal(mock.closes.length, mock.opens.length);
-  assert.equal(mock.closes.filter((close) => close.dbId === writeDbId).length, 1);
-  assert.equal(mock.closes.filter((close) => close.dbId === failReaderId).length, 1);
-
-  const afterFirst = mock.closes.length;
-  await adapter.close();
-  assert.deepEqual(
-    mock.closes.slice(afterFirst).map((close) => close.dbId),
-    [failReaderId],
+      const afterFirst = mock.closes.length;
+      await adapter.close();
+      assert.deepEqual(
+        mock.closes.slice(afterFirst).map((close) => close.dbId),
+        [failReaderId],
+      );
+    },
   );
 });
 
 test("close nulls connections so a second close cannot re-close dbIds", async () => {
-  const { adapter, mock } = await openAdapter();
-  await adapter.close();
-  assert.equal(mock.closes.length, 6);
-  await assert.rejects(() => adapter.close(), /not open/);
-  assert.equal(mock.closes.length, 6);
+  await withAdapter({}, async ({ adapter, mock }) => {
+    await adapter.close();
+    assert.equal(mock.closes.length, 6);
+    await assert.rejects(() => adapter.close(), /not open/);
+    assert.equal(mock.closes.length, 6);
+  });
 });
 
 test("BEGIN IMMEDIATE is issued in JS for writeTransaction", async () => {
-  const { adapter, mock } = await openAdapter();
-  mock.executes.length = 0;
-  await adapter.writeTransaction(async (tx) => {
-    await tx.execute("INSERT INTO t VALUES (1)");
+  await withAdapter({}, async ({ adapter, mock }) => {
+    mock.executes.length = 0;
+    await adapter.writeTransaction(async (tx) => {
+      await tx.execute("INSERT INTO t VALUES (1)");
+    });
+    const sql = mock.executes.map((e) => e.sql);
+    assert.ok(sql.includes("BEGIN IMMEDIATE"));
+    assert.ok(sql.includes("COMMIT"));
+    await adapter.close();
   });
-  const sql = mock.executes.map((e) => e.sql);
-  assert.ok(sql.includes("BEGIN IMMEDIATE"));
-  assert.ok(sql.includes("COMMIT"));
-  await adapter.close();
 });

@@ -17,7 +17,6 @@ import type {
 import { resetLynxHost } from "../src/host.ts";
 import { LynxRemote } from "../src/sync/LynxRemote.ts";
 import { LynxStreamingSyncImplementation } from "../src/sync/LynxStreamingSyncImplementation.ts";
-import { TabCoordinator } from "../src/tabs.ts";
 import { installFakeLynxHost } from "./fake-lynx-host.ts";
 import { FakeTabHub, type FakeTab } from "./fake-tabs.ts";
 import { silentLogger, stubConnector } from "./remote-harness.ts";
@@ -152,8 +151,7 @@ function browser(context: TestContext, multiTab: boolean): Browser {
       installFakeLynxHost({ nativeModules: { NativePowerSyncModule: database.native }, tabs });
       const firstConnection = database.opened.length;
       const openOptions = dbLocation == null ? { name: DATABASE } : { name: DATABASE, dbLocation };
-      const coordinator = new TabCoordinator(openOptions);
-      const adapter = new LynxDBAdapter(openOptions, coordinator);
+      const adapter = new LynxDBAdapter(openOptions);
       await adapter.initialized;
       const storage = new SqliteBucketStorage(adapter, logger);
       const sync = new StatusSync(
@@ -176,7 +174,7 @@ function browser(context: TestContext, multiTab: boolean): Browser {
           remote: new LynxRemote(stubConnector(), logger),
           serializedSchema: null,
         },
-        coordinator,
+        adapter.tabs,
       );
       const tab = {
         label,
@@ -476,28 +474,18 @@ test("databases with the same name and different dbLocations do not collide on t
   await crudA;
 });
 
-test("single-tab clients with the same name and different dbLocations do not collide in-process", async () => {
-  const options = {
-    adapter: new SqliteBucketStorage(new LynxDBAdapter({ name: "unopened.db" }), silentLogger),
-    subscriptions: [],
-    connector: { ...stubConnector(), uploadCrud: async () => {} },
-    identifier: "same-name.db",
-    logger: silentLogger,
-    remote: new LynxRemote(stubConnector(), silentLogger),
-    serializedSchema: null,
-  };
-  const first = new LynxStreamingSyncImplementation(
-    options,
-    new TabCoordinator({ name: "same-name.db", dbLocation: "/dir-a" }),
-  );
-  const second = new LynxStreamingSyncImplementation(
-    options,
-    new TabCoordinator({ name: "same-name.db", dbLocation: "/dir-b" }),
-  );
+test("single-tab clients serialize on the same fileKey and isolate different dbLocations", async (t) => {
+  const b = browser(t, false);
+  const first = await b.open("first", "/dir-a");
+  const sameFile = await b.open("same-file", "/dir-a");
+  const otherDir = await b.open("other-dir", "/dir-b");
+
   let finishFirst = (): void => {};
   let firstStarted = false;
-  let secondFinished = false;
-  const firstRuns = first.obtainLock({
+  let sameFileStarted = false;
+  let otherDirFinished = false;
+
+  const firstRuns = first.sync.obtainLock({
     type: LockType.SYNC,
     callback: () =>
       new Promise<void>((resolve) => {
@@ -507,14 +495,23 @@ test("single-tab clients with the same name and different dbLocations do not col
   });
   await until("first client acquired its sync lock", () => firstStarted);
 
-  await second.obtainLock({
+  const sameFileRuns = sameFile.sync.obtainLock({
     type: LockType.SYNC,
     callback: async () => {
-      secondFinished = true;
+      sameFileStarted = true;
     },
   });
-  assert.equal(secondFinished, true);
+
+  await otherDir.sync.obtainLock({
+    type: LockType.SYNC,
+    callback: async () => {
+      otherDirFinished = true;
+    },
+  });
+  assert.equal(otherDirFinished, true);
+  assert.equal(sameFileStarted, false);
 
   finishFirst();
-  await firstRuns;
+  await Promise.all([firstRuns, sameFileRuns]);
+  assert.equal(sameFileStarted, true);
 });

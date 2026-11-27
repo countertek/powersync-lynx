@@ -1,5 +1,5 @@
-#ifndef POWERSYNC_LYNX_DESKTOP_SYNC_HTTP_H_
-#define POWERSYNC_LYNX_DESKTOP_SYNC_HTTP_H_
+#ifndef POWERSYNC_LYNX_SYNC_HTTP_ENGINE_H_
+#define POWERSYNC_LYNX_SYNC_HTTP_ENGINE_H_
 
 #include <atomic>
 #include <cstddef>
@@ -15,7 +15,7 @@
 #include "sync_http_policy.h"
 #include "sync_http_session.h"
 
-namespace ps_desktop_http {
+namespace ps_sync_http {
 
 struct HttpRequest {
   std::string method;
@@ -47,20 +47,6 @@ struct StreamEvent {
 using EnvelopeCallback = std::function<void(HttpResponseEnvelope)>;
 using StreamEventSender = std::function<void(const StreamEvent&)>;
 
-/**
- * Incomplete UTF-8 carry buffer backed by shared/utf8_hold.h.
- * Holds trailing incomplete multi-byte sequences across chunk boundaries so
- * PrimJS only receives well-formed UTF-8 strings on GlobalEventEmitter.
- */
-class Utf8ChunkBuffer {
- public:
-  std::string Push(const uint8_t* data, size_t len);
-  std::string Flush();
-
- private:
-  std::vector<uint8_t> carry_;
-};
-
 std::string Base64Encode(const uint8_t* data, size_t len);
 
 HttpResponseEnvelope MakeFailEnvelope(const std::string& message);
@@ -86,19 +72,41 @@ class PlatformStreamTask {
   virtual void Cancel() = 0;
 };
 
-// Platform-specific HTTP backends (desktop_sync_http_macos.mm / desktop_sync_http_win.cc).
-std::shared_ptr<PlatformStreamTask> StartPlatformStreamingRequest(
-    const HttpRequest& request, PlatformStreamCallbacks callbacks);
-
-void StartPlatformIdleCompleteRequest(const HttpRequest& request,
-                                      bool is_sync_stream,
-                                      EnvelopeCallback callback);
-
-class DesktopSyncHttp {
+/**
+ * Internal transport seam for SyncHttpEngine.
+ *
+ * Production provides two real adapters: Apple NSURLSession (iOS + macOS in
+ * `apple_sync_http.mm`) and Windows WinHTTP (`win_sync_http.cc`). Tests may
+ * inject an in-memory adapter for deterministic race and lifecycle tests.
+ */
+class PlatformTransport {
  public:
-  DesktopSyncHttp() = default;
-  DesktopSyncHttp(const DesktopSyncHttp&) = delete;
-  DesktopSyncHttp& operator=(const DesktopSyncHttp&) = delete;
+  virtual ~PlatformTransport() = default;
+
+  virtual std::shared_ptr<PlatformStreamTask> StartStreaming(
+      const HttpRequest& request, PlatformStreamCallbacks callbacks) = 0;
+
+  virtual void StartIdleComplete(const HttpRequest& request,
+                                 bool is_sync_stream,
+                                 EnvelopeCallback callback) = 0;
+};
+
+std::shared_ptr<PlatformTransport> DefaultPlatformTransport();
+
+/**
+ * Deep Native Module HTTP engine shared by iOS, macOS, and Windows (ADR-0003).
+ *
+ * Owns active stream tracking, routing (`streamingId` vs idle-complete),
+ * `SyncHttpStreamSession` orchestration, and cancellation on `Shutdown()` /
+ * destruction without exposing raw `this` to async platform callbacks.
+ */
+class SyncHttpEngine {
+ public:
+  explicit SyncHttpEngine(std::shared_ptr<PlatformTransport> transport = nullptr);
+  ~SyncHttpEngine();
+
+  SyncHttpEngine(const SyncHttpEngine&) = delete;
+  SyncHttpEngine& operator=(const SyncHttpEngine&) = delete;
 
   void SetSharedStreamEventSender(StreamEventSender sender);
 
@@ -107,36 +115,17 @@ class DesktopSyncHttp {
 
   void Abort(const std::string& stream_id, std::function<void()> callback);
 
+  void Shutdown();
+
  private:
-  struct StreamHandle {
-    ps_sync_http_session session;
-    std::string stream_id;
-    EnvelopeCallback callback;
-    StreamEventSender sender;
-    std::mutex emit_mutex;
-    Utf8ChunkBuffer utf8_buf;
-    std::mutex task_mutex;
-    std::shared_ptr<PlatformStreamTask> task;
-    bool cancel_requested = false;
-  };
+  struct State;
+  struct StreamHandle;
 
-  void ApplyEffects(const std::shared_ptr<StreamHandle>& handle, int effects,
-                    int status, const std::string& status_text,
-                    const std::string& content_type, const std::string& data,
-                    const std::string& error);
-
-  StreamEventSender ResolveEventSender(StreamEventSender per_call_sender);
-
-  std::mutex shared_sender_mutex_;
-  StreamEventSender shared_sender_;
-
-  std::mutex active_streams_mutex_;
-  std::unordered_map<std::string, std::shared_ptr<StreamHandle>> active_streams_;
-  std::atomic<long> stream_counter_{0};
+  std::shared_ptr<State> state_;
 };
 
-DesktopSyncHttp& SharedDesktopSyncHttp();
+SyncHttpEngine& SharedSyncHttpEngine();
 
-}  // namespace ps_desktop_http
+}  // namespace ps_sync_http
 
-#endif  // POWERSYNC_LYNX_DESKTOP_SYNC_HTTP_H_
+#endif  // POWERSYNC_LYNX_SYNC_HTTP_ENGINE_H_

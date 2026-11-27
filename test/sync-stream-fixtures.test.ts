@@ -7,7 +7,6 @@ import type {
   NativeHttpFetchEnvelope,
   NativeHttpFetchRequest,
 } from "../src/sync/transport/http-types.ts";
-import { responseFromNativeHttpEnvelope } from "../src/sync/transport/NativeHttpFetch.ts";
 import type { LynxStreamEventPayload } from "../src/globals.ts";
 import {
   joinedFixtureBody,
@@ -192,11 +191,6 @@ test("fixture idle-complete envelope is UTF-8 body without streamingId", async (
     bodyBase64: Buffer.from(ndjson, "utf8").toString("base64"),
     idleComplete: true,
   };
-  const mapped = responseFromNativeHttpEnvelope(envelope);
-  assert.equal(mapped.ok, true);
-  assert.equal(mapped.status, 200);
-  assert.equal(mapped.headers.get("content-type"), catalog.contentType);
-
   await withFakeLynxHost(
     {
       platform: "Android",
@@ -218,6 +212,8 @@ test("fixture idle-complete envelope is UTF-8 body without streamingId", async (
         expectStreamingResponse: true,
       });
       assert.equal(response.ok, true);
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get("content-type"), catalog.contentType);
       const parts = await readUtf8Chunks(response.body!.getReader());
       assert.equal(parts.join(""), ndjson);
     },

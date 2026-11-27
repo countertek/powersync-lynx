@@ -67,15 +67,16 @@ if(DEFINED POWERSYNC_LYNX_INCLUDE_DIRS AND POWERSYNC_LYNX_INCLUDE_DIRS)
 endif()
 
 set(_ps_http_sources
-  nativeModule/desktop_sync_http.cc
+  sync_http/sync_http_session.cc
+  sync_http/sync_http_engine.cc
 )
 if(APPLE)
-  list(APPEND _ps_http_sources nativeModule/desktop_sync_http_macos.mm)
-  set_source_files_properties(nativeModule/desktop_sync_http_macos.mm PROPERTIES
+  list(APPEND _ps_http_sources sync_http/apple_sync_http.mm)
+  set_source_files_properties(sync_http/apple_sync_http.mm PROPERTIES
     COMPILE_OPTIONS "-fobjc-arc"
   )
 elseif(WIN32)
-  list(APPEND _ps_http_sources nativeModule/desktop_sync_http_win.cc)
+  list(APPEND _ps_http_sources sync_http/win_sync_http.cc)
 endif()
 
 # Native CMake LynxView embedder library (no lynxtron/library_entry.cc, no native-vendor/).
@@ -98,6 +99,7 @@ target_include_directories(powersync_lynx_native
     "${CMAKE_CURRENT_LIST_DIR}/nativeModule"
   PRIVATE
     "${CMAKE_CURRENT_LIST_DIR}"
+    "${CMAKE_CURRENT_LIST_DIR}/sync_http"
 )
 if(_ps_native_includes)
   target_include_directories(powersync_lynx_native PRIVATE ${_ps_native_includes})
@@ -208,6 +210,7 @@ if(POWERSYNC_BUILD_LYNXTRON_NAPI)
   target_include_directories(powersync_lynx_napi PRIVATE
     "${CMAKE_CURRENT_LIST_DIR}"
     "${CMAKE_CURRENT_LIST_DIR}/nativeModule"
+    "${CMAKE_CURRENT_LIST_DIR}/sync_http"
     "${_ps_lynx_headers_root}/include"
   )
   if(EXISTS "${_ps_lynx_headers_root}/include/third_party/weak-node-api/headers")
@@ -288,29 +291,29 @@ if(POWERSYNC_BUILD_TESTS AND EXISTS "${CMAKE_CURRENT_LIST_DIR}/tests/ps_sql_test
     target_compile_options(ps_sql_test PRIVATE /utf-8)
   endif()
 
-  add_executable(desktop_sync_http_test
-    tests/desktop_sync_http_test.cc
+  add_executable(sync_http_engine_test
+    tests/sync_http_engine_test.cc
     ${_ps_http_sources}
   )
-  target_include_directories(desktop_sync_http_test PRIVATE
+  target_include_directories(sync_http_engine_test PRIVATE
     "${CMAKE_CURRENT_LIST_DIR}"
-    "${CMAKE_CURRENT_LIST_DIR}/nativeModule"
+    "${CMAKE_CURRENT_LIST_DIR}/sync_http"
     "${CMAKE_CURRENT_LIST_DIR}/tests"
   )
-  target_compile_definitions(desktop_sync_http_test PRIVATE
+  target_compile_definitions(sync_http_engine_test PRIVATE
     PS_SYNC_STREAM_FIXTURES_PATH="${_ps_fixtures_json}"
   )
   if(APPLE)
-    target_link_libraries(desktop_sync_http_test PRIVATE "-framework Foundation")
+    target_link_libraries(sync_http_engine_test PRIVATE "-framework Foundation")
   elseif(WIN32)
-    target_compile_definitions(desktop_sync_http_test PRIVATE NOMINMAX)
-    target_link_libraries(desktop_sync_http_test PRIVATE winhttp ws2_32)
+    target_compile_definitions(sync_http_engine_test PRIVATE NOMINMAX)
+    target_link_libraries(sync_http_engine_test PRIVATE winhttp ws2_32)
   endif()
   if(UNIX)
-    target_link_libraries(desktop_sync_http_test PRIVATE pthread)
+    target_link_libraries(sync_http_engine_test PRIVATE pthread)
   endif()
   if(MSVC)
-    target_compile_options(desktop_sync_http_test PRIVATE /utf-8)
+    target_compile_options(sync_http_engine_test PRIVATE /utf-8)
   endif()
 
   add_executable(sync_stream_fixtures_test tests/sync_stream_fixtures_test.cc)
@@ -332,40 +335,21 @@ if(POWERSYNC_BUILD_TESTS AND EXISTS "${CMAKE_CURRENT_LIST_DIR}/tests/ps_sql_test
     target_compile_options(sync_stream_fixtures_test PRIVATE /utf-8)
   endif()
 
-  add_executable(utf8_hold_test tests/utf8_hold_test.cc)
-  target_include_directories(utf8_hold_test PRIVATE "${CMAKE_CURRENT_LIST_DIR}")
-  target_compile_definitions(utf8_hold_test PRIVATE
-    PS_SYNC_STREAM_FIXTURES_PATH="${_ps_fixtures_json}"
-    PS_ANDROID_STREAMING_HTTP_JAVA="${_ps_android_java_dir}/StreamingHttp.java"
-    PS_IOS_STREAMING_HTTP_MM="${POWERSYNC_LYNX_ROOT}/ios/src/StreamingHttp.mm"
-    PS_ANDROID_UTF8_HOLD_JNI="${POWERSYNC_LYNX_ROOT}/android/src/main/cpp/utf8_hold_jni.cc"
-    PS_DESKTOP_SYNC_HTTP_CC="${CMAKE_CURRENT_LIST_DIR}/nativeModule/desktop_sync_http.cc"
+  add_executable(sync_http_session_test
+    tests/sync_http_session_test.cc
+    sync_http/sync_http_session.cc
   )
-  if(MSVC)
-    target_compile_options(utf8_hold_test PRIVATE /utf-8)
-  endif()
-
-  add_executable(sync_http_session_test tests/sync_http_session_test.cc)
-  target_include_directories(sync_http_session_test PRIVATE "${CMAKE_CURRENT_LIST_DIR}")
+  target_include_directories(sync_http_session_test PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}"
+    "${CMAKE_CURRENT_LIST_DIR}/sync_http"
+  )
   target_compile_definitions(sync_http_session_test PRIVATE
-    PS_ANDROID_NATIVE_SYNC_HTTP_JAVA="${_ps_android_java_dir}/NativeSyncHttp.java"
-    PS_ANDROID_SYNC_HTTP_SESSION_JAVA="${_ps_android_java_dir}/SyncHttpSession.java"
-    PS_IOS_NATIVE_SYNC_HTTP_MM="${POWERSYNC_LYNX_ROOT}/ios/src/NativeSyncHttp.mm"
-    PS_ANDROID_SESSION_JNI="${POWERSYNC_LYNX_ROOT}/android/src/main/cpp/sync_http_session_jni.cc"
-    PS_DESKTOP_NATIVE_MODULE_CC="${CMAKE_CURRENT_LIST_DIR}/nativeModule/NativePowerSyncModule.cc"
-    PS_DESKTOP_SYNC_HTTP_CC="${CMAKE_CURRENT_LIST_DIR}/nativeModule/desktop_sync_http.cc"
+    PS_SYNC_STREAM_FIXTURES_PATH="${_ps_fixtures_json}"
   )
+  if(UNIX)
+    target_link_libraries(sync_http_session_test PRIVATE pthread)
+  endif()
   if(MSVC)
     target_compile_options(sync_http_session_test PRIVATE /utf-8)
-  endif()
-
-  add_executable(sync_http_policy_android_test tests/sync_http_policy_android_test.cc)
-  target_include_directories(sync_http_policy_android_test PRIVATE "${CMAKE_CURRENT_LIST_DIR}")
-  target_compile_definitions(sync_http_policy_android_test PRIVATE
-    PS_SYNC_HTTP_POLICY_H_PATH="${CMAKE_CURRENT_LIST_DIR}/sync_http_policy.h"
-    PS_ANDROID_JAVA_DIR="${_ps_android_java_dir}"
-  )
-  if(MSVC)
-    target_compile_options(sync_http_policy_android_test PRIVATE /utf-8)
   endif()
 endif()

@@ -12,15 +12,11 @@ import type { CreateSyncImplementationOptions } from "@powersync/shared-internal
 import { LynxDBAdapter } from "./adapter/LynxDBAdapter.ts";
 import { LynxRemote } from "./sync/LynxRemote.ts";
 import { LynxStreamingSyncImplementation } from "./sync/LynxStreamingSyncImplementation.ts";
-import { TabCoordinator } from "./tabs.ts";
 
 export type LynxPowerSyncDatabaseOptions = BasePowerSyncDatabaseOptions &
   DatabaseSource<SQLOpenOptions>;
 
 class LynxPowerSyncDatabase extends BasePowerSyncDatabase<LynxPowerSyncDatabaseOptions> {
-  // Assigned in `openDBAdapter()`, which `super(options)` calls before subclass field initializers.
-  declare private tabs: TabCoordinator | undefined;
-
   constructor(options: LynxPowerSyncDatabaseOptions) {
     super(options);
   }
@@ -28,15 +24,14 @@ class LynxPowerSyncDatabase extends BasePowerSyncDatabase<LynxPowerSyncDatabaseO
   protected async _initialize(): Promise<void> {}
 
   protected openDBAdapter() {
-    return openDatabase(this.options, (database) => {
-      const openOptions = {
-        name: database.dbFilename,
-        dbLocation: database.dbLocation,
-      };
-      const tabs = new TabCoordinator(openOptions);
-      this.tabs = tabs;
-      return new LynxDBAdapter(openOptions, tabs);
-    });
+    return openDatabase(
+      this.options,
+      (database) =>
+        new LynxDBAdapter({
+          name: database.dbFilename,
+          dbLocation: database.dbLocation,
+        }),
+    );
   }
 
   protected generateSyncStreamImplementation(
@@ -44,12 +39,13 @@ class LynxPowerSyncDatabase extends BasePowerSyncDatabase<LynxPowerSyncDatabaseO
     options: CreateSyncImplementationOptions,
   ) {
     const remote = new LynxRemote(connector, this.logger);
+    const tabs = this.database instanceof LynxDBAdapter ? this.database.tabs : undefined;
     return new LynxStreamingSyncImplementation(
       {
         ...this.commonSyncOptions(connector, options),
         remote,
       },
-      this.tabs,
+      tabs,
     );
   }
 

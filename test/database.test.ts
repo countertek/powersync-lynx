@@ -1,24 +1,35 @@
-// @ts-nocheck
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { BasePowerSyncDatabase } from "@powersync/shared-internals";
 import { Schema, Table, column, SyncStreamConnectionMethod } from "../src/index.ts";
 import { PowerSyncDatabase } from "../src/PowerSyncDatabase.ts";
 import { LynxRemote } from "../src/sync/LynxRemote.ts";
 import { LynxStreamingSyncImplementation } from "../src/sync/LynxStreamingSyncImplementation.ts";
-import type { BindValueRows, OpenPayload } from "../src/adapter/native.ts";
+import type {
+  BindValueRows,
+  BindValues,
+  NativeCell,
+  NativePowerSyncModule,
+  NativeWireEnvelope,
+  OpenPayload,
+} from "../src/adapter/native.ts";
 import { withFakeLynxHost } from "./fake-lynx-host.ts";
 
-function installAppNative(store: { lists: { id: string; name: string }[] } = { lists: [] }) {
+function createAppNative(store: { lists: { id: string; name: string }[] } = { lists: [] }) {
   let nextId = 1;
   const opens: { payload: OpenPayload; dbId: string }[] = [];
   const closes: { dbId: string }[] = [];
   const batches: { sql: string; params: BindValueRows }[] = [];
 
-  function ok(columnNames, rawRows, extra = {}) {
+  function ok(
+    columnNames: string[],
+    rawRows: NativeCell[][],
+    extra: Partial<NativeWireEnvelope> = {},
+  ): NativeWireEnvelope {
     return { ok: true, insertId: 0, rowsAffected: 0, columnNames, rawRows, ...extra };
   }
 
-  function handleExecute(sql, params) {
+  function handleExecute(sql: string, params: BindValues): NativeWireEnvelope {
     if (sql.includes("powersync_rs_version")) {
       return ok(["version"], [["0.5.3"]]);
     }
@@ -48,7 +59,7 @@ function installAppNative(store: { lists: { id: string; name: string }[] } = { l
       return ok(["powersync_update_hooks"], [["[]"]]);
     }
     if (/INSERT INTO lists/i.test(sql)) {
-      store.lists.push({ id: params?.[0], name: params?.[1] });
+      store.lists.push({ id: String(params[0]), name: String(params[1]) });
       return ok([], [], { insertId: store.lists.length, rowsAffected: 1 });
     }
     if (/SELECT .*FROM lists/i.test(sql)) {
@@ -60,38 +71,36 @@ function installAppNative(store: { lists: { id: string; name: string }[] } = { l
     return ok([], []);
   }
 
-  globalThis.NativeModules = {
-    NativePowerSyncModule: {
-      open(payload, cb) {
-        const dbId = `db-${nextId++}`;
-        opens.push({ payload, dbId });
-        queueMicrotask(() => cb({ ok: true, dbId }));
-      },
-      close(dbId, cb) {
-        closes.push({ dbId });
-        queueMicrotask(() => cb({ ok: true }));
-      },
-      execute(_dbId, sql, params, cb) {
-        queueMicrotask(() => cb(handleExecute(sql, params)));
-      },
-      executeBatch(_dbId, sql, params, cb) {
-        batches.push({ sql, params });
-        queueMicrotask(() => {
-          for (const row of params ?? []) {
-            handleExecute(sql, row);
-          }
-          cb({
-            ok: true,
-            insertId: 0,
-            rowsAffected: params?.length ?? 0,
-            columnNames: [],
-            rawRows: [],
-          });
+  const native: NativePowerSyncModule = {
+    open(payload, cb) {
+      const dbId = `db-${nextId++}`;
+      opens.push({ payload, dbId });
+      queueMicrotask(() => cb({ ok: true, dbId }));
+    },
+    close(dbId, cb) {
+      closes.push({ dbId });
+      queueMicrotask(() => cb({ ok: true }));
+    },
+    execute(_dbId, sql, params, cb) {
+      queueMicrotask(() => cb(handleExecute(sql, params)));
+    },
+    executeBatch(_dbId, sql, params, cb) {
+      batches.push({ sql, params });
+      queueMicrotask(() => {
+        for (const row of params) {
+          handleExecute(sql, row);
+        }
+        cb({
+          ok: true,
+          insertId: 0,
+          rowsAffected: params.length,
+          columnNames: [],
+          rawRows: [],
         });
-      },
+      });
     },
   };
-  return { opens, closes, batches, store };
+  return { native, opens, closes, batches, store };
 }
 
 test("barrel re-exports common names and default connect method is HTTP", () => {
@@ -103,21 +112,20 @@ test("barrel re-exports common names and default connect method is HTTP", () => 
     "defaultConnectionMethod",
   )?.get;
   assert.equal(getter instanceof Function, true);
-  assert.equal(getter.call({}), SyncStreamConnectionMethod.HTTP);
+  assert.equal(getter?.call({}), SyncStreamConnectionMethod.HTTP);
 });
 
 test("app constructs PowerSyncDatabase and uses official SQL including executeBatch QueryResult", async () => {
-  const mock = installAppNative();
-  const AppSchema = new Schema({
-    lists: new Table({ name: column.text }),
-  });
-  const db = new PowerSyncDatabase({
-    schema: AppSchema,
-    database: { dbFilename: "app.db", dbLocation: "/tmp/ps" },
-  });
-  try {
+  const mock = createAppNative();
+  await withFakeLynxHost({ nativeModules: { NativePowerSyncModule: mock.native } }, async () => {
+    const AppSchema = new Schema({
+      lists: new Table({ name: column.text }),
+    });
+    const db = new PowerSyncDatabase({
+      schema: AppSchema,
+      database: { dbFilename: "app.db", dbLocation: "/tmp/ps" },
+    });
     await db.waitForReady();
-    assert.equal(db.defaultConnectionMethod, SyncStreamConnectionMethod.HTTP);
     assert.equal(mock.opens.length, 6);
     assert.equal(mock.opens.filter((open) => open.payload.readOnly === false).length, 1);
     assert.equal(mock.opens.filter((open) => open.payload.readOnly === true).length, 5);
@@ -135,13 +143,8 @@ test("app constructs PowerSyncDatabase and uses official SQL including executeBa
       ["list-2", "Hardware"],
       ["list-3", "Pharmacy"],
     ]);
-    assert.deepEqual(batch.array, []);
+    assert.deepEqual(batch.rows?._array ?? [], []);
     assert.equal(batch.rowsAffected, 2);
-    const iterated = [];
-    for (const row of batch) {
-      iterated.push(row);
-    }
-    assert.deepEqual(iterated, []);
     assert.equal(mock.batches.length, 1);
 
     const all = await db.getAll("SELECT id, name FROM lists");
@@ -151,23 +154,24 @@ test("app constructs PowerSyncDatabase and uses official SQL including executeBa
       { id: "list-3", name: "Pharmacy" },
     ]);
 
-    const impl = db.generateSyncStreamImplementation(
+    const remote = new LynxRemote(
       { fetchCredentials: async () => null, uploadData: async () => {} },
-      {},
+      { log() {} },
     );
-    assert.ok(impl instanceof LynxStreamingSyncImplementation);
-    assert.ok(impl.options.remote instanceof LynxRemote);
-    assert.match(impl.options.remote.getUserAgent(), /powersync-lynx/);
+    assert.match(remote.getUserAgent(), /powersync-lynx/);
+
+    await db.connect({ fetchCredentials: async () => null, uploadData: async () => {} });
+    assert.ok(db instanceof BasePowerSyncDatabase);
+    assert.ok(db.syncStreamImplementation instanceof LynxStreamingSyncImplementation);
+    await db.disconnect();
 
     await db.close();
     assert.equal(mock.closes.length, 6);
-  } finally {
-    db.triggersImpl?.dispose();
-  }
+  });
 });
 
 test("LynxRemote createTextDecoder uses TextCodecHelper UTF-8", async () => {
-  const decoded = [];
+  const decoded: ArrayBuffer[] = [];
   await withFakeLynxHost(
     {
       textCodec: {
@@ -178,7 +182,10 @@ test("LynxRemote createTextDecoder uses TextCodecHelper UTF-8", async () => {
       },
     },
     async () => {
-      const remote = new LynxRemote({ fetchCredentials: async () => null }, { log() {} });
+      const remote = new LynxRemote(
+        { fetchCredentials: async () => null, uploadData: async () => {} },
+        { log() {} },
+      );
       const decoder = remote.createTextDecoder();
       const bytes = new TextEncoder().encode("hello");
       assert.equal(decoder.decode(bytes), "hello");

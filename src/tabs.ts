@@ -1,9 +1,13 @@
-import { LockType } from "@powersync/shared-internals";
+import { LockType, Mutex } from "@powersync/shared-internals";
 import type { CoreSyncStatus, LockOptions } from "@powersync/shared-internals";
 
 /**
- * Cross-tab primitives and coordinator for a database the web Host helper shares
- * between tabs (`enableMultiTabs`). Native hosts and single-tab web opens never use them.
+ * Sync lock and cross-tab coordinator for one database file (`${name}:${dbLocation ?? ""}`).
+ *
+ * When the web Host helper shares a database across tabs (`multiTab: true`), coordinates
+ * table notifications, sync leases, CRUD locks, and follower/leader status relay over
+ * `navigator.locks` and `BroadcastChannel`. On native hosts and single-tab web opens,
+ * serializes SYNC and CRUD locks in-process per database file key.
  */
 
 export interface TabLocks {
@@ -56,8 +60,13 @@ export function browserTabPrimitives(): TabPrimitives | undefined {
 }
 
 export interface TabDatabaseKey {
-  name: string;
+  name?: string;
   dbLocation?: string;
+}
+
+export interface TabCoordinatorOptions {
+  /** Wait for `adapterReady` / `adapterFailed` before deciding cross-tab vs local locking. */
+  waitForAdapter?: boolean;
 }
 
 export interface TableChange {
@@ -116,6 +125,24 @@ interface ActiveTabSync {
   shownConnecting: boolean;
 }
 
+const LOCAL_LOCKS = new Map<string, Map<LockType, Mutex>>();
+
+function createLocalLocks(): Map<LockType, Mutex> {
+  return new Map<LockType, Mutex>([
+    [LockType.CRUD, new Mutex()],
+    [LockType.SYNC, new Mutex()],
+  ]);
+}
+
+function localLocksFor(fileKey: string): Map<LockType, Mutex> {
+  let locks = LOCAL_LOCKS.get(fileKey);
+  if (locks == null) {
+    locks = createLocalLocks();
+    LOCAL_LOCKS.set(fileKey, locks);
+  }
+  return locks;
+}
+
 function toTabError(error: Error | undefined): TabError | null {
   return error == null ? null : { name: error.name, message: error.message };
 }
@@ -130,45 +157,57 @@ function fromTabError(error: TabError | null): Error | undefined {
 }
 
 /**
- * Coordinates cross-tab table notifications, sync leases, CRUD locks, and follower/leader
- * status relay for one database file (`${name}:${dbLocation ?? ""}`).
+ * Owns sync/CRUD lock acquisition (both in-process mutexes and web multi-tab leases),
+ * cross-tab table change notifications, and follower/leader status relay for one
+ * database file (`${name}:${dbLocation ?? ""}`).
  */
 export class TabCoordinator {
   readonly fileKey: string;
   private readonly tablesChannelName: string;
   private readonly syncLockName: string;
   private readonly crudLockName: string;
-  private sharedWithTabs = false;
+  private readonly localLocks: Map<LockType, Mutex>;
   private closed = false;
-  private ready: Promise<TabPrimitives | undefined> | null = null;
+  private ready: Promise<TabPrimitives | undefined>;
+  private settleReady: ((tabs: TabPrimitives | undefined) => void) | null = null;
   private tableChanges: TabChannel<TableChange> | null = null;
   private tabSync: ActiveTabSync | null = null;
 
-  constructor(database: TabDatabaseKey) {
-    this.fileKey = `${database.name}:${database.dbLocation ?? ""}`;
+  constructor(database: TabDatabaseKey, options?: TabCoordinatorOptions) {
+    const name = database.name ?? "";
+    this.fileKey = `${name}:${database.dbLocation ?? ""}`;
     this.tablesChannelName = `powersync-lynx:tables:${this.fileKey}`;
     this.syncLockName = `powersync-lynx:sync:${this.fileKey}`;
     this.crudLockName = `powersync-lynx:crud:${this.fileKey}`;
-  }
-
-  /** Marks this database file as shared with other tabs (web `enableMultiTabs`). */
-  markShared(): void {
-    this.sharedWithTabs = true;
+    this.localLocks = name.length > 0 ? localLocksFor(this.fileKey) : createLocalLocks();
+    if (options?.waitForAdapter === true) {
+      this.ready = new Promise<TabPrimitives | undefined>((resolve) => {
+        this.settleReady = resolve;
+      });
+    } else {
+      this.ready = Promise.resolve(undefined);
+    }
   }
 
   /**
-   * Connects the Adapter lifecycle to this coordinator so cross-tab channels and locks
-   * activate once `initialized` settles and the host confirms `multiTab: true`.
+   * Called once by the Adapter at the end of `init()` once all connections are open.
+   * Activates cross-tab channels and locks iff the host reported `multiTab: true`.
    */
-  attachAdapter(
-    initialized: Promise<void>,
-    resolveTabs: () => TabPrimitives | undefined,
+  adapterReady(
+    shared: boolean,
+    tabs: TabPrimitives | undefined,
     onTableChange: (change: TableChange) => void,
   ): void {
-    this.ready = initialized.then(
-      () => this.activateTables(resolveTabs, onTableChange),
-      () => undefined,
-    );
+    const activeTabs = !this.closed && shared && tabs != null ? tabs : undefined;
+    if (activeTabs != null) {
+      this.tableChanges = activeTabs.channel<TableChange>(this.tablesChannelName, onTableChange);
+    }
+    this.finishReady(activeTabs);
+  }
+
+  /** Called by the Adapter if `init()` fails before opening completes. */
+  adapterFailed(): void {
+    this.finishReady(undefined);
   }
 
   postTableChange(change: TableChange): void {
@@ -177,26 +216,23 @@ export class TabCoordinator {
 
   closeTables(): void {
     this.closed = true;
+    this.finishReady(undefined);
     this.tableChanges?.close();
     this.tableChanges = null;
   }
 
   /**
    * Acquires a cross-tab sync lease or CRUD lock when this file is shared across tabs,
-   * otherwise delegates to `fallback` (in-process mutexes).
+   * otherwise acquires the per-file in-process mutex.
    *
    * Only the client holding the sync lease downloads and uploads; the others wait
    * for it and show its status. A waiting tab's writes reach the syncing tab as a
    * cross-tab `ps_crud` table change, which triggers the upload there.
    */
-  async obtainLock<T>(
-    client: TabSyncClient,
-    lockOptions: LockOptions<T>,
-    fallback: () => Promise<T>,
-  ): Promise<T> {
+  async obtainLock<T>(client: TabSyncClient, lockOptions: LockOptions<T>): Promise<T> {
     const tabs = await this.resolvePrimitives();
     if (tabs == null) {
-      return fallback();
+      return this.runLocalLock(lockOptions);
     }
     const tabSync = this.joinSync(tabs, client);
     const { signal, callback } = lockOptions;
@@ -243,23 +279,22 @@ export class TabCoordinator {
     this.tabSync = null;
   }
 
-  private activateTables(
-    resolveTabs: () => TabPrimitives | undefined,
-    onTableChange: (change: TableChange) => void,
-  ): TabPrimitives | undefined {
-    if (this.closed || !this.sharedWithTabs) {
-      return undefined;
+  private finishReady(tabs: TabPrimitives | undefined): void {
+    const settle = this.settleReady;
+    this.settleReady = null;
+    settle?.(tabs);
+  }
+
+  private runLocalLock<T>(lockOptions: LockOptions<T>): Promise<T> {
+    const lock = this.localLocks.get(lockOptions.type);
+    if (lock == null) {
+      throw new Error(`Lock type ${lockOptions.type} not found`);
     }
-    const tabs = resolveTabs();
-    if (tabs == null) {
-      return undefined;
-    }
-    this.tableChanges = tabs.channel<TableChange>(this.tablesChannelName, onTableChange);
-    return tabs;
+    return lock.runExclusive(async () => lockOptions.callback(), lockOptions.signal);
   }
 
   private async resolvePrimitives(): Promise<TabPrimitives | undefined> {
-    if (this.closed || this.ready == null) {
+    if (this.closed) {
       return undefined;
     }
     const tabs = await this.ready;

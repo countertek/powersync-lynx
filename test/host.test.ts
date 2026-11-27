@@ -56,7 +56,8 @@ test("PrimJS adapter reads NativeModules, platform, text codec, and fetch from g
     assert.equal(host.fetchImpl(), fetchImpl);
     assert.equal(host.globalEventEmitters().includes(emitter), true);
     const opened = await nativeSql.open({ dbFilename: "host.db", readOnly: false });
-    assert.equal(opened.ok, true);
+    assert.equal(opened.dbId, "test");
+    assert.equal(opened.multiTab, false);
   } finally {
     globalThis.NativeModules = previousModules;
     globalThis.SystemInfo = previousInfo;
@@ -136,6 +137,43 @@ test("hostIsIOS matches iOS case-insensitively and rejects desktop platforms", (
   assert.equal(hostIsIOS(new FakeLynxHost({ platform: "macOS" })), false);
   assert.equal(hostIsIOS(new FakeLynxHost({ platform: "Windows" })), false);
   assert.equal(hostIsIOS(new FakeLynxHost({ platform: "Android" })), false);
+});
+
+test("PrimJSLynxHost.globalEventEmitters publishes __psLynxGlobalEventEmitter non-enumerably while FakeLynxHost does not", () => {
+  const previousLynx = globalThis.lynx;
+  const previousPublished = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "__psLynxGlobalEventEmitter",
+  );
+  try {
+    Reflect.deleteProperty(globalThis, "__psLynxGlobalEventEmitter");
+    const { emitter: fakeEmitter } = createFakeEmitter();
+    const fakeHost = new FakeLynxHost({ emitter: fakeEmitter });
+    assert.deepEqual(fakeHost.globalEventEmitters(), [fakeEmitter]);
+    assert.equal(
+      Object.getOwnPropertyDescriptor(globalThis, "__psLynxGlobalEventEmitter"),
+      undefined,
+    );
+
+    const { emitter: primEmitter } = createFakeEmitter();
+    globalThis.lynx = {
+      getJSModule(name: string) {
+        return name === "GlobalEventEmitter" ? primEmitter : undefined;
+      },
+    };
+    const primHost = new PrimJSLynxHost();
+    assert.deepEqual(primHost.globalEventEmitters(), [primEmitter]);
+    const desc = Object.getOwnPropertyDescriptor(globalThis, "__psLynxGlobalEventEmitter");
+    assert.equal(desc?.value, primEmitter);
+    assert.equal(desc?.enumerable, false);
+  } finally {
+    globalThis.lynx = previousLynx;
+    if (previousPublished == null) {
+      Reflect.deleteProperty(globalThis, "__psLynxGlobalEventEmitter");
+    } else {
+      Object.defineProperty(globalThis, "__psLynxGlobalEventEmitter", previousPublished);
+    }
+  }
 });
 
 test("installAbortControllerPolyfill replaces broken splice-during-emit AbortController and preserves native Node AbortController", () => {

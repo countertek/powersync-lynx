@@ -16,10 +16,6 @@ export function copyToArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return copy.buffer as ArrayBuffer;
 }
 
-export interface CodedFailure {
-  readonly code?: number | string;
-}
-
 export function isNumberArray(value: unknown): value is number[] {
   return Array.isArray(value) && value.every(isNumber);
 }
@@ -48,13 +44,6 @@ export function decodeTaggedBigInt<T>(value: T): bigint | undefined {
   } catch {
     throw new Error("invalid tagged bigint");
   }
-}
-
-export function errorCode(err: CodedFailure | Error): number | undefined {
-  if (!("code" in err)) {
-    return undefined;
-  }
-  return isNumber(err.code) ? err.code : undefined;
 }
 
 export function failEnvelopeFromError(cause: unknown): NativeFailEnvelope {
