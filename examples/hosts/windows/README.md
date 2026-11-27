@@ -98,7 +98,8 @@ Example automated smoke run (for CI / headless E2E):
   `LynxHttpService` (`include/lynx_http_service.h`) is buffered-only with no
   incremental chunk callback or cancel hook. `powersync_lynx_native` now
   exposes `httpFetch` / `httpFetchAbort` backed by `WinHTTP`
-  (`shared/nativeModule/desktop_sync_http_win.cc`), sharing
-  `shared/sync_http_session.h`, `shared/utf8_hold.h`, and
+  (`shared/sync_http/win_sync_http.cc`), sharing
+  `shared/sync_http/sync_http_engine.{h,cc}`,
+  `shared/sync_http/sync_http_session.{h,cc}`, and
   `shared/sync_http_policy.h` with zero host wiring required. Native Windows
-  `x64` CI build and headless E2E sync verification run in Ticket #74.
+  `x64` CI build and headless E2E sync verification run in `.github/workflows/ci.yml`.

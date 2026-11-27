@@ -162,7 +162,7 @@ export async function createMockPowerSyncStack() {
       stream.res.write(diffLine);
       if (splitMultibyte) {
         // Split a 3-byte UTF-8 euro (€ = 0xE2 0x82 0xAC) across two TCP writes
-        // to verify native shared/utf8_hold.h reassembly over live streams.
+        // to verify native shared/sync_http/sync_http_session.{h,cc} reassembly over live streams.
         const raw = Buffer.from(dataLine, "utf8");
         const euroIdx = raw.indexOf(Buffer.from([0xe2, 0x82, 0xac]));
         if (euroIdx > 0) {
