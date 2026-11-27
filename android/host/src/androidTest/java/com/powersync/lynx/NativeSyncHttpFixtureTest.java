@@ -37,7 +37,7 @@ public class NativeSyncHttpFixtureTest {
   @Test
   public void sharedNdjsonFixturesDriveHttpFetch() throws Exception {
     Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
-    JSONObject catalog = loadCatalog(context);
+    JSONObject catalog = loadCatalog();
     JSONObject checkpoint = scenario(catalog, "checkpoint-ops");
     JSONObject idle = scenario(catalog, "idle-complete");
     JSONObject split = scenario(catalog, "split-multibyte");
@@ -143,7 +143,7 @@ public class NativeSyncHttpFixtureTest {
   @Test
   public void abortAfterHeadersEmitsErrorThenEnd() throws Exception {
     Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
-    JSONObject catalog = loadCatalog(context);
+    JSONObject catalog = loadCatalog();
     JSONObject checkpoint = scenario(catalog, "checkpoint-ops");
     String contentType = catalog.getString("contentType");
     String first = checkpoint.getJSONArray("chunks").getString(0);
@@ -177,7 +177,7 @@ public class NativeSyncHttpFixtureTest {
   @Test
   public void errorThenEndAfterFirstChunk() throws Exception {
     Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
-    JSONObject catalog = loadCatalog(context);
+    JSONObject catalog = loadCatalog();
     JSONObject errored = scenario(catalog, "error-then-end");
     String contentType = catalog.getString("contentType");
     String first = errored.getJSONArray("chunks").getString(0);
@@ -214,8 +214,9 @@ public class NativeSyncHttpFixtureTest {
         what + ": idleComplete is false");
   }
 
-  private static JSONObject loadCatalog(Context context) throws Exception {
-    try (InputStream in = context.getAssets().open("sync-stream.json")) {
+  private static JSONObject loadCatalog() throws Exception {
+    Context testContext = InstrumentationRegistry.getInstrumentation().getContext();
+    try (InputStream in = testContext.getAssets().open("sync-stream.json")) {
       ByteArrayOutputStream out = new ByteArrayOutputStream();
       byte[] buf = new byte[4096];
       int n;

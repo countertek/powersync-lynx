@@ -23,7 +23,9 @@ final class PsSqlEngine {
     if (loaded) {
       return;
     }
-    System.loadLibrary("powersync");
+    // libpowersync_lynx_sql.so declares DT_NEEDED on both libdl.so and
+    // libpowersync.so via Prefab so bionic resolves libpowersync.so's dlsym
+    // reference even under strict targetSdk >= 36 linker rules.
     System.loadLibrary("powersync_lynx_sql");
     File so = new File(context.getApplicationInfo().nativeLibraryDir, "libpowersync.so");
     String path = so.isFile() ? so.getAbsolutePath() : "libpowersync.so";
