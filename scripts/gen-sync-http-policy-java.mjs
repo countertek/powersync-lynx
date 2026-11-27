@@ -91,11 +91,11 @@ function parseLiteral(raw) {
 export function parseHeaderMacros(source) {
   const macros = new Map();
   for (const line of stripComments(source).split(/\r?\n/)) {
-    const match = /^\s*#define\s+(PS_SYNC_HTTP_[A-Z0-9_]+)\s+(\S+)\s*$/.exec(line);
+    const match = /^\s*#define\s+(PS_SYNC_HTTP_[A-Z0-9_]+)\s+(.+?)\s*$/.exec(line);
     if (match === null) {
       continue;
     }
-    macros.set(match[1].slice(MACRO_PREFIX.length), parseLiteral(match[2]));
+    macros.set(match[1].slice(MACRO_PREFIX.length), parseLiteral(match[2].trim()));
   }
   if (macros.size === 0) {
     throw new Error('no PS_SYNC_HTTP_ object macros in header');

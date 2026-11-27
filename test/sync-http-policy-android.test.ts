@@ -8,7 +8,7 @@ import { test } from "node:test";
 
 const root = path.dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const javaDir = path.join(root, "android/src/main/java/com/powersync/lynx");
-const consumers = ["IdleCompleteHttp.java", "StreamingHttp.java", "NativeSyncHttp.java"];
+const consumers = ["HttpUrlConnectionTransport.java", "NativeSyncHttp.java"];
 
 test("C header and Android SyncHttpPolicy.java stay equal", () => {
   const out = execFileSync("node", ["scripts/gen-sync-http-policy-java.mjs", "--check"], {

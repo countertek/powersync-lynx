@@ -14,6 +14,7 @@ set(SQLITE_DIR "${POWERSYNC_LYNX_ROOT}/third_party/sqlite")
 set(SHARED_DIR "${POWERSYNC_LYNX_ROOT}/shared")
 
 add_library(powersync_lynx_sql SHARED
+  jni_runtime.cc
   ps_sql_jni.cc
   sync_http_session_jni.cc
   "${SHARED_DIR}/ps_sql.cc"

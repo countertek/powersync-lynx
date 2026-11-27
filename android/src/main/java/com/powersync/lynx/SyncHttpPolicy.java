@@ -16,6 +16,11 @@ final class SyncHttpPolicy {
   static final String EVENT_ON_DATA = "onData";
   static final String EVENT_ON_ERROR = "onError";
   static final String EVENT_ON_END = "onEnd";
+  static final long ROUTE_IDLE = 0L;
+  static final long ROUTE_STREAMING = 1L;
+  static final long FAIL_STATUS = -1L;
+  static final String FAIL_MESSAGE_DEFAULT = "httpFetch stream failed";
+  static final String ABORT_MESSAGE = "aborted";
 
   private SyncHttpPolicy() {}
 }

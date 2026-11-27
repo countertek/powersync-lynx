@@ -54,6 +54,10 @@ android {
       assets.srcDirs += ["../../shared/fixtures"]
     }
   }
+
+  testOptions {
+    unitTests.returnDefaultValues = true
+  }
 }
 
 tasks.register("fetchSqliteAmalgamation", Exec) {
@@ -74,6 +78,7 @@ afterEvaluate {
 dependencies {
   implementation "com.powersync:powersync-sqlite-core:0.5.3"
   implementation "androidx.annotation:annotation:1.9.1"
+  testImplementation "junit:junit:4.13.2"
   androidTestImplementation "androidx.test.ext:junit:1.2.1"
   androidTestImplementation "androidx.test:runner:1.6.2"
 }

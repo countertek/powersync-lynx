@@ -62,6 +62,7 @@ PNPM ?= $(shell \
 	fi)
 
 JNI_CFLAGS := -I$(JAVA_HOME)/include -I$(JAVA_HOME)/include/$(JNI_OS_INCLUDE)
+JNI_RUNTIME_OBJ := shared/build/jni_runtime.o
 JNI_OBJ := shared/build/ps_sql_jni.o
 JNI_SESSION_OBJ := shared/build/sync_http_session_jni.o
 POD_ENGINE_OBJ := shared/build/ps_sql_engine_pod.o
@@ -143,7 +144,7 @@ $(ENGINE_TEST_BIN): shared/tests/sync_http_engine_test.cc \
 
 test: deps $(TEST_BIN) $(FIXTURE_TEST_BIN) $(SESSION_TEST_BIN) $(ENGINE_TEST_BIN) \
 		$(DESKTOP_NAPI_TEST_ADDON) \
-		$(JNI_OBJ) $(JNI_SESSION_OBJ) $(POD_ENGINE_OBJ) $(POD_SYNC_HTTP_SESSION_OBJ) $(POD_SYNC_HTTP_ENGINE_OBJ)
+		$(JNI_RUNTIME_OBJ) $(JNI_OBJ) $(JNI_SESSION_OBJ) $(POD_ENGINE_OBJ) $(POD_SYNC_HTTP_SESSION_OBJ) $(POD_SYNC_HTTP_ENGINE_OBJ)
 	@! grep -n 'UIApplication.sharedApplication.windows' ios/src/NativeSyncHttp.mm
 	@! grep -n 'findLynxViewIn' ios/src/NativeSyncHttp.mm
 	POWERSYNC_CORE_PATH="$(CURDIR)/$(CORE_DYLIB)" $(TEST_BIN)
@@ -156,11 +157,15 @@ test: deps $(TEST_BIN) $(FIXTURE_TEST_BIN) $(SESSION_TEST_BIN) $(ENGINE_TEST_BIN
 		node shared/tests/desktop_napi_test.mjs
 	node scripts/gen-sync-http-policy-java.mjs --check
 
-$(JNI_OBJ): android/src/main/cpp/ps_sql_jni.cc shared/ps_sql.h
+$(JNI_RUNTIME_OBJ): android/src/main/cpp/jni_runtime.cc android/src/main/cpp/jni_runtime.h
+	mkdir -p shared/build
+	$(CXX) $(CXXFLAGS) $(JNI_CFLAGS) -c android/src/main/cpp/jni_runtime.cc -o $@
+
+$(JNI_OBJ): android/src/main/cpp/ps_sql_jni.cc android/src/main/cpp/jni_runtime.h shared/ps_sql.h
 	mkdir -p shared/build
 	$(CXX) $(CXXFLAGS) $(SQLITE_FLAGS) $(JNI_CFLAGS) -c android/src/main/cpp/ps_sql_jni.cc -o $@
 
-$(JNI_SESSION_OBJ): android/src/main/cpp/sync_http_session_jni.cc \
+$(JNI_SESSION_OBJ): android/src/main/cpp/sync_http_session_jni.cc android/src/main/cpp/jni_runtime.h \
 		shared/sync_http/sync_http_session.h shared/sync_http_policy.h
 	mkdir -p shared/build
 	$(CXX) $(CXXFLAGS) -Ishared/sync_http $(JNI_CFLAGS) -c android/src/main/cpp/sync_http_session_jni.cc -o $@
