@@ -1,3 +1,4 @@
+#include "jni_runtime.h"
 #include "ps_sql.h"
 
 #include <jni.h>
@@ -10,7 +11,10 @@
 
 namespace {
 
-JavaVM* g_vm = nullptr;
+using ps_jni::GlobalClass;
+using ps_jni::JStringToUtf8;
+using ps_jni::Utf8ToJString;
+
 std::mutex g_engine_mu;
 ps_sql::Engine* g_engine = nullptr;
 
@@ -30,35 +34,26 @@ jmethodID g_double_value = nullptr;
 jmethodID g_to_writable = nullptr;
 jmethodID g_callback_invoke = nullptr;
 
-jclass GlobalClass(JNIEnv* env, const char* name) {
-  jclass local = env->FindClass(name);
-  if (local == nullptr) {
-    return nullptr;
-  }
-  jclass global = static_cast<jclass>(env->NewGlobalRef(local));
-  env->DeleteLocalRef(local);
-  return global;
-}
-
 JNIEnv* AttachEnv(bool* attached) {
   *attached = false;
-  if (g_vm == nullptr) {
+  JavaVM* vm = ps_jni::GetJavaVm();
+  if (vm == nullptr) {
     return nullptr;
   }
   JNIEnv* env = nullptr;
-  const jint rc = g_vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6);
+  const jint rc = vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6);
   if (rc == JNI_OK) {
     return env;
   }
   // Android NDK jni.h: AttachCurrentThread(JNIEnv**, void*).
   // Desktop/OpenJDK jni.h: AttachCurrentThread(void**, void*).
 #if defined(__ANDROID__)
-  if (g_vm->AttachCurrentThread(&env, nullptr) != JNI_OK) {
+  if (vm->AttachCurrentThread(&env, nullptr) != JNI_OK) {
     return nullptr;
   }
 #else
   void* raw = env;
-  if (g_vm->AttachCurrentThread(&raw, nullptr) != JNI_OK) {
+  if (vm->AttachCurrentThread(&raw, nullptr) != JNI_OK) {
     return nullptr;
   }
   env = static_cast<JNIEnv*>(raw);
@@ -68,101 +63,10 @@ JNIEnv* AttachEnv(bool* attached) {
 }
 
 void DetachIfNeeded(bool attached) {
-  if (attached && g_vm != nullptr) {
-    g_vm->DetachCurrentThread();
+  JavaVM* vm = ps_jni::GetJavaVm();
+  if (attached && vm != nullptr) {
+    vm->DetachCurrentThread();
   }
-}
-
-std::string JStringToUtf8(JNIEnv* env, jstring value) {
-  if (value == nullptr) {
-    return {};
-  }
-  const jsize n = env->GetStringLength(value);
-  if (n <= 0) {
-    return {};
-  }
-  const jchar* chars = env->GetStringChars(value, nullptr);
-  if (chars == nullptr) {
-    return {};
-  }
-  std::string out;
-  out.reserve(static_cast<std::size_t>(n));
-  for (jsize i = 0; i < n;) {
-    std::uint32_t cp = chars[i++];
-    if (cp >= 0xD800 && cp <= 0xDBFF && i < n) {
-      const std::uint32_t low = chars[i];
-      if (low >= 0xDC00 && low <= 0xDFFF) {
-        cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
-        ++i;
-      }
-    }
-    if (cp < 0x80) {
-      out.push_back(static_cast<char>(cp));
-    } else if (cp < 0x800) {
-      out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
-      out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-    } else if (cp < 0x10000) {
-      out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
-      out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
-      out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-    } else {
-      out.push_back(static_cast<char>(0xF0 | (cp >> 18)));
-      out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
-      out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
-      out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-    }
-  }
-  env->ReleaseStringChars(value, chars);
-  return out;
-}
-
-jstring Utf8ToJString(JNIEnv* env, const std::string& utf8) {
-  std::vector<jchar> utf16;
-  utf16.reserve(utf8.size());
-  for (std::size_t i = 0; i < utf8.size();) {
-    const unsigned char c = static_cast<unsigned char>(utf8[i]);
-    std::uint32_t cp = 0;
-    std::size_t need = 0;
-    if (c < 0x80) {
-      cp = c;
-      need = 1;
-    } else if ((c >> 5) == 0x6) {
-      cp = c & 0x1F;
-      need = 2;
-    } else if ((c >> 4) == 0xE) {
-      cp = c & 0x0F;
-      need = 3;
-    } else if ((c >> 3) == 0x1E) {
-      cp = c & 0x07;
-      need = 4;
-    } else {
-      cp = 0xFFFD;
-      need = 1;
-    }
-    if (i + need > utf8.size()) {
-      break;
-    }
-    for (std::size_t k = 1; k < need; ++k) {
-      const unsigned char cont = static_cast<unsigned char>(utf8[i + k]);
-      if ((cont >> 6) != 0x2) {
-        cp = 0xFFFD;
-        break;
-      }
-      cp = (cp << 6) | (cont & 0x3F);
-    }
-    i += need;
-    if (cp >= 0x10000) {
-      cp -= 0x10000;
-      utf16.push_back(static_cast<jchar>(0xD800 + (cp >> 10)));
-      utf16.push_back(static_cast<jchar>(0xDC00 + (cp & 0x3FF)));
-    } else {
-      utf16.push_back(static_cast<jchar>(cp));
-    }
-  }
-  if (utf16.empty()) {
-    return env->NewString(nullptr, 0);
-  }
-  return env->NewString(utf16.data(), static_cast<jsize>(utf16.size()));
 }
 
 bool ParseBind(JNIEnv* env, jobject value, ps_sql::BindValue* out, std::string* error) {
@@ -349,12 +253,9 @@ ps_sql::Engine* SharedEngine(std::string* error) {
 
 }  // namespace
 
-extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
-  g_vm = vm;
-  JNIEnv* env = nullptr;
-  if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK) {
-    return JNI_ERR;
-  }
+namespace ps_jni {
+
+bool InitPsSqlJni(JNIEnv* env) {
   g_long_cls = GlobalClass(env, "java/lang/Long");
   g_int_cls = GlobalClass(env, "java/lang/Integer");
   g_double_cls = GlobalClass(env, "java/lang/Double");
@@ -367,7 +268,7 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
       g_string_cls == nullptr || g_object_cls == nullptr ||
       g_object_arr_cls == nullptr || g_byte_arr_cls == nullptr ||
       g_engine_cls == nullptr) {
-    return JNI_ERR;
+    return false;
   }
   g_long_value_of =
       env->GetStaticMethodID(g_long_cls, "valueOf", "(J)Ljava/lang/Long;");
@@ -381,19 +282,18 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
       "(ZLjava/lang/String;ZILjava/lang/String;JJ[Ljava/lang/String;[[Ljava/lang/Object;)Lcom/lynx/react/bridge/WritableMap;");
   jclass callback_cls = GlobalClass(env, "com/lynx/react/bridge/Callback");
   if (callback_cls == nullptr) {
-    return JNI_ERR;
+    return false;
   }
   g_callback_invoke =
       env->GetMethodID(callback_cls, "invoke", "([Ljava/lang/Object;)V");
   env->DeleteGlobalRef(callback_cls);
-  if (g_long_value_of == nullptr || g_long_value == nullptr ||
-      g_int_value == nullptr || g_double_value_of == nullptr ||
-      g_double_value == nullptr || g_to_writable == nullptr ||
-      g_callback_invoke == nullptr) {
-    return JNI_ERR;
-  }
-  return JNI_VERSION_1_6;
+  return g_long_value_of != nullptr && g_long_value != nullptr &&
+         g_int_value != nullptr && g_double_value_of != nullptr &&
+         g_double_value != nullptr && g_to_writable != nullptr &&
+         g_callback_invoke != nullptr;
 }
+
+}  // namespace ps_jni
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_powersync_lynx_PsSqlEngine_nativeInit(JNIEnv* env, jclass,

@@ -8,7 +8,7 @@ import type { SyncStreamRequest, SyncStreamTransport } from "./SyncStreamTranspo
 export type { LynxFetchModule, LynxFetchRequest, LynxFetchSuccessPayload } from "./http-types.ts";
 
 function lynxFetchModule(): LynxFetchModule | undefined {
-  return getLynxHost().nativeModules()?.LynxFetchModule;
+  return getLynxHost().lynxFetchModule();
 }
 
 export function lynxFetchModuleAvailable(): boolean {
@@ -27,8 +27,7 @@ function unwrapLynxSuccess(result: LynxFetchSuccessPayload): LynxFetchSuccessPay
   return first as LynxFetchSuccessPayload;
 }
 
-/** LynxFetchModule success payload → finished JSON Response. This adapter never streams. */
-export function responseFromLynxFetchSuccess(result: LynxFetchSuccessPayload) {
+function responseFromLynxFetchSuccess(result: LynxFetchSuccessPayload): Response {
   const payload = unwrapLynxSuccess(result);
   return syncStreamResponse({
     status: Number(payload.status ?? 0),
@@ -38,10 +37,20 @@ export function responseFromLynxFetchSuccess(result: LynxFetchSuccessPayload) {
   });
 }
 
+function abortError(): Error {
+  const error = new Error("Aborted");
+  error.name = "AbortError";
+  return error;
+}
+
 function fetchViaLynxModule(request: SyncStreamRequest): Promise<Response> {
   const native = lynxFetchModule();
   if (native == null) {
     throw new Error("LynxFetchModule is not registered");
+  }
+  const signal = request.signal;
+  if (signal != null && signal.aborted) {
+    return Promise.reject(abortError());
   }
   const payload: LynxFetchRequest = {
     method: request.method,
@@ -52,17 +61,51 @@ function fetchViaLynxModule(request: SyncStreamRequest): Promise<Response> {
     payload.body = encodeUtf8(request.body);
   }
   return new Promise((resolve, reject) => {
+    let settled = false;
+
+    const onAbort = (): void => {
+      settleReject(abortError());
+    };
+
+    const detachAbort = (): void => {
+      if (signal != null) {
+        signal.removeEventListener("abort", onAbort);
+      }
+    };
+
+    const settleResolve = (response: Response): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      detachAbort();
+      resolve(response);
+    };
+
+    const settleReject = (error: Error): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      detachAbort();
+      reject(error);
+    };
+
+    if (signal != null) {
+      signal.addEventListener("abort", onAbort);
+    }
+
     native.fetch(
       payload,
       (result) => {
         try {
-          resolve(responseFromLynxFetchSuccess(result));
+          settleResolve(responseFromLynxFetchSuccess(result));
         } catch (err) {
-          reject(err);
+          settleReject(err instanceof Error ? err : new Error("LynxFetchModule.fetch failed"));
         }
       },
       (error) => {
-        reject(new Error(error?.message ?? "LynxFetchModule.fetch failed"));
+        settleReject(new Error(error?.message ?? "LynxFetchModule.fetch failed"));
       },
     );
   });

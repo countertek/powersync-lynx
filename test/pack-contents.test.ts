@@ -200,14 +200,14 @@ test("packed tarball ships iOS build inputs and omits host/build residue", async
       "CocoaPods forwarding TU for apple_sync_http.mm must ship",
     );
     assert.equal(
-      has("android/src/main/java/com/powersync/lynx/StreamingHttp.java"),
+      has("android/src/main/java/com/powersync/lynx/HttpUrlConnectionTransport.java"),
       true,
-      "Android incremental /sync/stream needs StreamingHttp.java",
+      "Android HttpURLConnection sync-HTTP transport adapter must ship",
     );
     assert.equal(
-      has("android/src/main/java/com/powersync/lynx/SyncHttpConnection.java"),
+      has("android/src/main/cpp/jni_runtime.cc"),
       true,
-      "Android shared HttpURLConnection helper must ship",
+      "Android shared JNI runtime must ship",
     );
     assert.equal(
       has("ios/src/NativePowerSyncModule.mm"),

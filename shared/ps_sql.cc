@@ -353,6 +353,15 @@ struct Engine::Impl {
       if (!absolute && path != ":memory:" && path.rfind("file:", 0) != 0) {
         path = join_path(loc, options.db_filename);
       }
+    } else if (!absolute && path != ":memory:" && path.rfind("file:", 0) != 0 &&
+               config.resolve_default_db_location) {
+      std::string dir_error;
+      const std::string loc = config.resolve_default_db_location(&dir_error);
+      if (loc.empty()) {
+        return fail(dir_error.empty() ? "failed to resolve default dbLocation"
+                                      : dir_error);
+      }
+      path = join_path(loc, options.db_filename);
     }
 
     if (config.core_load == CoreLoad::kAutoExtension) {

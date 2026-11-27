@@ -1,9 +1,11 @@
+import { LogLevels, type PowerSyncLogger } from "@powersync/common";
 import type { FetchOptions } from "@powersync/shared-internals";
 import { hostIsAndroid, hostIsIOS } from "../../host.ts";
 import { isString } from "../../type-guards.ts";
 import { hostFetchTransport } from "./HostFetch.ts";
 import { lynxFetchModuleAvailable, lynxFetchModuleTransport } from "./LynxFetchModule.ts";
 import { nativeHttpFetchAvailable, nativeHttpFetchTransport } from "./NativeHttpFetch.ts";
+import type { HeaderFields } from "./response.ts";
 
 /**
  * One deep `/sync/stream` seam: URL / headers / body / abort in, streaming
@@ -40,7 +42,7 @@ function hasHeader(headers: Record<string, string>, name: string): boolean {
  * fetchStreamRaw treats the body as NDJSON and splits BSON on 0x0A — rust
  * then raises errorStreamingMalformedResponse. Request NDJSON only.
  */
-export function preferNdjsonAccept(headers: Record<string, string>): Record<string, string> {
+function preferNdjsonAccept(headers: Record<string, string>): Record<string, string> {
   for (const key of Object.keys(headers)) {
     if (key.toLowerCase() === "accept" && headers[key]!.includes("bson-stream")) {
       headers[key] = "application/x-ndjson";
@@ -53,12 +55,7 @@ export function preferNdjsonAccept(headers: Record<string, string>): Record<stri
   return headers;
 }
 
-interface HeaderFields {
-  readonly [name: string]: string | undefined;
-}
-
-/** Copy header pairs only. NDJSON Accept policy is {@link preferNdjsonAccept}. */
-export function headerMap(headers: HeadersInit | undefined) {
+function headerMap(headers: HeadersInit | undefined) {
   const out: Record<string, string> = {};
   if (headers == null) {
     return out;
@@ -82,7 +79,7 @@ export function headerMap(headers: HeadersInit | undefined) {
   return out;
 }
 
-export function syncStreamRequestFromFetch(options: FetchOptions): SyncStreamRequest {
+function syncStreamRequestFromFetch(options: FetchOptions): SyncStreamRequest {
   const request: SyncStreamRequest = {
     url: String(options.resource),
     method: String(options.request.method ?? "GET"),
@@ -109,7 +106,7 @@ export function syncStreamRequestFromFetch(options: FetchOptions): SyncStreamReq
  * non-streaming sync JSON (e.g. write-checkpoint) through native-http.
  * Identifier fetch is Lynx-for-Web and iOS JSON.
  */
-export function pickSyncStreamTransport(request: SyncStreamRequest): SyncStreamTransport {
+function pickSyncStreamTransport(request: SyncStreamRequest): SyncStreamTransport {
   if (request.expectStreamingResponse && nativeHttpFetchAvailable()) {
     return nativeHttpFetchTransport;
   }
@@ -125,4 +122,24 @@ export function pickSyncStreamTransport(request: SyncStreamRequest): SyncStreamT
     return nativeHttpFetchTransport;
   }
   return hostFetchTransport;
+}
+
+/**
+ * Deep sync-transport interface: normalize headers (NDJSON Accept + identity
+ * Accept-Encoding), pick the right transport adapter for the host, log the
+ * streaming selection, and return a finished `Response`.
+ */
+export async function fetchSyncStream(
+  options: FetchOptions,
+  logger?: PowerSyncLogger,
+): Promise<Response> {
+  const request = syncStreamRequestFromFetch(options);
+  const transport = pickSyncStreamTransport(request);
+  if (request.expectStreamingResponse && logger != null) {
+    logger.log({
+      level: LogLevels.debug,
+      message: `powersync-lynx /sync/stream via ${transport.name}`,
+    });
+  }
+  return transport.fetch(request);
 }

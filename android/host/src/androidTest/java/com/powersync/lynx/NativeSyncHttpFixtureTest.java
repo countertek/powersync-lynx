@@ -45,7 +45,6 @@ public class NativeSyncHttpFixtureTest {
     String checkpointBody = joinedChunks(checkpoint);
     String idleBody = joinedChunks(idle);
 
-    new NativePowerSyncModule(context);
     List<byte[]> splitWireChunks = new ArrayList<>();
     JSONArray wireHex = split.getJSONArray("wireChunksHex");
     for (int i = 0; i < wireHex.length(); i++) {
@@ -122,7 +121,6 @@ public class NativeSyncHttpFixtureTest {
   @Test
   public void preHeadersFailureEnvelopeMatchesSessionContract() throws Exception {
     Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
-    new NativePowerSyncModule(context);
     RecordingLynxContext lynx = new RecordingLynxContext(context);
     NativePowerSyncModule module = new NativePowerSyncModule(lynx);
 
@@ -149,7 +147,6 @@ public class NativeSyncHttpFixtureTest {
     JSONObject checkpoint = scenario(catalog, "checkpoint-ops");
     String contentType = catalog.getString("contentType");
     String first = checkpoint.getJSONArray("chunks").getString(0);
-    new NativePowerSyncModule(context);
 
     try (ReplayServer hold =
         ReplayServer.start(ReplayServer.Mode.HOLD_OPEN, contentType, first)) {
@@ -184,7 +181,6 @@ public class NativeSyncHttpFixtureTest {
     JSONObject errored = scenario(catalog, "error-then-end");
     String contentType = catalog.getString("contentType");
     String first = errored.getJSONArray("chunks").getString(0);
-    new NativePowerSyncModule(context);
 
     try (ReplayServer rst =
         ReplayServer.start(ReplayServer.Mode.RST_AFTER_FIRST, contentType, first)) {
@@ -208,7 +204,9 @@ public class NativeSyncHttpFixtureTest {
 
   private static void assertFailEnvelope(ReadableMap envelope, String what) {
     expect(envelope.getBoolean("ok") == false, what + ": ok is false");
-    expect(envelope.getDouble("status") == SyncHttpSession.FAIL_STATUS, what + ": status is -1");
+    expect(
+        envelope.getDouble("status") == (double) SyncHttpPolicy.FAIL_STATUS,
+        what + ": status is -1");
     expect(envelope.hasKey("message") && envelope.getString("message") != null,
         what + ": message present");
     expect(envelope.hasKey("body"), what + ": body present");

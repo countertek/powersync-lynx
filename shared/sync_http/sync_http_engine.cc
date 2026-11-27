@@ -4,6 +4,8 @@
 
 namespace ps_sync_http {
 
+namespace {
+
 std::string Base64Encode(const uint8_t* data, size_t len) {
   static constexpr char kAlphabet[] =
       "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -41,18 +43,8 @@ std::string Base64Encode(const uint8_t* data, size_t len) {
   return out;
 }
 
-HttpResponseEnvelope MakeFailEnvelope(const std::string& message) {
-  HttpResponseEnvelope env;
-  env.ok = false;
-  env.status = PS_SYNC_HTTP_FAIL_STATUS;
-  env.status_text = "";
-  env.message = message.empty() ? PS_SYNC_HTTP_FAIL_MESSAGE_DEFAULT : message;
-  env.body = env.message;
-  env.idle_complete = false;
-  return env;
-}
-
-HttpResponseEnvelope MakeIdleErrorEnvelope(int status, const std::string& message) {
+HttpResponseEnvelope MakeIdleErrorEnvelope(int status,
+                                           const std::string& message) {
   HttpResponseEnvelope env;
   env.ok = false;
   env.status = (status == 0) ? PS_SYNC_HTTP_FAIL_STATUS : status;
@@ -85,6 +77,31 @@ HttpResponseEnvelope MakeIdleSuccessEnvelope(int status,
   return env;
 }
 
+HttpResponseEnvelope EnvelopeFromIdleOutcome(const IdleHttpOutcome& outcome,
+                                             bool is_sync_stream) {
+  if (!outcome.error.empty() && outcome.bytes.empty()) {
+    return MakeIdleErrorEnvelope(outcome.status, outcome.error);
+  }
+  const bool idle_complete =
+      is_sync_stream && (outcome.idle_timed_out || outcome.error.empty());
+  return MakeIdleSuccessEnvelope(outcome.status, outcome.status_text,
+                                 outcome.bytes, outcome.content_type,
+                                 idle_complete);
+}
+
+}  // namespace
+
+HttpResponseEnvelope MakeFailEnvelope(const std::string& message) {
+  HttpResponseEnvelope env;
+  env.ok = false;
+  env.status = PS_SYNC_HTTP_FAIL_STATUS;
+  env.status_text = "";
+  env.message = message.empty() ? PS_SYNC_HTTP_FAIL_MESSAGE_DEFAULT : message;
+  env.body = env.message;
+  env.idle_complete = false;
+  return env;
+}
+
 struct SyncHttpEngine::State {
   explicit State(std::shared_ptr<PlatformTransport> t) : transport(std::move(t)) {}
 
@@ -97,7 +114,7 @@ struct SyncHttpEngine::State {
   }
 
   std::shared_ptr<PlatformTransport> transport;
-  std::mutex shared_sender_mutex;
+  mutable std::mutex shared_sender_mutex;
   StreamEventSender shared_sender;
 
   std::mutex active_streams_mutex;
@@ -211,6 +228,11 @@ void SyncHttpEngine::SetSharedStreamEventSender(StreamEventSender sender) {
   state_->shared_sender = std::move(sender);
 }
 
+bool SyncHttpEngine::HasSharedStreamEventSender() const {
+  std::lock_guard<std::mutex> lock(state_->shared_sender_mutex);
+  return static_cast<bool>(state_->shared_sender);
+}
+
 void SyncHttpEngine::Fetch(HttpRequest request, StreamEventSender event_sender,
                            EnvelopeCallback callback) {
   if (!callback) {
@@ -232,8 +254,12 @@ void SyncHttpEngine::Fetch(HttpRequest request, StreamEventSender event_sender,
   const int route = Route(is_sync_stream, static_cast<bool>(effective_sender));
 
   if (route != PS_SYNC_HTTP_ROUTE_STREAMING) {
-    state_->transport->StartIdleComplete(request, is_sync_stream,
-                                         std::move(callback));
+    EnvelopeCallback cb = std::move(callback);
+    state_->transport->StartIdleComplete(
+        request, is_sync_stream,
+        [cb = std::move(cb), is_sync_stream](IdleHttpOutcome outcome) mutable {
+          cb(EnvelopeFromIdleOutcome(outcome, is_sync_stream));
+        });
     return;
   }
 
@@ -293,8 +319,7 @@ void SyncHttpEngine::Fetch(HttpRequest request, StreamEventSender event_sender,
   }
 }
 
-void SyncHttpEngine::Abort(const std::string& stream_id,
-                           std::function<void()> callback) {
+void SyncHttpEngine::Abort(const std::string& stream_id) {
   std::shared_ptr<StreamHandle> handle;
   if (!stream_id.empty()) {
     std::lock_guard<std::mutex> lock(state_->active_streams_mutex);
@@ -305,9 +330,6 @@ void SyncHttpEngine::Abort(const std::string& stream_id,
   }
   if (handle) {
     handle->session.Abort(*handle);
-  }
-  if (callback) {
-    callback();
   }
 }
 
@@ -354,11 +376,13 @@ class UnsupportedPlatformTransport final : public PlatformTransport {
   }
 
   void StartIdleComplete(const HttpRequest&, bool,
-                         EnvelopeCallback callback) override {
+                         IdleOutcomeCallback callback) override {
     if (callback) {
-      callback(MakeIdleErrorEnvelope(
-          PS_SYNC_HTTP_FAIL_STATUS,
-          "NativeSyncHttp backend is only implemented on Apple and Windows"));
+      IdleHttpOutcome outcome;
+      outcome.status = PS_SYNC_HTTP_FAIL_STATUS;
+      outcome.error =
+          "NativeSyncHttp backend is only implemented on Apple and Windows";
+      callback(std::move(outcome));
     }
   }
 };

@@ -9,15 +9,6 @@
 
 #include "sync_http_policy.h"
 
-/** Route: streaming only when the URL is /sync/stream and a sender exists. */
-#define PS_SYNC_HTTP_ROUTE_IDLE 0
-#define PS_SYNC_HTTP_ROUTE_STREAMING 1
-
-/** Pre-headers / I/O failure envelope defaults. JS reads `ok` + `message`. */
-#define PS_SYNC_HTTP_FAIL_STATUS (-1)
-#define PS_SYNC_HTTP_FAIL_MESSAGE_DEFAULT "httpFetch stream failed"
-#define PS_SYNC_HTTP_ABORT_MESSAGE "aborted"
-
 namespace ps_sync_http {
 
 /**

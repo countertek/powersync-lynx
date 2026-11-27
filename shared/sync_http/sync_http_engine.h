@@ -44,18 +44,24 @@ struct StreamEvent {
   std::string error;
 };
 
+/**
+ * Raw I/O outcome from a buffered / idle-complete platform request.
+ * SyncHttpEngine translates this into HttpResponseEnvelope (Base64 + idleComplete policy).
+ */
+struct IdleHttpOutcome {
+  int status = PS_SYNC_HTTP_FAIL_STATUS;
+  std::string status_text;
+  std::string content_type;
+  std::vector<uint8_t> bytes;
+  bool idle_timed_out = false;
+  std::string error;
+};
+
 using EnvelopeCallback = std::function<void(HttpResponseEnvelope)>;
+using IdleOutcomeCallback = std::function<void(IdleHttpOutcome)>;
 using StreamEventSender = std::function<void(const StreamEvent&)>;
 
-std::string Base64Encode(const uint8_t* data, size_t len);
-
 HttpResponseEnvelope MakeFailEnvelope(const std::string& message);
-HttpResponseEnvelope MakeIdleErrorEnvelope(int status, const std::string& message);
-HttpResponseEnvelope MakeIdleSuccessEnvelope(int status,
-                                             const std::string& status_text,
-                                             const std::vector<uint8_t>& bytes,
-                                             const std::string& content_type,
-                                             bool idle_complete);
 
 struct PlatformStreamCallbacks {
   std::function<void(int status, const std::string& status_text,
@@ -77,7 +83,7 @@ class PlatformStreamTask {
  *
  * Production provides two real adapters: Apple NSURLSession (iOS + macOS in
  * `apple_sync_http.mm`) and Windows WinHTTP (`win_sync_http.cc`). Tests may
- * inject an in-memory adapter for deterministic race and lifecycle tests.
+ * inject an in-memory adapter for deterministic race, lifecycle, and envelope tests.
  */
 class PlatformTransport {
  public:
@@ -88,7 +94,7 @@ class PlatformTransport {
 
   virtual void StartIdleComplete(const HttpRequest& request,
                                  bool is_sync_stream,
-                                 EnvelopeCallback callback) = 0;
+                                 IdleOutcomeCallback callback) = 0;
 };
 
 std::shared_ptr<PlatformTransport> DefaultPlatformTransport();
@@ -97,8 +103,9 @@ std::shared_ptr<PlatformTransport> DefaultPlatformTransport();
  * Deep Native Module HTTP engine shared by iOS, macOS, and Windows (ADR-0003).
  *
  * Owns active stream tracking, routing (`streamingId` vs idle-complete),
- * `SyncHttpStreamSession` orchestration, and cancellation on `Shutdown()` /
- * destruction without exposing raw `this` to async platform callbacks.
+ * idle-complete envelope & Base64 encoding, `SyncHttpStreamSession` orchestration,
+ * and cancellation on `Shutdown()` / destruction without exposing raw `this` to
+ * async platform callbacks.
  */
 class SyncHttpEngine {
  public:
@@ -109,11 +116,12 @@ class SyncHttpEngine {
   SyncHttpEngine& operator=(const SyncHttpEngine&) = delete;
 
   void SetSharedStreamEventSender(StreamEventSender sender);
+  bool HasSharedStreamEventSender() const;
 
   void Fetch(HttpRequest request, StreamEventSender event_sender,
              EnvelopeCallback callback);
 
-  void Abort(const std::string& stream_id, std::function<void()> callback);
+  void Abort(const std::string& stream_id);
 
   void Shutdown();
 

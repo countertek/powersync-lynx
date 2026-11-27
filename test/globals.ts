@@ -1,5 +1,9 @@
-import type { NativeModulesHost } from "../src/adapter/native.ts";
-import type { LynxRuntime, LynxSystemInfo, LynxTextCodecHelper } from "../src/globals.ts";
+import type {
+  LynxRuntime,
+  LynxSystemInfo,
+  LynxTextCodecHelper,
+  NativeModulesHost,
+} from "../src/host.ts";
 
 export {};
 

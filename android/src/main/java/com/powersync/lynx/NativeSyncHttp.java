@@ -9,25 +9,21 @@ import com.lynx.react.bridge.ReadableMap;
 import com.lynx.react.bridge.ReadableType;
 import com.lynx.react.bridge.WritableMap;
 import com.lynx.tasm.behavior.LynxContext;
-import java.net.HttpURLConnection;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 
 /**
- * Native Module HTTP for {@code /sync/stream}. Autolink still registers methods on
- * {@link NativePowerSyncModule}; this class is the SQL/HTTP seam.
+ * Native Module HTTP seam for Android (ADR-0003).
  *
- * <p>Stream state transitions, UTF-8 chunk framing, and ordered effect delivery live in
- * {@link SyncHttpSession} ({@code shared/sync_http/sync_http_session.{h,cc}}). Timeouts and
- * stream event names come from {@link SyncHttpPolicy} ({@code shared/sync_http_policy.h}).
- *
- * <p>Primary: {@code streamingId} + GlobalEventEmitter {@code onData*} → {@code onError?} →
- * {@code onEnd}. Idle-complete UTF-8 body is fallback when {@link LynxContext} is absent.
+ * <p>Registered on {@link NativePowerSyncModule} for Lynx Autolink packaging, but kept out of the
+ * SQL RPC module ({@link PsSqlEngine}). Owns request parsing, {@code streamingId} lifecycle,
+ * idle-complete envelope construction, and {@link SyncHttpSession} wiring over an injectable
+ * {@link HttpTransport} seam.
  */
 final class NativeSyncHttp {
   interface ContextSource {
@@ -35,16 +31,126 @@ final class NativeSyncHttp {
     LynxContext lynxContext();
   }
 
+  interface CancelHandle {
+    void cancel();
+  }
+
+  interface StreamCallbacks {
+    void onHeaders(int status, String statusText, @Nullable String contentType);
+
+    void onBytes(byte[] bytes, int offset, int length);
+
+    void onEnd();
+
+    void onError(@Nullable String message);
+  }
+
+  static final class IdleOutcome {
+    final int status;
+    final String statusText;
+    @Nullable final String contentType;
+    final byte[] body;
+    final boolean idleTimedOut;
+    @Nullable final String error;
+
+    IdleOutcome(
+        int status,
+        @Nullable String statusText,
+        @Nullable String contentType,
+        @Nullable byte[] body,
+        boolean idleTimedOut,
+        @Nullable String error) {
+      this.status = status;
+      this.statusText = statusText == null ? "" : statusText;
+      this.contentType = contentType;
+      this.body = body == null ? new byte[0] : body;
+      this.idleTimedOut = idleTimedOut;
+      this.error = error;
+    }
+  }
+
+  interface HttpTransport {
+    void stream(
+        ParsedHttpRequest request,
+        StreamCallbacks callbacks,
+        Consumer<CancelHandle> onCancelHandle)
+        throws IOException;
+
+    IdleOutcome fetchIdleComplete(ParsedHttpRequest request, boolean isSyncStream)
+        throws IOException;
+  }
+
+  interface Session extends AutoCloseable {
+    void onHeaders(int status, String statusText, @Nullable String contentType, SyncHttpSession.Sink sink);
+
+    void onBytes(byte[] bytes, int offset, int length, SyncHttpSession.Sink sink);
+
+    void onEnd(SyncHttpSession.Sink sink);
+
+    void onError(@Nullable String message, SyncHttpSession.Sink sink);
+
+    void abort(SyncHttpSession.Sink sink);
+
+    @Override
+    void close();
+  }
+
+  interface SessionFactory {
+    boolean isSyncStreamUrl(String url);
+
+    int route(boolean syncStreamUrl, boolean hasEventSender);
+
+    Session create();
+  }
+
+  interface Base64Encoder {
+    String encode(byte[] bytes);
+  }
+
+  private static final SessionFactory JNI_SESSION_FACTORY =
+      new SessionFactory() {
+        @Override
+        public boolean isSyncStreamUrl(String url) {
+          return SyncHttpSession.isSyncStreamUrl(url);
+        }
+
+        @Override
+        public int route(boolean syncStreamUrl, boolean hasEventSender) {
+          return SyncHttpSession.route(syncStreamUrl, hasEventSender);
+        }
+
+        @Override
+        public Session create() {
+          return new SyncHttpSession();
+        }
+      };
+
+  private static final Base64Encoder ANDROID_BASE64 =
+      bytes -> android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP);
+
   private final class StreamHandle implements SyncHttpSession.Sink {
     final String streamId;
     final Callback callback;
-    final AtomicBoolean cancelled = new AtomicBoolean(false);
-    final AtomicReference<HttpURLConnection> connection = new AtomicReference<>();
-    final SyncHttpSession session = new SyncHttpSession();
+    final Session session;
+    private final Object cancelLock = new Object();
+    @Nullable private CancelHandle cancelHandle;
+    private boolean cancelRequested;
 
-    StreamHandle(String streamId, Callback callback) {
+    StreamHandle(String streamId, Callback callback, Session session) {
       this.streamId = streamId;
       this.callback = callback;
+      this.session = session;
+    }
+
+    void bindCancelHandle(CancelHandle handle) {
+      boolean shouldCancel;
+      synchronized (cancelLock) {
+        cancelHandle = handle;
+        shouldCancel = cancelRequested;
+      }
+      if (shouldCancel) {
+        handle.cancel();
+      }
     }
 
     @Override
@@ -84,14 +190,13 @@ final class NativeSyncHttp {
 
     @Override
     public void cancelIo() {
-      cancelled.set(true);
-      HttpURLConnection conn = connection.get();
-      if (conn != null) {
-        try {
-          conn.disconnect();
-        } catch (Throwable ignored) {
-          // disconnect is best-effort; the reader loop still observes cancelled.
-        }
+      CancelHandle toCancel;
+      synchronized (cancelLock) {
+        cancelRequested = true;
+        toCancel = cancelHandle;
+      }
+      if (toCancel != null) {
+        toCancel.cancel();
       }
     }
 
@@ -103,12 +208,32 @@ final class NativeSyncHttp {
 
   private final ContextSource contextSource;
   private final ExecutorService executor;
+  private final HttpTransport transport;
+  private final SessionFactory sessionFactory;
+  private final Base64Encoder base64Encoder;
   private final Map<String, StreamHandle> activeStreams = new ConcurrentHashMap<>();
   private final AtomicLong nextStreamId = new AtomicLong(0);
 
   NativeSyncHttp(ContextSource contextSource, ExecutorService executor) {
+    this(
+        contextSource,
+        executor,
+        new HttpUrlConnectionTransport(),
+        JNI_SESSION_FACTORY,
+        ANDROID_BASE64);
+  }
+
+  NativeSyncHttp(
+      ContextSource contextSource,
+      ExecutorService executor,
+      HttpTransport transport,
+      SessionFactory sessionFactory,
+      Base64Encoder base64Encoder) {
     this.contextSource = contextSource;
     this.executor = executor;
+    this.transport = transport;
+    this.sessionFactory = sessionFactory;
+    this.base64Encoder = base64Encoder;
   }
 
   void fetch(ReadableMap request, Callback callback) {
@@ -117,15 +242,15 @@ final class NativeSyncHttp {
       invoke(callback, fail(parsed.error));
       return;
     }
+    boolean isSyncStream = sessionFactory.isSyncStreamUrl(parsed.url);
     boolean streaming =
-        SyncHttpSession.route(
-                SyncHttpSession.isSyncStreamUrl(parsed.url), contextSource.lynxContext() != null)
-            == SyncHttpSession.ROUTE_STREAMING;
+        sessionFactory.route(isSyncStream, contextSource.lynxContext() != null)
+            == (int) SyncHttpPolicy.ROUTE_STREAMING;
     if (streaming) {
       executor.execute(() -> fetchStreaming(parsed, callback));
       return;
     }
-    executor.execute(() -> invoke(callback, fetchIdleComplete(parsed)));
+    executor.execute(() -> invoke(callback, fetchIdleComplete(parsed, isSyncStream)));
   }
 
   void abort(String streamId, Callback callback) {
@@ -140,66 +265,62 @@ final class NativeSyncHttp {
 
   private void fetchStreaming(ParsedHttpRequest parsed, Callback callback) {
     final String streamId = SyncHttpPolicy.STREAM_EVENT_PREFIX + nextStreamId.getAndIncrement();
-    final StreamHandle handle = new StreamHandle(streamId, callback);
+    final Session session = sessionFactory.create();
+    final StreamHandle handle = new StreamHandle(streamId, callback, session);
     activeStreams.put(streamId, handle);
     try {
-      StreamingHttp.stream(
-          parsed.method,
-          parsed.url,
-          parsed.headers,
-          parsed.bodyBytes,
-          handle.cancelled,
-          handle.connection,
-          new StreamingHttp.Listener() {
+      transport.stream(
+          parsed,
+          new StreamCallbacks() {
             @Override
-            public void onHeaders(int status, String statusText, String contentType) {
-              handle.session.onHeaders(status, statusText, contentType, handle);
+            public void onHeaders(int status, String statusText, @Nullable String contentType) {
+              session.onHeaders(status, statusText, contentType, handle);
             }
 
             @Override
             public void onBytes(byte[] bytes, int offset, int length) {
-              handle.session.onBytes(bytes, offset, length, handle);
+              session.onBytes(bytes, offset, length, handle);
             }
 
             @Override
             public void onEnd() {
-              handle.session.onEnd(handle);
+              session.onEnd(handle);
             }
 
             @Override
-            public void onError(String message) {
-              handle.session.onError(message, handle);
+            public void onError(@Nullable String message) {
+              session.onError(message, handle);
             }
-          });
+          },
+          handle::bindCancelHandle);
     } catch (Throwable t) {
-      handle.session.onError(t.getMessage(), handle);
+      session.onError(t.getMessage(), handle);
     } finally {
       activeStreams.remove(streamId, handle);
-      handle.session.close();
+      session.close();
     }
   }
 
-  private WritableMap fetchIdleComplete(ParsedHttpRequest parsed) {
+  private WritableMap fetchIdleComplete(ParsedHttpRequest parsed, boolean isSyncStream) {
     try {
-      IdleCompleteHttp.Result result =
-          IdleCompleteHttp.fetch(parsed.method, parsed.url, parsed.headers, parsed.bodyBytes);
+      IdleOutcome outcome = transport.fetchIdleComplete(parsed, isSyncStream);
+      if (outcome.error != null && !outcome.error.isEmpty() && outcome.body.length == 0) {
+        return fail(outcome.error);
+      }
       WritableMap ok = Arguments.createMap();
       ok.putBoolean("ok", true);
-      ok.putDouble("status", result.status);
-      ok.putString("statusText", result.statusText);
-      String contentType = result.headers.get("content-type");
-      if (contentType != null) {
-        ok.putString("contentType", contentType);
+      ok.putDouble("status", outcome.status);
+      ok.putString("statusText", outcome.statusText);
+      if (outcome.contentType != null && !outcome.contentType.isEmpty()) {
+        ok.putString("contentType", outcome.contentType);
       }
-      String bodyText = IdleCompleteHttp.utf8(result.body);
-      ok.putString("body", bodyText);
-      ok.putString(
-          "bodyBase64",
-          android.util.Base64.encodeToString(result.body, android.util.Base64.NO_WRAP));
-      ok.putBoolean("idleComplete", SyncHttpSession.isSyncStreamUrl(parsed.url));
+      ok.putString("body", new String(outcome.body, StandardCharsets.UTF_8));
+      ok.putString("bodyBase64", base64Encoder.encode(outcome.body));
+      boolean idleComplete = isSyncStream && (outcome.idleTimedOut || outcome.error == null);
+      ok.putBoolean("idleComplete", idleComplete);
       return ok;
     } catch (Throwable t) {
-      return fail(t.getMessage() != null ? t.getMessage() : "httpFetch failed");
+      return fail(t.getMessage() != null ? t.getMessage() : SyncHttpPolicy.FAIL_MESSAGE_DEFAULT);
     }
   }
 
@@ -271,14 +392,13 @@ final class NativeSyncHttp {
     context.sendGlobalEvent(streamId, params);
   }
 
-  private static final String PS_FAIL_DEFAULT = "httpFetch stream failed";
-
-  /** Shared pre-headers failure envelope ({@code shared/sync_http/sync_http_session.h}). */
+  /** Shared pre-headers failure envelope ({@code shared/sync_http_policy.h}). */
   private static WritableMap fail(String message) {
-    String text = message != null && !message.isEmpty() ? message : PS_FAIL_DEFAULT;
+    String text =
+        message != null && !message.isEmpty() ? message : SyncHttpPolicy.FAIL_MESSAGE_DEFAULT;
     WritableMap map = Arguments.createMap();
     map.putBoolean("ok", false);
-    map.putDouble("status", SyncHttpSession.FAIL_STATUS);
+    map.putDouble("status", (double) SyncHttpPolicy.FAIL_STATUS);
     map.putString("statusText", "");
     map.putString("message", text);
     map.putString("body", text);

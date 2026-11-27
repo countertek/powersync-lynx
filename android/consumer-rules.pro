@@ -4,7 +4,7 @@
 # JS bridge invokes NativePowerSyncModule methods by name (SQL RPC + Native Module HTTP).
 -keep class com.powersync.lynx.NativePowerSyncModule { *; }
 -keep class com.powersync.lynx.NativeSyncHttp { *; }
--keep class com.powersync.lynx.StreamingHttp { *; }
+-keep class com.powersync.lynx.HttpUrlConnectionTransport { *; }
 -keep class com.powersync.lynx.SyncHttpSession { *; }
 -keep class com.powersync.lynx.SyncHttpSession$Sink { *; }
 -keep class com.powersync.lynx.PsSqlEngine { *; }

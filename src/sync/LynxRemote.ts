@@ -1,18 +1,13 @@
 import { AbstractRemote } from "@powersync/shared-internals";
 import type { PowerSyncBackendConnector, PowerSyncLogger } from "@powersync/common";
-import { LogLevels } from "@powersync/common";
 import type { FetchOptions } from "@powersync/shared-internals";
 import type {
   WebSocketSupport,
   WebSocketSyncStreamPlatform,
 } from "@powersync/shared-internals/websockets";
-import { createLynxTextDecoder } from "./text-decoder.ts";
-import {
-  pickSyncStreamTransport,
-  syncStreamRequestFromFetch,
-} from "./transport/SyncStreamTransport.ts";
+import { createLynxTextDecoder } from "./transport/bytes.ts";
+import { fetchSyncStream } from "./transport/SyncStreamTransport.ts";
 
-export type { LynxTextCodecHelper } from "../globals.ts";
 export type {
   SyncStreamRequest,
   SyncStreamTransport,
@@ -22,8 +17,8 @@ export type {
 let websockets: WebSocketSupport | undefined;
 
 /**
- * Thin AbstractRemote adapter: pick a {@link SyncStreamTransport} and override
- * PrimJS TextDecoder. Stream quirks live in `src/sync/transport/`.
+ * Thin AbstractRemote adapter: delegate fetches to {@link fetchSyncStream} and
+ * override PrimJS TextDecoder. Stream quirks live in `src/sync/transport/`.
  */
 export class LynxRemote extends AbstractRemote {
   constructor(connector: PowerSyncBackendConnector, logger: PowerSyncLogger) {
@@ -35,15 +30,7 @@ export class LynxRemote extends AbstractRemote {
   }
 
   async fetch(options: FetchOptions): Promise<Response> {
-    const request = syncStreamRequestFromFetch(options);
-    const transport = pickSyncStreamTransport(request);
-    if (request.expectStreamingResponse) {
-      this.logger.log({
-        level: LogLevels.debug,
-        message: `powersync-lynx /sync/stream via ${transport.name}`,
-      });
-    }
-    return transport.fetch(request);
+    return fetchSyncStream(options, this.logger);
   }
 
   async loadWebSocketSupport(platform: WebSocketSyncStreamPlatform): Promise<WebSocketSupport> {

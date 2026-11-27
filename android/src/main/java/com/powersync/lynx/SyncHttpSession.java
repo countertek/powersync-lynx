@@ -8,11 +8,11 @@ import androidx.annotation.Nullable;
  * {@code shared/sync_http_policy.h}.
  *
  * <p>C++ owns stream state transitions, incomplete UTF-8 carry/flush, error defaults, and
- * serialized effect delivery; Java only supplies {@link Sink} callbacks and HTTP I/O.
- * Library load is {@link PsSqlEngine#ensureLoaded}.
+ * serialized effect delivery; Java only supplies {@link Sink} callbacks and HTTP I/O. Loads
+ * {@code libpowersync_lynx_sql.so} independently of {@link PsSqlEngine}.
  */
 @Keep
-final class SyncHttpSession implements AutoCloseable {
+final class SyncHttpSession implements NativeSyncHttp.Session {
   @Keep
   interface Sink {
     void onHeaders(int status, String statusText, @Nullable String contentType);
@@ -30,32 +30,47 @@ final class SyncHttpSession implements AutoCloseable {
     void onDrop();
   }
 
-  static final int ROUTE_IDLE = 0;
-  static final int ROUTE_STREAMING = 1;
-  static final int FAIL_STATUS = -1;
+  private static volatile boolean libraryLoaded;
+
+  private static void ensureLoaded() {
+    if (libraryLoaded) {
+      return;
+    }
+    synchronized (SyncHttpSession.class) {
+      if (!libraryLoaded) {
+        System.loadLibrary("powersync_lynx_sql");
+        libraryLoaded = true;
+      }
+    }
+  }
 
   private long nativeHandle;
   private int inFlight = 0;
   private boolean closed = false;
 
   SyncHttpSession() {
+    ensureLoaded();
     nativeHandle = nativeCreate();
   }
 
   static int route(boolean syncStreamUrl, boolean hasEventSender) {
+    ensureLoaded();
     return nativeRoute(syncStreamUrl, hasEventSender);
   }
 
   static boolean isSyncStreamUrl(String url) {
+    ensureLoaded();
     return nativeIsSyncStreamUrl(url);
   }
 
   static boolean looksLikeLongLived(
       String transferEncoding, String contentLength, String contentType) {
+    ensureLoaded();
     return nativeLooksLikeLongLived(transferEncoding, contentLength, contentType);
   }
 
-  void onHeaders(int status, String statusText, @Nullable String contentType, Sink sink) {
+  @Override
+  public void onHeaders(int status, String statusText, @Nullable String contentType, Sink sink) {
     long handle = acquire();
     if (handle == 0L) {
       return;
@@ -67,7 +82,8 @@ final class SyncHttpSession implements AutoCloseable {
     }
   }
 
-  void onBytes(byte[] bytes, int offset, int length, Sink sink) {
+  @Override
+  public void onBytes(byte[] bytes, int offset, int length, Sink sink) {
     if (bytes == null || length <= 0) {
       return;
     }
@@ -82,7 +98,8 @@ final class SyncHttpSession implements AutoCloseable {
     }
   }
 
-  void onEnd(Sink sink) {
+  @Override
+  public void onEnd(Sink sink) {
     long handle = acquire();
     if (handle == 0L) {
       return;
@@ -94,7 +111,8 @@ final class SyncHttpSession implements AutoCloseable {
     }
   }
 
-  void onError(@Nullable String message, Sink sink) {
+  @Override
+  public void onError(@Nullable String message, Sink sink) {
     long handle = acquire();
     if (handle == 0L) {
       return;
@@ -106,7 +124,8 @@ final class SyncHttpSession implements AutoCloseable {
     }
   }
 
-  void abort(Sink sink) {
+  @Override
+  public void abort(Sink sink) {
     long handle = acquire();
     if (handle == 0L) {
       return;

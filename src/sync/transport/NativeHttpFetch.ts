@@ -1,12 +1,16 @@
-import type { LynxGlobalEventEmitter, LynxRuntime, LynxStreamEventPayload } from "../../globals.ts";
-import { getLynxHost, type LynxHost } from "../../host.ts";
+import {
+  getLynxHost,
+  type LynxGlobalEventEmitter,
+  type LynxHost,
+  type LynxStreamEventPayload,
+} from "../../host.ts";
 import { isFunction, isNonNullObject, isString } from "../../type-guards.ts";
 import type {
   NativeHttpFetchEnvelope,
   NativeHttpFetchRequest,
   NativeSyncHttpModule,
 } from "./http-types.ts";
-import { latin1Bytes, toUint8 } from "./bytes.ts";
+import { decodeBase64, toUint8 } from "./bytes.ts";
 import { syncStreamResponse } from "./response.ts";
 import type { SyncStreamRequest, SyncStreamTransport } from "./SyncStreamTransport.ts";
 
@@ -67,23 +71,24 @@ class NativeStreamBroker {
   private readonly retiredStreamNames = new Set<string>();
   private readonly retiredOrder: string[] = [];
   private readonly hookedEmitters = new WeakSet<StreamEmitter>();
-  private readonly hookedRuntimes = new WeakSet<LynxRuntime>();
   private readonly streamHandlers = new WeakMap<
     StreamEmitter,
     Map<string, (payload: LynxStreamEventPayload) => void>
   >();
   private readonly origAdds = new WeakMap<StreamEmitter, StreamEmitter["addListener"]>();
   private readonly slottedNames = new WeakMap<StreamEmitter, Set<string>>();
+  private readonly onObservedEmitter = (emitter: LynxGlobalEventEmitter): void => {
+    if (isStreamEmitter(emitter)) {
+      this.hookEmitter(emitter);
+    }
+  };
 
   constructor(host: LynxHost) {
     this.host = host;
   }
 
   enterEarlyCapture(): void {
-    this.wrapLynxGetJSModule();
-    for (const emitter of this.lookupEmitters()) {
-      this.hookEmitter(emitter);
-    }
+    this.lookupEmitters();
   }
 
   retireStream(name: string | undefined): void {
@@ -115,7 +120,6 @@ class NativeStreamBroker {
     let cancelNotified = false;
     let failure: Error | undefined;
     let wake: (() => void) | undefined;
-    this.wrapLynxGetJSModule();
     const emitters = this.lookupEmitters();
     if (emitters.length === 0) {
       throw new Error("GlobalEventEmitter is not registered");
@@ -271,25 +275,9 @@ class NativeStreamBroker {
     origAdd(name, this.slotListener(emitter, name));
   }
 
-  private wrapLynxGetJSModule(): void {
-    const runtime = this.host.runtime();
-    if (runtime == null || !isFunction(runtime.getJSModule) || this.hookedRuntimes.has(runtime)) {
-      return;
-    }
-    this.hookedRuntimes.add(runtime);
-    const orig = runtime.getJSModule.bind(runtime);
-    runtime.getJSModule = (name: string) => {
-      const mod = orig(name);
-      if (name === "GlobalEventEmitter" && mod != null && isStreamEmitter(mod)) {
-        this.hookEmitter(mod);
-      }
-      return mod;
-    };
-  }
-
   private lookupEmitters(): StreamEmitter[] {
     const found: StreamEmitter[] = [];
-    for (const emitter of this.host.globalEventEmitters()) {
+    for (const emitter of this.host.observeGlobalEventEmitters(this.onObservedEmitter)) {
       if (isStreamEmitter(emitter)) {
         found.push(emitter);
       }
@@ -358,28 +346,8 @@ function brokerForHost(host: LynxHost): NativeStreamBroker {
   return broker;
 }
 
-/**
- * HTTP methods live on the NativePowerSyncModule object on iOS, Android, and
- * Desktop (macOS NSURLSession / Windows WinHTTP). Lynx-for-Web stays SQL-only.
- */
-export function lookupNativeSyncHttp(): NativeSyncHttpModule | undefined {
-  const sql = getLynxHost().nativeModules()?.NativePowerSyncModule;
-  if (sql == null) {
-    return undefined;
-  }
-  const httpFetch = sql.httpFetch;
-  if (httpFetch == null) {
-    return undefined;
-  }
-  const module: NativeSyncHttpModule = { httpFetch };
-  if (sql.httpFetchAbort != null) {
-    module.httpFetchAbort = sql.httpFetchAbort;
-  }
-  return module;
-}
-
 export function nativeHttpFetchAvailable(): boolean {
-  return lookupNativeSyncHttp() != null;
+  return getLynxHost().syncHttpModule() != null;
 }
 
 function unwrapNativeEnvelope(envelope: NativeHttpFetchEnvelope): NativeHttpFetchEnvelope {
@@ -399,48 +367,6 @@ function contentTypeFromEnvelope(result: NativeHttpFetchEnvelope): string {
     return result.contentType;
   }
   return "application/x-ndjson";
-}
-
-const BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-interface BufferGlobal {
-  Buffer?: {
-    from(value: string, encoding: string): Uint8Array;
-  };
-}
-
-function decodeBase64(text: string): Uint8Array {
-  if (text.length === 0) {
-    return new Uint8Array(0);
-  }
-  if (typeof atob !== "undefined" && isFunction(atob)) {
-    return latin1Bytes(atob(text));
-  }
-  // SAFETY: Node test runtime may expose Buffer on globalThis.
-  const Buf = (globalThis as BufferGlobal).Buffer;
-  if (Buf != null) {
-    return new Uint8Array(Buf.from(text, "base64"));
-  }
-  const clean = text.replace(/[^A-Za-z0-9+/]/g, "");
-  const out = new Uint8Array(Math.floor((clean.length * 3) / 4));
-  let outIndex = 0;
-  for (let i = 0; i < clean.length; i += 4) {
-    const a = BASE64_ALPHABET.indexOf(clean[i]!);
-    const b = BASE64_ALPHABET.indexOf(clean[i + 1] ?? "A");
-    const cChar = clean[i + 2];
-    const dChar = clean[i + 3];
-    const c = cChar == null ? 0 : BASE64_ALPHABET.indexOf(cChar);
-    const d = dChar == null ? 0 : BASE64_ALPHABET.indexOf(dChar);
-    const n = (a << 18) | (b << 12) | (c << 6) | d;
-    out[outIndex++] = (n >> 16) & 0xff;
-    if (cChar != null) {
-      out[outIndex++] = (n >> 8) & 0xff;
-    }
-    if (dChar != null) {
-      out[outIndex++] = n & 0xff;
-    }
-  }
-  return out.subarray(0, outIndex);
 }
 
 /** Native `httpFetch` envelope → finished Response. This module owns the wire shape. */
@@ -506,7 +432,7 @@ function requestNativeAbort(
  */
 function fetchViaNativeHttp(request: SyncStreamRequest): Promise<Response> {
   const host = getLynxHost();
-  const native = lookupNativeSyncHttp();
+  const native = host.syncHttpModule();
   if (native == null) {
     throw new Error("Native Module HTTP (httpFetch) is not registered");
   }

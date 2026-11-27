@@ -20,10 +20,7 @@
         {
           "os": "win32",
           "arch": "x64",
-          "files": [
-            "dist/windows/x64/powersync-lynx.node",
-            "dist/windows/x64/powersync_x64.dll"
-          ]
+          "files": ["dist/windows/x64/powersync-lynx.node", "dist/windows/x64/powersync_x64.dll"]
         }
       ]
     },

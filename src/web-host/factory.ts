@@ -1,9 +1,4 @@
-import {
-  asCloneableObject,
-  decodeCloneable,
-  encodeCloneable,
-  type Cloneable,
-} from "./cloneable.ts";
+import { decodeCloneable, encodeCloneable, type Cloneable } from "./cloneable.ts";
 import { failEnvelopeFromError } from "../values.ts";
 import type { NativeWireEnvelope } from "../adapter/native.ts";
 
@@ -56,10 +51,10 @@ export default function createNativePowerSyncModule(
       hop(NativeModulesCall, "close", dbId, callback);
     },
     execute(dbId, sql, params, callback) {
-      hop(NativeModulesCall, "execute", asCloneableObject({ dbId, sql, params }), callback);
+      hop(NativeModulesCall, "execute", { dbId, sql, params }, callback);
     },
     executeBatch(dbId, sql, params, callback) {
-      hop(NativeModulesCall, "executeBatch", asCloneableObject({ dbId, sql, params }), callback);
+      hop(NativeModulesCall, "executeBatch", { dbId, sql, params }, callback);
     },
   };
   nativeModules.NativePowerSyncModule = methods;

@@ -7,7 +7,8 @@
  * Idle-complete + streaming HTTP policy for PowerSync /sync/stream.
  *
  * Android compiles generated SyncHttpPolicy.java (scripts/gen-sync-http-policy-java.mjs).
- * iOS IdleCompleteHttp.mm / StreamingHttp.mm and Desktop desktop_sync_http.* include this header.
+ * iOS/macOS (`shared/sync_http/apple_sync_http.mm`), Windows (`shared/sync_http/win_sync_http.cc`),
+ * and the shared engine/session (`shared/sync_http/sync_http_{engine,session}.{h,cc}`) include this header.
  *
  * Idle-complete is the fallback when no GlobalEventEmitter sender is
  * reachable. The primary path is streamingId + onData / onError / onEnd.
@@ -34,6 +35,15 @@
 #define PS_SYNC_HTTP_EVENT_ON_DATA "onData"
 #define PS_SYNC_HTTP_EVENT_ON_ERROR "onError"
 #define PS_SYNC_HTTP_EVENT_ON_END "onEnd"
+
+/** Route: streaming only when the URL is /sync/stream and a sender exists. */
+#define PS_SYNC_HTTP_ROUTE_IDLE 0
+#define PS_SYNC_HTTP_ROUTE_STREAMING 1
+
+/** Pre-headers / I/O failure envelope defaults. JS reads `ok` + `message`. */
+#define PS_SYNC_HTTP_FAIL_STATUS -1
+#define PS_SYNC_HTTP_FAIL_MESSAGE_DEFAULT "httpFetch stream failed"
+#define PS_SYNC_HTTP_ABORT_MESSAGE "aborted"
 
 static inline int ps_sync_http_ci_contains(const char* hay, const char* needle) {
   if (hay == NULL || needle == NULL) {

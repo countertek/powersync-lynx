@@ -1,5 +1,4 @@
 import {
-  asCloneableObject,
   decodeCloneable,
   encodeCloneable,
   type Cloneable,
@@ -23,15 +22,13 @@ const ATTACH_OPTION_KEYS = [
   "disableSSRWarning",
 ] as const;
 
-export type AttachOptionKey = (typeof ATTACH_OPTION_KEYS)[number];
+type AttachOptionKey = (typeof ATTACH_OPTION_KEYS)[number];
 
-export interface WASQLiteWorkerFactoryOptions {
+interface WASQLiteWorkerFactoryOptions {
   readonly name?: string;
 }
 
-export type WASQLiteWorkerFactory = (
-  options: WASQLiteWorkerFactoryOptions,
-) => Worker | SharedWorker;
+type WASQLiteWorkerFactory = (options: WASQLiteWorkerFactoryOptions) => Worker | SharedWorker;
 
 export interface AttachOptions {
   vfs?: string;
@@ -45,29 +42,29 @@ export interface AttachOptions {
   disableSSRWarning?: boolean;
 }
 
-export interface WASQLiteOpenFields extends AttachOptions {
+interface WASQLiteOpenFields extends AttachOptions {
   dbFilename: string;
   dbLocation?: string;
 }
 
-export type WASQLiteBindValue = Cloneable | Uint8Array | WASQLiteBindValue[];
+type WASQLiteBindValue = Cloneable | Uint8Array | WASQLiteBindValue[];
 
-export interface WASQLiteTx {
+interface WASQLiteTx {
   executeRaw(sql: string, params: WASQLiteBindValue): Promise<WASQLiteQueryResult>;
   executeBatch(sql: string, params: WASQLiteBindValue): Promise<WASQLiteQueryResult>;
 }
 
-export interface WASQLiteAdapter {
+interface WASQLiteAdapter {
   readLock<T>(fn: (tx: WASQLiteTx) => Promise<T>): Promise<T>;
   writeLock<T>(fn: (tx: WASQLiteTx) => Promise<T>): Promise<T>;
   close(): Promise<void> | void;
 }
 
-export interface WASQLiteFactoryHandle {
+interface WASQLiteFactoryHandle {
   openDB(): WASQLiteAdapter | Promise<WASQLiteAdapter>;
 }
 
-export interface PowerSyncLoggerLike {
+interface PowerSyncLoggerLike {
   log(record: { level: number; message: string }): void;
 }
 
@@ -81,7 +78,7 @@ export interface PowerSyncWebModule {
 
 export type LoadWeb = () => Promise<PowerSyncWebModule>;
 
-export interface WASQLiteQueryResult {
+interface WASQLiteQueryResult {
   insertId?: number;
   rowsAffected?: number;
   columnNames?: string[];
@@ -109,7 +106,7 @@ interface ConnectionEntry {
   tail: Promise<void>;
 }
 
-export function fileKey(dbFilename: string, dbLocation?: string): string {
+function fileKey(dbFilename: string, dbLocation?: string): string {
   return `${dbFilename}\0${dbLocation ?? ""}`;
 }
 
@@ -231,7 +228,8 @@ function toNativeEnvelope(result: WASQLiteQueryResult): NativeOkEnvelope {
   const columnNames = first instanceof Object && !Array.isArray(first) ? Object.keys(first) : [];
   const rawRows = columnNames.length
     ? rows.map((row) => {
-        const record = row instanceof Object && !Array.isArray(row) ? row : asCloneableObject({});
+        const emptyRow: CloneableObject = {};
+        const record = row instanceof Object && !Array.isArray(row) ? row : emptyRow;
         return columnNames.map((name) => toNativeCell(record[name]));
       })
     : [];

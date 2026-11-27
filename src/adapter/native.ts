@@ -1,7 +1,6 @@
 import { queryResultWithoutRows } from "@powersync/common";
 import type { QueryResult, RawQueryResult, SqliteValue } from "@powersync/common";
 import { getLynxHost } from "../host.ts";
-import type { LynxFetchModule, NativeSyncHttpModule } from "../sync/transport/http-types.ts";
 import { isBigInt } from "../type-guards.ts";
 import {
   copyToArrayBuffer,
@@ -80,18 +79,12 @@ export interface NativePowerSyncModule {
   executeBatch(dbId: string, sql: string, params: BindValueRows, callback: NativeCallback): void;
 }
 
-export interface NativeModulesHost {
-  /** SQL RPC; iOS/Android/Desktop hosts may also carry NativeSyncHttp methods. */
-  NativePowerSyncModule?: NativePowerSyncModule & Partial<NativeSyncHttpModule>;
-  LynxFetchModule?: LynxFetchModule;
-}
-
 export class NativeModuleError extends Error {
   code?: number;
 }
 
 function getNativeModule(): NativePowerSyncModule {
-  const native = getLynxHost().nativeModules()?.NativePowerSyncModule;
+  const native = getLynxHost().sqlModule();
   if (native == null) {
     throw new Error("NativePowerSyncModule is not registered");
   }

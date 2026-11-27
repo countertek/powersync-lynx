@@ -229,7 +229,7 @@ function decodeTrees(state: InflateState, lt: HuffmanTree, dt: HuffmanTree): voi
     lengths[clcidx[i]!] = readBits(state, 3, 0);
   }
   buildTree(codeTree, lengths, 0, 19);
-  for (let num = 0; num < hlit + hdist; ) {
+  for (let num = 0; num < hlit + hdist;) {
     const sym = decodeSymbol(state, codeTree);
     if (sym === 16) {
       const prev = lengths[num - 1]!;
