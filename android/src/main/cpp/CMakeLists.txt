@@ -40,5 +40,17 @@ target_compile_definitions(powersync_lynx_sql PRIVATE
   SQLITE_OMIT_DEPRECATED=1
 )
 
+find_package(powersync_sqlite_core REQUIRED CONFIG)
 find_library(log-lib log)
-target_link_libraries(powersync_lynx_sql PRIVATE ${log-lib} dl android)
+# Link libpowersync.so alongside libdl.so so bionic places libdl.so in the same
+# local_group when loading libpowersync.so (required on Android 16+/17 with
+# targetSdk >= 36 because upstream libpowersync.so references dlsym without
+# listing libdl.so in its own DT_NEEDED).
+target_link_libraries(powersync_lynx_sql PRIVATE
+  ${log-lib}
+  dl
+  android
+  -Wl,--no-as-needed
+  powersync_sqlite_core::powersync
+  -Wl,--as-needed
+)

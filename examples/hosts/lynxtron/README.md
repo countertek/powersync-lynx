@@ -119,9 +119,9 @@ stack (`examples/docker-compose.yml` `--profile sync`, isolated ports
 | Local CRUD & restart persistence | **Pass** | `INSERT` + `UPDATE` into `todos` recorded ops in `ps_crud` and persisted across full process restart. |
 | Connector JSON (`/token`, `/upload`) via `native-http` | **Pass** | `demoFetch` and `pickSyncStreamTransport` route desktop non-streaming JSON (`/token`, `/upload`, `/write-checkpoint2.json`) through `NativePowerSyncModule.httpFetch`, bypassing `@lynx-js/lynxtron@0.0.31`'s hanging `LynxFetchModule.fetch`. |
 | Live NDJSON `/sync/stream` via `native-http` | **Pass** | Initial checkpoint downloaded (`ps_buckets=1`, `seed-1: "Initial todo €100"`); live cross-client push (`"Live push Lynxtron 🚀"`) arrived incrementally in ~500 ms while `/sync/stream` stayed open. |
-| Multi-byte UTF-8 chunk boundaries | **Pass** | Shared `shared/utf8_hold.h` (`split-multibyte` fixture replayed in `make test`) and live 3-byte (`€`) + 4-byte (`🚀`, `✨`) UTF-8 decoded cleanly without corruption. |
+| Multi-byte UTF-8 chunk boundaries | **Pass** | Shared `shared/sync_http/sync_http_session.{h,cc}` (`split-multibyte` fixture replayed in `make test`) and live 3-byte (`€`) + 4-byte (`🚀`, `✨`) UTF-8 decoded cleanly without corruption. |
 | `AbortSignal` / `db.disconnect()` & reconnect | **Pass** | `db.disconnect()` invoked `httpFetchAbort` -> `NSURLSessionDataTask cancel`; proxy observed server TCP socket close in **6 ms**; offline local mutation uploaded (`pendingCrud=0`) and external mutation converged cleanly on reconnect (`stream#2`). |
-| Windows `x64` build & run | **Pending CI (#74)** | `lynx.lib.json` `win32`/`x64` target, `WinHTTP` `desktop_sync_http_win.cc`, and cross-platform host config are wired; native Windows verification runs in CI (#74). |
+| Windows `x64` build & run | **Pass (CI)** | `lynx.lib.json` `win32`/`x64` target, `WinHTTP` (`shared/sync_http/win_sync_http.cc`), and cross-platform host config are wired and verified by headless E2E sync in `.github/workflows/ci.yml`. |
 
 ### Historical Gate #73 trigger context (why Branch B was taken)
 
@@ -132,8 +132,8 @@ stack (`examples/docker-compose.yml` `--profile sync`, isolated ports
 2. In addition, Lynx 4.2/4.4's `lynx_core.js` `AbortSignal` splices its listener
    array inside `forEach` during `emit`, skipping subsequent abort listeners when
    an earlier listener removes itself.
-3. Gate #73 reopened ADR-0003 for Desktop (`shared/nativeModule/desktop_sync_http.*`
-   + `desktop_sync_http_macos.mm` / `desktop_sync_http_win.cc`), added desktop
+3. Gate #73 reopened ADR-0003 for Desktop (`shared/sync_http/sync_http_engine.{h,cc}`
+   + `apple_sync_http.mm` / `win_sync_http.cc`), added desktop
    `native-http` routing for both streaming and non-streaming JSON requests, and
    added feature-detection in `installAbortControllerPolyfill()` to replace the
    broken Lynx `AbortController`.

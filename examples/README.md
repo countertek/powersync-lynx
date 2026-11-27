@@ -199,7 +199,7 @@ pnpm --dir examples/hosts install
 Two-client: one native store + `http://localhost:4173/?device=web-b`, or two
 native launches with different `device` values. Filter pills stay local.
 
-**Streaming:** native mobile and desktop hosts use **`NativePowerSyncModule.httpFetch`** (`streamingId` + GlobalEventEmitter `onData` before `onEnd`; idle-complete is fallback). macOS uses `NSURLSession` and Windows uses `WinHTTP` (`shared/nativeModule/desktop_sync_http.*`), sharing `shared/sync_http_session.h`, `shared/utf8_hold.h`, and `shared/sync_http_policy.h`. Abort of a live native stream is verified in `make test` and headless desktop E2E (`examples/scripts/e2e-desktop-sync.mjs`).
+**Streaming:** native mobile and desktop hosts use **`NativePowerSyncModule.httpFetch`** (`streamingId` + GlobalEventEmitter `onData` before `onEnd`; idle-complete is fallback). macOS uses `NSURLSession` (`shared/sync_http/apple_sync_http.mm`) and Windows uses `WinHTTP` (`shared/sync_http/win_sync_http.cc`), sharing `shared/sync_http/sync_http_engine.{h,cc}`, `shared/sync_http/sync_http_session.{h,cc}`, and `shared/sync_http_policy.h`. Abort of a live native stream is verified in `make test` and headless desktop E2E (`examples/scripts/e2e-desktop-sync.mjs`).
 
 ## Lint / format
 
