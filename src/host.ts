@@ -1,17 +1,47 @@
 import { installAbortControllerPolyfill } from "./abort-controller.ts";
-import type { NativeModulesHost } from "./adapter/native.ts";
-import type {
-  LynxGlobalEventEmitter,
-  LynxRuntime,
-  LynxSystemInfo,
-  LynxTextCodecHelper,
-} from "./globals.ts";
+import type { NativePowerSyncModule } from "./adapter/native.ts";
+import type { LynxFetchModule, NativeSyncHttpModule } from "./sync/transport/http-types.ts";
 import { browserTabPrimitives, type TabPrimitives } from "./tabs.ts";
-import { isNonNullObject, isString } from "./type-guards.ts";
+import { isFunction, isNonNullObject, isString } from "./type-guards.ts";
+
+export interface LynxStreamEventFields {
+  event?: string;
+  data?: string | Uint8Array | ArrayBuffer;
+  error?: string;
+}
+
+export type LynxStreamEventPayload = LynxStreamEventFields | readonly LynxStreamEventFields[];
+
+export interface LynxGlobalEventEmitter {
+  addListener?(eventName: string, listener: (payload: LynxStreamEventPayload) => void): void;
+  emit?(eventName: string, payload: LynxStreamEventPayload): void;
+  trigger?(eventName: string, payload: LynxStreamEventPayload): void;
+  getJSModule?(name: string): LynxGlobalEventEmitter | undefined;
+}
+
+export interface LynxRuntime {
+  getJSModule?(name: string): LynxGlobalEventEmitter | undefined;
+  getApp?(): { GlobalEventEmitter?: LynxGlobalEventEmitter };
+  GlobalEventEmitter?: LynxGlobalEventEmitter;
+}
+
+export interface LynxSystemInfo {
+  platform?: string;
+}
+
+export interface LynxTextCodecHelper {
+  decode(buffer: ArrayBuffer): string;
+}
+
+export interface NativeModulesHost {
+  /** SQL RPC; iOS/Android/Desktop hosts may also carry NativeSyncHttp methods. */
+  NativePowerSyncModule?: NativePowerSyncModule & Partial<NativeSyncHttpModule>;
+  LynxFetchModule?: LynxFetchModule;
+}
 
 /**
  * Module-local PrimJS identifiers so the Lynx bundler keeps `lynx` / `fetch`.
- * Not `declare global` — that clashes with `@lynx-js/types` (TS2403).
+ * Not `declare global` — `@lynx-js/types` already declares those vars (TS2403).
  */
 declare const NativeModules: NativeModulesHost | undefined;
 declare const TextCodecHelper: LynxTextCodecHelper | undefined;
@@ -38,21 +68,25 @@ installAbortControllerPolyfill();
  */
 export type HostFetch = (input: string, init?: RequestInit) => Promise<Response>;
 
-export function isHostFetch(value: unknown): value is HostFetch {
-  return typeof value === "function";
-}
-
 /**
  * PrimJS / host-global seam for the Client.
  *
- * One interface for Native Module lookup, GlobalEventEmitter, platform,
- * text codec, fetch, and cross-tab primitives. Production uses {@link PrimJSLynxHost}; tests install
- * a fake via {@link setLynxHost}. Not the Host helper (WASQLite `attach`).
+ * One interface for SQL RPC, sync HTTP, LynxFetchModule, GlobalEventEmitter
+ * observation, platform, text codec, fetch, and cross-tab primitives.
+ * Production uses {@link PrimJSLynxHost}; tests install a fake via {@link setLynxHost}.
+ * Not the Host helper (WASQLite `attach`).
  */
 export interface LynxHost {
-  nativeModules(): NativeModulesHost | undefined;
-  runtime(): LynxRuntime | undefined;
-  globalEventEmitters(): LynxGlobalEventEmitter[];
+  sqlModule(): NativePowerSyncModule | undefined;
+  syncHttpModule(): NativeSyncHttpModule | undefined;
+  lynxFetchModule(): LynxFetchModule | undefined;
+  /**
+   * Observe current and future GlobalEventEmitters from the host runtime.
+   * Returns all emitters currently known to the host.
+   */
+  observeGlobalEventEmitters(
+    onEmitter?: (emitter: LynxGlobalEventEmitter) => void,
+  ): LynxGlobalEventEmitter[];
   platform(): string | undefined;
   textCodec(): LynxTextCodecHelper | undefined;
   fetchImpl(): HostFetch | undefined;
@@ -93,9 +127,28 @@ export function hostIsIOS(host: LynxHost = getLynxHost()): boolean {
   return platform.toLowerCase() === "ios";
 }
 
-export function collectGlobalEventEmitters(
-  runtime: LynxRuntime | undefined,
-): LynxGlobalEventEmitter[] {
+function addUniqueEmitter(
+  found: LynxGlobalEventEmitter[],
+  emitter: LynxGlobalEventEmitter | undefined,
+): void {
+  if (emitter != null && !found.includes(emitter)) {
+    found.push(emitter);
+  }
+}
+
+function callGetJSModule(runtime: LynxRuntime, name: string): LynxGlobalEventEmitter | undefined {
+  const getJSModule = runtime.getJSModule;
+  if (getJSModule == null) {
+    return undefined;
+  }
+  try {
+    return getJSModule(name);
+  } catch {
+    return undefined;
+  }
+}
+
+function collectRuntimeEmitters(runtime: LynxRuntime | undefined): LynxGlobalEventEmitter[] {
   const found: LynxGlobalEventEmitter[] = [];
   if (runtime == null) {
     return found;
@@ -106,13 +159,17 @@ export function collectGlobalEventEmitters(
   return found;
 }
 
-function addUniqueEmitter(
-  found: LynxGlobalEventEmitter[],
-  emitter: LynxGlobalEventEmitter | undefined,
-): void {
-  if (emitter != null && !found.includes(emitter)) {
-    found.push(emitter);
+function extractSyncHttpModule(
+  mod: (NativePowerSyncModule & Partial<NativeSyncHttpModule>) | undefined,
+): NativeSyncHttpModule | undefined {
+  if (mod == null || mod.httpFetch == null) {
+    return undefined;
   }
+  const syncHttp: NativeSyncHttpModule = { httpFetch: mod.httpFetch };
+  if (mod.httpFetchAbort != null) {
+    syncHttp.httpFetchAbort = mod.httpFetchAbort;
+  }
+  return syncHttp;
 }
 
 function publishDesktopStreamEmitter(emitter: LynxGlobalEventEmitter): void {
@@ -128,18 +185,6 @@ function publishDesktopStreamEmitter(emitter: LynxGlobalEventEmitter): void {
     });
   } catch {
     // Read-only globalThis in restricted test environments.
-  }
-}
-
-function callGetJSModule(runtime: LynxRuntime, name: string): LynxGlobalEventEmitter | undefined {
-  const getJSModule = runtime.getJSModule;
-  if (getJSModule == null) {
-    return undefined;
-  }
-  try {
-    return getJSModule(name);
-  } catch {
-    return undefined;
   }
 }
 
@@ -184,7 +229,10 @@ function nativeModulesFromBareIdentifier(): NativeModulesHost | undefined {
  * binding (globalThis, bare identifier, eval) so bundlers keep `lynx` / `fetch`.
  */
 export class PrimJSLynxHost implements LynxHost {
-  nativeModules(): NativeModulesHost | undefined {
+  private readonly hookedRuntimes = new WeakSet<LynxRuntime>();
+  private readonly emitterObservers = new Set<(emitter: LynxGlobalEventEmitter) => void>();
+
+  private resolveNativeModules(): NativeModulesHost | undefined {
     const fromGlobalThis = nativeModulesFromGlobalThis();
     const fromBinding = nativeModulesFromBareIdentifier();
     let sql = fromGlobalThis?.NativePowerSyncModule ?? fromBinding?.NativePowerSyncModule;
@@ -210,7 +258,7 @@ export class PrimJSLynxHost implements LynxHost {
     return host;
   }
 
-  runtime(): LynxRuntime | undefined {
+  private resolveRuntime(): LynxRuntime | undefined {
     try {
       // Bare `lynx` so the Lynx bundler keeps the runtime global (eval/globalThis miss it).
       if (lynx != null) {
@@ -226,10 +274,53 @@ export class PrimJSLynxHost implements LynxHost {
     return evalBinding<LynxRuntime>("typeof lynx === 'undefined' ? undefined : lynx");
   }
 
-  globalEventEmitters(): LynxGlobalEventEmitter[] {
-    const emitters = collectGlobalEventEmitters(this.runtime());
+  private hookRuntimeGetJSModule(runtime: LynxRuntime | undefined): void {
+    if (runtime == null || !isFunction(runtime.getJSModule) || this.hookedRuntimes.has(runtime)) {
+      return;
+    }
+    this.hookedRuntimes.add(runtime);
+    const orig = runtime.getJSModule.bind(runtime);
+    runtime.getJSModule = (name: string) => {
+      const mod = orig(name);
+      if (name === "GlobalEventEmitter" && mod != null) {
+        publishDesktopStreamEmitter(mod);
+        for (const observer of this.emitterObservers) {
+          observer(mod);
+        }
+      }
+      return mod;
+    };
+  }
+
+  sqlModule(): NativePowerSyncModule | undefined {
+    return this.resolveNativeModules()?.NativePowerSyncModule;
+  }
+
+  syncHttpModule(): NativeSyncHttpModule | undefined {
+    return extractSyncHttpModule(this.resolveNativeModules()?.NativePowerSyncModule);
+  }
+
+  lynxFetchModule(): LynxFetchModule | undefined {
+    return this.resolveNativeModules()?.LynxFetchModule;
+  }
+
+  observeGlobalEventEmitters(
+    onEmitter?: (emitter: LynxGlobalEventEmitter) => void,
+  ): LynxGlobalEventEmitter[] {
+    const runtime = this.resolveRuntime();
+    this.hookRuntimeGetJSModule(runtime);
+    const alreadyObserved = onEmitter != null && this.emitterObservers.has(onEmitter);
+    const emitters = collectRuntimeEmitters(runtime);
     if (emitters.length > 0) {
       publishDesktopStreamEmitter(emitters[0]!);
+    }
+    if (onEmitter != null) {
+      this.emitterObservers.add(onEmitter);
+      if (!alreadyObserved) {
+        for (const emitter of emitters) {
+          onEmitter(emitter);
+        }
+      }
     }
     return emitters;
   }
@@ -274,12 +365,12 @@ export class PrimJSLynxHost implements LynxHost {
 
   fetchImpl(): HostFetch | undefined {
     const fromGlobal = globalThis.fetch;
-    if (isHostFetch(fromGlobal)) {
+    if (isFunction(fromGlobal)) {
       return fromGlobal;
     }
     try {
       const fromBinding = fetch;
-      if (isHostFetch(fromBinding)) {
+      if (isFunction(fromBinding)) {
         return fromBinding;
       }
     } catch {
@@ -292,5 +383,3 @@ export class PrimJSLynxHost implements LynxHost {
     return browserTabPrimitives();
   }
 }
-
-export type { LynxGlobalEventEmitter, LynxRuntime, LynxTextCodecHelper } from "./globals.ts";

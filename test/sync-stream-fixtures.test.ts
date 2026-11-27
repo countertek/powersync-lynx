@@ -7,7 +7,7 @@ import type {
   NativeHttpFetchEnvelope,
   NativeHttpFetchRequest,
 } from "../src/sync/transport/http-types.ts";
-import type { LynxStreamEventPayload } from "../src/globals.ts";
+import type { LynxStreamEventPayload } from "../src/host.ts";
 import {
   joinedFixtureBody,
   loadSyncStreamFixtures,

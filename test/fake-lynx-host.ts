@@ -1,18 +1,18 @@
-import type { NativeModulesHost } from "../src/adapter/native.ts";
-import type {
-  LynxGlobalEventEmitter,
-  LynxRuntime,
-  LynxStreamEventPayload,
-  LynxTextCodecHelper,
-} from "../src/globals.ts";
+import type { NativePowerSyncModule } from "../src/adapter/native.ts";
 import {
-  collectGlobalEventEmitters,
   resetLynxHost,
   setLynxHost,
   type HostFetch,
+  type LynxGlobalEventEmitter,
   type LynxHost,
+  type LynxRuntime,
+  type LynxStreamEventPayload,
+  type LynxTextCodecHelper,
+  type NativeModulesHost,
 } from "../src/host.ts";
+import type { LynxFetchModule, NativeSyncHttpModule } from "../src/sync/transport/http-types.ts";
 import type { TabPrimitives } from "../src/tabs.ts";
+import { isFunction } from "../src/type-guards.ts";
 
 export interface FakeLynxHostState {
   nativeModules?: NativeModulesHost;
@@ -52,6 +52,33 @@ export function runtimeFromEmitters(
   };
 }
 
+function addUniqueEmitter(
+  found: LynxGlobalEventEmitter[],
+  emitter: LynxGlobalEventEmitter | undefined,
+): void {
+  if (emitter != null && !found.includes(emitter)) {
+    found.push(emitter);
+  }
+}
+
+function collectEmitters(runtime: LynxRuntime | undefined): LynxGlobalEventEmitter[] {
+  const found: LynxGlobalEventEmitter[] = [];
+  if (runtime == null) {
+    return found;
+  }
+  const getJSModule = runtime.getJSModule;
+  if (getJSModule != null) {
+    try {
+      addUniqueEmitter(found, getJSModule("GlobalEventEmitter"));
+    } catch {
+      // Ignore throwing runtime stubs in tests.
+    }
+  }
+  addUniqueEmitter(found, runtime.getApp?.()?.GlobalEventEmitter);
+  addUniqueEmitter(found, runtime.GlobalEventEmitter);
+  return found;
+}
+
 export class FakeLynxHost implements LynxHost {
   private readonly modules: NativeModulesHost | undefined;
   private readonly runtimeValue: LynxRuntime | undefined;
@@ -59,6 +86,8 @@ export class FakeLynxHost implements LynxHost {
   private readonly codec: LynxTextCodecHelper | undefined;
   private readonly fetchValue: HostFetch | undefined;
   private readonly tabsValue: TabPrimitives | undefined;
+  private readonly hookedRuntimes = new WeakSet<LynxRuntime>();
+  private readonly emitterObservers = new Set<(emitter: LynxGlobalEventEmitter) => void>();
 
   constructor(state: FakeLynxHostState) {
     this.modules = state.nativeModules;
@@ -73,16 +102,59 @@ export class FakeLynxHost implements LynxHost {
     }
   }
 
-  nativeModules(): NativeModulesHost | undefined {
-    return this.modules;
+  private hookRuntime(): void {
+    const runtime = this.runtimeValue;
+    if (runtime == null || !isFunction(runtime.getJSModule) || this.hookedRuntimes.has(runtime)) {
+      return;
+    }
+    this.hookedRuntimes.add(runtime);
+    const orig = runtime.getJSModule.bind(runtime);
+    runtime.getJSModule = (name: string) => {
+      const mod = orig(name);
+      if (name === "GlobalEventEmitter" && mod != null) {
+        for (const observer of this.emitterObservers) {
+          observer(mod);
+        }
+      }
+      return mod;
+    };
   }
 
-  runtime(): LynxRuntime | undefined {
-    return this.runtimeValue;
+  sqlModule(): NativePowerSyncModule | undefined {
+    return this.modules?.NativePowerSyncModule;
   }
 
-  globalEventEmitters(): LynxGlobalEventEmitter[] {
-    return collectGlobalEventEmitters(this.runtimeValue);
+  syncHttpModule(): NativeSyncHttpModule | undefined {
+    const mod = this.modules?.NativePowerSyncModule;
+    if (mod == null || mod.httpFetch == null) {
+      return undefined;
+    }
+    const syncHttp: NativeSyncHttpModule = { httpFetch: mod.httpFetch };
+    if (mod.httpFetchAbort != null) {
+      syncHttp.httpFetchAbort = mod.httpFetchAbort;
+    }
+    return syncHttp;
+  }
+
+  lynxFetchModule(): LynxFetchModule | undefined {
+    return this.modules?.LynxFetchModule;
+  }
+
+  observeGlobalEventEmitters(
+    onEmitter?: (emitter: LynxGlobalEventEmitter) => void,
+  ): LynxGlobalEventEmitter[] {
+    this.hookRuntime();
+    const alreadyObserved = onEmitter != null && this.emitterObservers.has(onEmitter);
+    const emitters = collectEmitters(this.runtimeValue);
+    if (onEmitter != null) {
+      this.emitterObservers.add(onEmitter);
+      if (!alreadyObserved) {
+        for (const emitter of emitters) {
+          onEmitter(emitter);
+        }
+      }
+    }
+    return emitters;
   }
 
   platform(): string | undefined {

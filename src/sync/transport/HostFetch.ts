@@ -1,16 +1,92 @@
 import { getLynxHost } from "../../host.ts";
-import { isFunction } from "../../type-guards.ts";
-import {
-  stabilizeJsonResponse,
-  stabilizeStreamingResponse,
-  syncStreamResponse,
-} from "./response.ts";
+import { isFunction, isNonNullObject, isString } from "../../type-guards.ts";
+import { parseJsonText, syncStreamResponse, type ParsedJsonValue } from "./response.ts";
 import type { SyncStreamRequest, SyncStreamTransport } from "./SyncStreamTransport.ts";
 
 interface LynxRequestInit extends RequestInit {
   lynxExtension?: {
     enableFetchAPIStandardStreaming?: boolean;
   };
+}
+
+interface IdentifierJsonMethods {
+  json?: () => Promise<ParsedJsonValue | string>;
+  text?: () => Promise<string>;
+}
+
+function isParsedJsonValue(value: unknown): value is ParsedJsonValue {
+  if (!isNonNullObject(value)) {
+    return false;
+  }
+  if (Array.isArray(value)) {
+    return false;
+  }
+  if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
+    return false;
+  }
+  return true;
+}
+
+async function decodeIdentifierJson(response: Response): Promise<ParsedJsonValue> {
+  // SAFETY: identifier fetch may expose json()/text() beyond the DOM Response typedef.
+  const extra = response as Response & IdentifierJsonMethods;
+  if (isFunction(extra.json)) {
+    try {
+      const value = await extra.json();
+      if (isParsedJsonValue(value)) {
+        return value;
+      }
+      if (isString(value)) {
+        return parseJsonText(value);
+      }
+    } catch {
+      // Lynx json() throws on the string undefined or gzip magic.
+    }
+  }
+  if (isFunction(extra.text)) {
+    return parseJsonText(await extra.text());
+  }
+  return { data: {} };
+}
+
+/**
+ * Lynx streaming Response.body is one-shot. AbstractRemote checks `res.body`
+ * then calls `res.body.getReader()`; a second getter throws "body used".
+ */
+function stabilizeStreamingResponse(response: Response, capturedBody?: Response["body"]): Response {
+  const captured = capturedBody === undefined ? response.body : capturedBody;
+  const headers = response.headers;
+  // SAFETY: Host fetch bodies are one-shot; this wrapper is the Response AbstractRemote reads.
+  return {
+    ok: response.ok,
+    status: response.status,
+    statusText: response.statusText,
+    headers: {
+      get: (name: string) => (headers == null ? null : headers.get(name)),
+    },
+    body: captured,
+    text: () => response.text(),
+    json: () => decodeIdentifierJson(response),
+  } as Response;
+}
+
+/**
+ * JSON GETs must not read Response.body first. Lynx's one-shot body getter
+ * consumes the payload; later json()/text() then see undefined.
+ */
+function stabilizeJsonResponse(response: Response): Response {
+  const headers = response.headers;
+  // SAFETY: JSON GETs must not consume Response.body; this wrapper is the Response AbstractRemote reads.
+  return {
+    ok: response.ok,
+    status: response.status,
+    statusText: response.statusText,
+    headers: {
+      get: (name: string) => (headers == null ? null : headers.get(name)),
+    },
+    text: () => response.text(),
+    json: () => decodeIdentifierJson(response),
+  } as Response;
 }
 
 function emptyStreamResponse(response: Response): Response {

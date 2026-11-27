@@ -2,35 +2,39 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { LynxRemote } from "../src/sync/LynxRemote.ts";
-import { responseFromLynxFetchSuccess } from "../src/sync/transport/LynxFetchModule.ts";
-import { nativeHttpFetchTransport } from "../src/sync/transport/NativeHttpFetch.ts";
 import { syncStreamResponse } from "../src/sync/transport/response.ts";
-import {
-  headerMap,
-  pickSyncStreamTransport,
-  preferNdjsonAccept,
-  syncStreamRequestFromFetch,
-} from "../src/sync/transport/SyncStreamTransport.ts";
 import {
   chunkReader,
   identifierResponse,
   nativeWithHttp,
+  silentLogger,
   stubConnector,
   withFakeLynxHost,
 } from "./remote-harness.ts";
 
-function streamingRequest(url = "http://127.0.0.1:8080/sync/stream") {
-  return syncStreamRequestFromFetch({
-    resource: url,
-    request: { method: "POST", body: "{}" },
-    expectStreamingResponse: true,
-  });
+const STREAM_URL = "http://127.0.0.1:8080/sync/stream";
+const CHECKPOINT_URL = "http://127.0.0.1:8080/write-checkpoint2.json?client_id=1";
+const BSON_ACCEPT = "application/vnd.powersync.bson-stream;q=0.9, application/x-ndjson;q=0.8";
+
+function createRemote(records?: { level: number; message: string }[]): LynxRemote {
+  return new LynxRemote(
+    stubConnector(),
+    records == null
+      ? silentLogger
+      : {
+          log(record) {
+            records.push({ level: record.level, message: record.message });
+          },
+        },
+  );
 }
 
-test("pickSyncStreamTransport prefers native-http when NativePowerSyncModule is present", async () => {
+test("LynxRemote prefers native-http over LynxFetchModule for streaming on Android", async () => {
+  let usedNativeHttp = false;
   await withFakeLynxHost(
     {
       platform: "Android",
+      emitter: { addListener() {} },
       nativeModules: {
         LynxFetchModule: {
           fetch() {
@@ -39,6 +43,7 @@ test("pickSyncStreamTransport prefers native-http when NativePowerSyncModule is 
         },
         NativePowerSyncModule: nativeWithHttp({
           httpFetch(_request, callback) {
+            usedNativeHttp = true;
             callback({
               ok: true,
               status: 200,
@@ -50,13 +55,19 @@ test("pickSyncStreamTransport prefers native-http when NativePowerSyncModule is 
       },
     },
     async () => {
-      const picked = pickSyncStreamTransport(streamingRequest());
-      assert.equal(picked.name, "native-http");
+      const response = await createRemote().fetch({
+        resource: STREAM_URL,
+        request: { method: "POST", body: "{}" },
+        expectStreamingResponse: true,
+      });
+      assert.equal(usedNativeHttp, true);
+      assert.equal(response.status, 200);
     },
   );
 });
 
-test("pickSyncStreamTransport skips lynx-fetch-module for streaming even on Android", async () => {
+test("LynxRemote skips lynx-fetch-module for streaming even on Android without httpFetch", async () => {
+  let usedHostFetch = false;
   await withFakeLynxHost(
     {
       platform: "Android",
@@ -67,45 +78,60 @@ test("pickSyncStreamTransport skips lynx-fetch-module for streaming even on Andr
           },
         },
       },
-      fetchImpl: async () => new Response(null, { status: 200 }),
+      fetchImpl: async () => {
+        usedHostFetch = true;
+        return new Response(null, { status: 200 });
+      },
     },
     async () => {
-      const picked = pickSyncStreamTransport(streamingRequest());
-      assert.equal(picked.name, "host-fetch");
+      await createRemote().fetch({
+        resource: STREAM_URL,
+        request: { method: "POST", body: "{}" },
+        expectStreamingResponse: true,
+      });
+      assert.equal(usedHostFetch, true);
     },
   );
 });
 
-test("pickSyncStreamTransport uses lynx-fetch-module for Android JSON without httpFetch", async () => {
+test("LynxRemote uses lynx-fetch-module for Android JSON without httpFetch", async () => {
+  let usedLynxFetch = false;
   await withFakeLynxHost(
     {
       platform: "Android",
       nativeModules: {
         LynxFetchModule: {
-          fetch() {
-            throw new Error("not invoked by pick");
+          fetch(_req, onSuccess) {
+            usedLynxFetch = true;
+            onSuccess({
+              status: 200,
+              statusText: "OK",
+              headers: { "content-type": "application/json" },
+              body: '{"data":{"write_checkpoint":"7"}}',
+            });
           },
         },
       },
     },
     async () => {
-      const picked = pickSyncStreamTransport(
-        syncStreamRequestFromFetch({
-          resource: "http://127.0.0.1:8080/write-checkpoint2.json?client_id=1",
-          request: { method: "GET" },
-          expectStreamingResponse: false,
-        }),
-      );
-      assert.equal(picked.name, "lynx-fetch-module");
+      const response = await createRemote().fetch({
+        resource: CHECKPOINT_URL,
+        request: { method: "GET" },
+        expectStreamingResponse: false,
+      });
+      assert.equal(usedLynxFetch, true);
+      assert.deepEqual(await response.json(), { data: { write_checkpoint: "7" } });
     },
   );
 });
 
-test("pickSyncStreamTransport uses native-http for desktop JSON and skips LynxFetchModule", async () => {
+test("LynxRemote uses native-http for desktop streaming and JSON and skips LynxFetchModule", async () => {
   for (const platform of ["macOS", "Windows"]) {
+    const urls: string[] = [];
     await withFakeLynxHost(
       {
         platform,
+        emitter: { addListener() {} },
         nativeModules: {
           LynxFetchModule: {
             fetch() {
@@ -113,126 +139,113 @@ test("pickSyncStreamTransport uses native-http for desktop JSON and skips LynxFe
             },
           },
           NativePowerSyncModule: nativeWithHttp({
-            httpFetch(_request, callback) {
+            httpFetch(request, callback) {
+              urls.push(request.url);
+              if (request.url.includes("/sync/stream")) {
+                callback({
+                  ok: true,
+                  status: 200,
+                  streamingId: "NativePowerSyncHttpStream-desktop",
+                  body: "",
+                });
+                return;
+              }
               callback({ ok: true, status: 200, body: '{"data":{}}' });
             },
           }),
         },
-        fetchImpl: async () => new Response(null, { status: 200 }),
+        fetchImpl: async () => {
+          throw new Error("host-fetch must not win over desktop native-http");
+        },
       },
       async () => {
-        const streaming = pickSyncStreamTransport(streamingRequest());
-        assert.equal(streaming.name, "native-http");
-
-        const json = pickSyncStreamTransport(
-          syncStreamRequestFromFetch({
-            resource: "http://127.0.0.1:8080/write-checkpoint2.json?client_id=1",
-            request: { method: "GET" },
-            expectStreamingResponse: false,
-          }),
-        );
-        assert.equal(json.name, "native-http");
+        const remote = createRemote();
+        await remote.fetch({
+          resource: STREAM_URL,
+          request: { method: "POST", body: "{}" },
+          expectStreamingResponse: true,
+        });
+        const json = await remote.fetch({
+          resource: CHECKPOINT_URL,
+          request: { method: "GET" },
+          expectStreamingResponse: false,
+        });
+        assert.deepEqual(await json.json(), { data: {} });
+        assert.deepEqual(urls, [STREAM_URL, CHECKPOINT_URL]);
       },
     );
   }
 });
 
-test("pickSyncStreamTransport preserves host-fetch for iOS JSON even when httpFetch is present", async () => {
+test("LynxRemote preserves host-fetch for iOS JSON while using native-http for iOS streaming", async () => {
+  const calls: string[] = [];
   await withFakeLynxHost(
     {
       platform: "iOS",
+      emitter: { addListener() {} },
       nativeModules: {
         NativePowerSyncModule: nativeWithHttp({
           httpFetch(_request, callback) {
-            callback({ ok: true, status: 200, body: "" });
+            calls.push("native-http");
+            callback({
+              ok: true,
+              status: 200,
+              streamingId: "NativePowerSyncHttpStream-ios",
+              body: "",
+            });
           },
         }),
       },
-      fetchImpl: async () => new Response('{"data":{}}', { status: 200 }),
+      fetchImpl: async () => {
+        calls.push("host-fetch");
+        return new Response('{"data":{}}', { status: 200 });
+      },
     },
     async () => {
-      const streaming = pickSyncStreamTransport(streamingRequest());
-      assert.equal(streaming.name, "native-http");
-
-      const json = pickSyncStreamTransport(
-        syncStreamRequestFromFetch({
-          resource: "http://127.0.0.1:8080/write-checkpoint2.json?client_id=1",
-          request: { method: "GET" },
-          expectStreamingResponse: false,
-        }),
-      );
-      assert.equal(json.name, "host-fetch");
+      const remote = createRemote();
+      await remote.fetch({
+        resource: STREAM_URL,
+        request: { method: "POST", body: "{}" },
+        expectStreamingResponse: true,
+      });
+      const json = await remote.fetch({
+        resource: CHECKPOINT_URL,
+        request: { method: "GET" },
+        expectStreamingResponse: false,
+      });
+      assert.deepEqual(await json.json(), { data: {} });
+      assert.deepEqual(calls, ["native-http", "host-fetch"]);
     },
   );
 });
 
-test("pickSyncStreamTransport uses host-fetch when no native HTTP module is present", async () => {
-  await withFakeLynxHost(
-    {
-      fetchImpl: async () => new Response(null, { status: 200 }),
-    },
-    async () => {
-      const picked = pickSyncStreamTransport(streamingRequest());
-      assert.equal(picked.name, "host-fetch");
-    },
-  );
-});
-
-test("pickSyncStreamTransport uses host-fetch for SQL-only web even when an emitter exists", async () => {
-  await withFakeLynxHost(
+test("LynxRemote uses host-fetch when no native HTTP module or only SQL RPC is registered", async () => {
+  for (const state of [
+    {},
     {
       emitter: { addListener() {} },
-      nativeModules: {
-        NativePowerSyncModule: {
-          open(_options, callback) {
-            callback({ ok: true, dbId: "web" });
-          },
-          close(_dbId, callback) {
-            callback({ ok: true });
-          },
-          execute(_dbId, _sql, _params, callback) {
-            callback({ ok: true });
-          },
-          executeBatch(_dbId, _sql, _params, callback) {
-            callback({ ok: true });
-          },
+      nativeModules: { NativePowerSyncModule: nativeWithHttp({}) },
+    },
+  ]) {
+    let usedHostFetch = false;
+    await withFakeLynxHost(
+      {
+        ...state,
+        fetchImpl: async () => {
+          usedHostFetch = true;
+          return new Response(null, { status: 200 });
         },
       },
-      fetchImpl: async () => new Response(null, { status: 200 }),
-    },
-    async () => {
-      const picked = pickSyncStreamTransport(streamingRequest());
-      assert.equal(picked.name, "host-fetch");
-    },
-  );
-});
-
-test("pickSyncStreamTransport skips native-http when the SQL module has no httpFetch", async () => {
-  await withFakeLynxHost(
-    {
-      nativeModules: {
-        NativePowerSyncModule: {
-          open(_options, callback) {
-            callback({ ok: true, dbId: "ps-1" });
-          },
-          close(_dbId, callback) {
-            callback({ ok: true });
-          },
-          execute(_dbId, _sql, _params, callback) {
-            callback({ ok: true });
-          },
-          executeBatch(_dbId, _sql, _params, callback) {
-            callback({ ok: true });
-          },
-        },
+      async () => {
+        await createRemote().fetch({
+          resource: STREAM_URL,
+          request: { method: "POST", body: "{}" },
+          expectStreamingResponse: true,
+        });
+        assert.equal(usedHostFetch, true);
       },
-      fetchImpl: async () => new Response(null, { status: 200 }),
-    },
-    async () => {
-      const picked = pickSyncStreamTransport(streamingRequest());
-      assert.equal(picked.name, "host-fetch");
-    },
-  );
+    );
+  }
 });
 
 test("LynxRemote logs the selected streaming transport instead of FM-PS-LYNX-003", async () => {
@@ -256,13 +269,8 @@ test("LynxRemote logs the selected streaming transport instead of FM-PS-LYNX-003
       },
     },
     async () => {
-      const remote = new LynxRemote(stubConnector(), {
-        log(record) {
-          records.push({ level: record.level, message: record.message });
-        },
-      });
-      await remote.fetch({
-        resource: "http://127.0.0.1:8080/sync/stream",
+      await createRemote(records).fetch({
+        resource: STREAM_URL,
         request: { method: "POST", body: "{}" },
         expectStreamingResponse: true,
       });
@@ -278,34 +286,37 @@ test("LynxRemote logs the selected streaming transport instead of FM-PS-LYNX-003
   );
 });
 
-const BSON_ACCEPT = "application/vnd.powersync.bson-stream;q=0.9, application/x-ndjson;q=0.8";
-
-test("headerMap copies Accept without rewriting BSON or adding Accept-Encoding", () => {
-  const mapped = headerMap({ Accept: BSON_ACCEPT });
-  assert.equal(mapped.Accept, BSON_ACCEPT);
-  assert.equal(mapped["Accept-Encoding"], undefined);
-  assert.equal(mapped["accept-encoding"], undefined);
+test("LynxRemote rewrites BSON Accept to NDJSON and requests identity Accept-Encoding", async () => {
+  let seenHeaders: Record<string, string> | undefined;
+  await withFakeLynxHost(
+    {
+      nativeModules: {
+        NativePowerSyncModule: nativeWithHttp({
+          httpFetch(request, callback) {
+            seenHeaders = request.headers;
+            callback({
+              ok: true,
+              status: 200,
+              body: '{"checkpoint":{"last_op_id":"1"}}\n',
+              idleComplete: true,
+            });
+          },
+        }),
+      },
+    },
+    async () => {
+      await createRemote().fetch({
+        resource: STREAM_URL,
+        request: { method: "POST", headers: { Accept: BSON_ACCEPT }, body: "{}" },
+        expectStreamingResponse: true,
+      });
+    },
+  );
+  assert.equal(seenHeaders?.Accept, "application/x-ndjson");
+  assert.equal(seenHeaders?.["Accept-Encoding"], "identity");
 });
 
-test("syncStreamRequestFromFetch names NDJSON Accept policy at the stream seam", () => {
-  const request = syncStreamRequestFromFetch({
-    resource: "http://127.0.0.1:8080/sync/stream",
-    request: { method: "POST", headers: { Accept: BSON_ACCEPT }, body: "{}" },
-    expectStreamingResponse: true,
-  });
-  assert.equal(request.headers.Accept, "application/x-ndjson");
-  assert.equal(request.headers["Accept-Encoding"], "identity");
-});
-
-test("preferNdjsonAccept is a named rewrite, not implicit headerMap behavior", () => {
-  const copied = headerMap({ Accept: BSON_ACCEPT });
-  const rewritten = preferNdjsonAccept({ ...copied });
-  assert.equal(copied.Accept, BSON_ACCEPT);
-  assert.equal(rewritten.Accept, "application/x-ndjson");
-  assert.equal(rewritten["Accept-Encoding"], "identity");
-});
-
-test("NativeHttpFetch owns the httpFetch envelope and returns a finished Response", async () => {
+test("NativeHttpFetch handles idle-complete and streaming envelopes through LynxRemote.fetch", async () => {
   let call = 0;
   await withFakeLynxHost(
     {
@@ -336,39 +347,102 @@ test("NativeHttpFetch owns the httpFetch envelope and returns a finished Respons
       },
     },
     async () => {
-      const idle = await nativeHttpFetchTransport.fetch(streamingRequest());
+      const remote = createRemote();
+      const idle = await remote.fetch({
+        resource: STREAM_URL,
+        request: { method: "POST", body: "{}" },
+        expectStreamingResponse: true,
+      });
       assert.equal(idle.ok, true);
       assert.equal(idle.status, 200);
       assert.equal(idle.headers.get("content-type"), "application/x-ndjson");
       const idleFirst = await idle.body!.getReader().read();
       assert.equal(idleFirst.done, false);
 
-      const streamed = await nativeHttpFetchTransport.fetch(streamingRequest());
+      const streamed = await remote.fetch({
+        resource: STREAM_URL,
+        request: { method: "POST", body: "{}" },
+        expectStreamingResponse: true,
+      });
       assert.equal(streamed.ok, true);
       assert.equal(streamed.body != null, true);
     },
   );
 });
 
-test("LynxFetchModule maps a finished JSON Response and ignores lynxExtension.streamingId", async () => {
-  const ignoredStream = responseFromLynxFetchSuccess({
-    status: 200,
-    statusText: "OK",
-    headers: { "content-type": "application/json" },
-    lynxExtension: { streamingId: "must-not-subscribe" },
-  });
-  assert.equal(ignoredStream.ok, true);
-  assert.equal(ignoredStream.status, 200);
-  assert.equal(ignoredStream.headers.get("content-type"), "application/json");
-  const empty = await ignoredStream.body!.getReader().read();
-  assert.equal(empty.done, true);
+test("LynxFetchModule maps JSON Responses, ignores lynxExtension.streamingId, and honors AbortSignal", async () => {
+  let call = 0;
+  await withFakeLynxHost(
+    {
+      platform: "Android",
+      nativeModules: {
+        LynxFetchModule: {
+          fetch(_req, onSuccess) {
+            call += 1;
+            if (call === 1) {
+              onSuccess({
+                status: 200,
+                statusText: "OK",
+                headers: { "content-type": "application/json" },
+                lynxExtension: { streamingId: "must-not-subscribe" },
+              });
+              return;
+            }
+            if (call === 2) {
+              onSuccess({
+                status: 200,
+                body: '{"ok":1}\n',
+              });
+              return;
+            }
+            // Call 3: never settles — AbortSignal must reject immediately.
+          },
+        },
+      },
+    },
+    async () => {
+      const remote = createRemote();
+      const ignoredStream = await remote.fetch({
+        resource: CHECKPOINT_URL,
+        request: { method: "GET" },
+        expectStreamingResponse: false,
+      });
+      assert.equal(ignoredStream.ok, true);
+      assert.equal(ignoredStream.status, 200);
+      assert.equal(ignoredStream.headers.get("content-type"), "application/json");
+      const empty = await ignoredStream.body!.getReader().read();
+      assert.equal(empty.done, true);
 
-  const buffered = responseFromLynxFetchSuccess({
-    status: 200,
-    body: '{"ok":1}\n',
-  });
-  const first = await buffered.body!.getReader().read();
-  assert.equal(new TextDecoder().decode(first.value), '{"ok":1}\n');
+      const buffered = await remote.fetch({
+        resource: CHECKPOINT_URL,
+        request: { method: "GET" },
+        expectStreamingResponse: false,
+      });
+      const first = await buffered.body!.getReader().read();
+      assert.equal(new TextDecoder().decode(first.value), '{"ok":1}\n');
+
+      const preAborted = new AbortController();
+      preAborted.abort();
+      await assert.rejects(
+        () =>
+          remote.fetch({
+            resource: CHECKPOINT_URL,
+            request: { method: "GET", signal: preAborted.signal },
+            expectStreamingResponse: false,
+          }),
+        { name: "AbortError" },
+      );
+
+      const inFlight = new AbortController();
+      const pending = remote.fetch({
+        resource: CHECKPOINT_URL,
+        request: { method: "GET", signal: inFlight.signal },
+        expectStreamingResponse: false,
+      });
+      inFlight.abort();
+      await assert.rejects(() => pending, { name: "AbortError" });
+    },
+  );
 });
 
 test("HostFetch returns a finished Response from the Fetch body without sniffing lynxExtension", async () => {
@@ -391,11 +465,8 @@ test("HostFetch returns a finished Response from the Fetch body without sniffing
       },
     },
     async () => {
-      const remote = new LynxRemote(stubConnector(), {
-        log() {},
-      });
-      const response = await remote.fetch({
-        resource: "http://127.0.0.1:8080/sync/stream",
+      const response = await createRemote().fetch({
+        resource: STREAM_URL,
         request: { method: "POST", body: "{}" },
         expectStreamingResponse: true,
       });
@@ -428,7 +499,7 @@ test("syncStreamResponse accepts a caller-owned reader without GlobalEventEmitte
   assert.equal(new TextDecoder().decode(first.value), '{"ok":1}\n');
 });
 
-test("nativeHttpFetchTransport cancels via httpFetchAbort once", async () => {
+test("NativeHttpFetch cancels via httpFetchAbort once", async () => {
   const abortIds: string[] = [];
   await withFakeLynxHost(
     {
@@ -451,7 +522,11 @@ test("nativeHttpFetchTransport cancels via httpFetchAbort once", async () => {
       },
     },
     async () => {
-      const response = await nativeHttpFetchTransport.fetch(streamingRequest());
+      const response = await createRemote().fetch({
+        resource: STREAM_URL,
+        request: { method: "POST", body: "{}" },
+        expectStreamingResponse: true,
+      });
       const reader = response.body!.getReader();
       await reader.cancel();
       await reader.cancel();

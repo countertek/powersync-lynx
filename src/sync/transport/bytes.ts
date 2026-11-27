@@ -1,10 +1,9 @@
-import { getLynxHost } from "../../host.ts";
-import type { LynxTextCodecHelper } from "../../globals.ts";
-import { isNonNullObject, isNumber, isString } from "../../type-guards.ts";
+import { getLynxHost, type LynxTextCodecHelper } from "../../host.ts";
+import { isFunction, isNonNullObject, isNumber, isString } from "../../type-guards.ts";
 import { copyToArrayBuffer } from "../../values.ts";
 import { isGzip } from "../gunzip.ts";
 
-export function toArrayBuffer(input: ArrayBuffer | ArrayBufferView): ArrayBuffer {
+function toArrayBuffer(input: ArrayBuffer | ArrayBufferView): ArrayBuffer {
   if (input instanceof ArrayBuffer) {
     return input;
   }
@@ -15,7 +14,7 @@ export function toArrayBuffer(input: ArrayBuffer | ArrayBufferView): ArrayBuffer
   return copyToArrayBuffer(bytes);
 }
 
-export function trailingIncompleteUtf8Bytes(bytes: Uint8Array): number {
+function trailingIncompleteUtf8Bytes(bytes: Uint8Array): number {
   if (bytes.length === 0) {
     return 0;
   }
@@ -46,6 +45,28 @@ export function trailingIncompleteUtf8Bytes(bytes: Uint8Array): number {
     return have + 1;
   }
   return 0;
+}
+
+export function createLynxTextDecoder(): TextDecoder {
+  let carry = new Uint8Array(0);
+  const decoder = {
+    decode(input?: ArrayBuffer | ArrayBufferView, options?: { stream?: boolean }): string {
+      const stream = options?.stream === true;
+      const incoming = input == null ? new Uint8Array(0) : new Uint8Array(toArrayBuffer(input));
+      const combined = new Uint8Array(carry.length + incoming.length);
+      combined.set(carry, 0);
+      combined.set(incoming, carry.length);
+      const hold = stream ? trailingIncompleteUtf8Bytes(combined) : 0;
+      const complete = combined.subarray(0, combined.length - hold);
+      carry = combined.subarray(combined.length - hold);
+      if (complete.length === 0) {
+        return "";
+      }
+      return decodeUtf8(copyToArrayBuffer(complete));
+    },
+  };
+  // SAFETY: Lynx TextCodecHelper.decode is the UTF-8 path; PowerSync only calls decode().
+  return decoder as TextDecoder;
 }
 
 function textCodecHelper(): LynxTextCodecHelper | undefined {
@@ -94,6 +115,48 @@ export function latin1Bytes(text: string): Uint8Array {
     bytes[i] = text.charCodeAt(i) & 0xff;
   }
   return bytes;
+}
+
+const BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+interface BufferGlobal {
+  Buffer?: {
+    from(value: string, encoding: string): Uint8Array;
+  };
+}
+
+export function decodeBase64(text: string): Uint8Array {
+  if (text.length === 0) {
+    return new Uint8Array(0);
+  }
+  if (typeof atob !== "undefined" && isFunction(atob)) {
+    return latin1Bytes(atob(text));
+  }
+  // SAFETY: Node test runtime may expose Buffer on globalThis.
+  const Buf = (globalThis as BufferGlobal).Buffer;
+  if (Buf != null) {
+    return new Uint8Array(Buf.from(text, "base64"));
+  }
+  const clean = text.replace(/[^A-Za-z0-9+/]/g, "");
+  const out = new Uint8Array(Math.floor((clean.length * 3) / 4));
+  let outIndex = 0;
+  for (let i = 0; i < clean.length; i += 4) {
+    const a = BASE64_ALPHABET.indexOf(clean[i]!);
+    const b = BASE64_ALPHABET.indexOf(clean[i + 1] ?? "A");
+    const cChar = clean[i + 2];
+    const dChar = clean[i + 3];
+    const c = cChar == null ? 0 : BASE64_ALPHABET.indexOf(cChar);
+    const d = dChar == null ? 0 : BASE64_ALPHABET.indexOf(dChar);
+    const n = (a << 18) | (b << 12) | (c << 6) | d;
+    out[outIndex++] = (n >> 16) & 0xff;
+    if (cChar != null) {
+      out[outIndex++] = (n >> 8) & 0xff;
+    }
+    if (dChar != null) {
+      out[outIndex++] = n & 0xff;
+    }
+  }
+  return out.subarray(0, outIndex);
 }
 
 /** PrimJS / host body shapes coerced to bytes at adapter boundaries. */

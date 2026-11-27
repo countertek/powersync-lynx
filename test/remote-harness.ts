@@ -1,6 +1,7 @@
 import type { PowerSyncBackendConnector, PowerSyncLogger } from "@powersync/common";
 
-import type { NativeModulesHost, NativePowerSyncModule } from "../src/adapter/native.ts";
+import type { NativePowerSyncModule } from "../src/adapter/native.ts";
+import type { NativeModulesHost } from "../src/host.ts";
 import type { NativeSyncHttpModule } from "../src/sync/transport/http-types.ts";
 import {
   createFakeEmitter,

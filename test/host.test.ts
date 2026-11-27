@@ -49,12 +49,13 @@ test("PrimJS adapter reads NativeModules, platform, text codec, and fetch from g
   try {
     const host = getLynxHost();
     assert.equal(host instanceof PrimJSLynxHost, true);
-    assert.equal(host.nativeModules()?.NativePowerSyncModule != null, true);
+    assert.equal(host.sqlModule() != null, true);
+    assert.equal(host.syncHttpModule(), undefined);
     assert.equal(host.platform(), "Android");
     assert.equal(hostIsAndroid(host), true);
     assert.equal(host.textCodec()?.decode(new ArrayBuffer(0)), "ok");
     assert.equal(host.fetchImpl(), fetchImpl);
-    assert.equal(host.globalEventEmitters().includes(emitter), true);
+    assert.equal(host.observeGlobalEventEmitters().includes(emitter), true);
     const opened = await nativeSql.open({ dbFilename: "host.db", readOnly: false });
     assert.equal(opened.dbId, "test");
     assert.equal(opened.multiTab, false);
@@ -79,11 +80,12 @@ test("fake LynxHost does not read globalThis for native modules or platform", as
     await withFakeLynxHost({ platform: "Android" }, async () => {
       const host = getLynxHost();
       assert.equal(host instanceof FakeLynxHost, true);
-      assert.equal(host.nativeModules(), undefined);
+      assert.equal(host.sqlModule(), undefined);
+      assert.equal(host.syncHttpModule(), undefined);
+      assert.equal(host.lynxFetchModule(), undefined);
       assert.equal(host.platform(), "Android");
       assert.equal(hostIsAndroid(host), true);
-      assert.equal(host.runtime(), undefined);
-      assert.deepEqual(host.globalEventEmitters(), []);
+      assert.deepEqual(host.observeGlobalEventEmitters(), []);
     });
     assert.equal(getLynxHost() instanceof PrimJSLynxHost, true);
   } finally {
@@ -102,30 +104,57 @@ test("setLynxHost installs a fake and resetLynxHost restores PrimJS", () => {
   assert.equal(getLynxHost() instanceof PrimJSLynxHost, true);
 });
 
-test("fake emitter runtime is stable across LynxHost lookups", () => {
-  const { emitter } = createFakeEmitter();
-  const host = new FakeLynxHost({ emitter });
-  assert.equal(host.runtime(), host.runtime());
-  assert.equal(host.runtime()?.getJSModule?.("GlobalEventEmitter"), emitter);
-  assert.deepEqual(host.globalEventEmitters(), [emitter]);
+test("observeGlobalEventEmitters notifies observers for current and late emitters", () => {
+  const { emitter: initial } = createFakeEmitter();
+  const { emitter: late } = createFakeEmitter();
+  let useLate = false;
+  const runtime = {
+    getJSModule(name: string) {
+      if (name !== "GlobalEventEmitter") {
+        return undefined;
+      }
+      return useLate ? late : initial;
+    },
+  };
+  const host = new FakeLynxHost({ runtime });
+  const observed: unknown[] = [];
+  const current = host.observeGlobalEventEmitters((emitter) => {
+    observed.push(emitter);
+  });
+  assert.deepEqual(current, [initial]);
+  assert.deepEqual(observed, [initial]);
+
+  useLate = true;
+  assert.equal(runtime.getJSModule("GlobalEventEmitter"), late);
+  assert.deepEqual(observed, [initial, late]);
 });
 
-test("PrimJSLynxHost.nativeModules handles sql-only, empty, and unset NativeModules", () => {
+test("PrimJSLynxHost capability lookups handle sql-only, sync-http, empty, and unset NativeModules", () => {
   const previousModules = globalThis.NativeModules;
   const host = new PrimJSLynxHost();
   try {
-    const sqlModule = nativeWithHttp({});
-    globalThis.NativeModules = { NativePowerSyncModule: sqlModule };
-    const sqlOnly = host.nativeModules();
-    assert.equal(sqlOnly?.NativePowerSyncModule, sqlModule);
-    assert.equal(sqlOnly?.LynxFetchModule, undefined);
-    assert.deepEqual(sqlOnly, { NativePowerSyncModule: sqlModule });
+    const sqlOnly = nativeWithHttp({});
+    globalThis.NativeModules = { NativePowerSyncModule: sqlOnly };
+    assert.equal(host.sqlModule(), sqlOnly);
+    assert.equal(host.syncHttpModule(), undefined);
+    assert.equal(host.lynxFetchModule(), undefined);
+
+    const withHttp = nativeWithHttp({
+      httpFetch(_req, cb) {
+        cb({ ok: true, status: 200, body: "" });
+      },
+    });
+    globalThis.NativeModules = { NativePowerSyncModule: withHttp };
+    assert.equal(host.sqlModule(), withHttp);
+    assert.equal(host.syncHttpModule()?.httpFetch, withHttp.httpFetch);
 
     globalThis.NativeModules = {};
-    assert.deepEqual(host.nativeModules(), {});
+    assert.equal(host.sqlModule(), undefined);
+    assert.equal(host.syncHttpModule(), undefined);
+    assert.equal(host.lynxFetchModule(), undefined);
 
     globalThis.NativeModules = undefined;
-    assert.equal(host.nativeModules(), undefined);
+    assert.equal(host.sqlModule(), undefined);
   } finally {
     globalThis.NativeModules = previousModules;
   }
@@ -139,7 +168,7 @@ test("hostIsIOS matches iOS case-insensitively and rejects desktop platforms", (
   assert.equal(hostIsIOS(new FakeLynxHost({ platform: "Android" })), false);
 });
 
-test("PrimJSLynxHost.globalEventEmitters publishes __psLynxGlobalEventEmitter non-enumerably while FakeLynxHost does not", () => {
+test("PrimJSLynxHost.observeGlobalEventEmitters publishes __psLynxGlobalEventEmitter non-enumerably while FakeLynxHost does not", () => {
   const previousLynx = globalThis.lynx;
   const previousPublished = Object.getOwnPropertyDescriptor(
     globalThis,
@@ -149,7 +178,7 @@ test("PrimJSLynxHost.globalEventEmitters publishes __psLynxGlobalEventEmitter no
     Reflect.deleteProperty(globalThis, "__psLynxGlobalEventEmitter");
     const { emitter: fakeEmitter } = createFakeEmitter();
     const fakeHost = new FakeLynxHost({ emitter: fakeEmitter });
-    assert.deepEqual(fakeHost.globalEventEmitters(), [fakeEmitter]);
+    assert.deepEqual(fakeHost.observeGlobalEventEmitters(), [fakeEmitter]);
     assert.equal(
       Object.getOwnPropertyDescriptor(globalThis, "__psLynxGlobalEventEmitter"),
       undefined,
@@ -162,7 +191,7 @@ test("PrimJSLynxHost.globalEventEmitters publishes __psLynxGlobalEventEmitter no
       },
     };
     const primHost = new PrimJSLynxHost();
-    assert.deepEqual(primHost.globalEventEmitters(), [primEmitter]);
+    assert.deepEqual(primHost.observeGlobalEventEmitters(), [primEmitter]);
     const desc = Object.getOwnPropertyDescriptor(globalThis, "__psLynxGlobalEventEmitter");
     assert.equal(desc?.value, primEmitter);
     assert.equal(desc?.enumerable, false);
