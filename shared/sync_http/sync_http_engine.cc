@@ -328,8 +328,10 @@ void SyncHttpEngine::Shutdown() {
 }
 
 SyncHttpEngine& SharedSyncHttpEngine() {
-  static SyncHttpEngine instance;
-  return instance;
+  // Intentionally heap-allocated so exit-time static destruction never races
+  // in-flight platform HTTP callbacks or ObjC/PrimJS runtime teardown.
+  static SyncHttpEngine* instance = new SyncHttpEngine();
+  return *instance;
 }
 
 #if !defined(__APPLE__) && !defined(_WIN32)

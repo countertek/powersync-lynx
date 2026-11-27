@@ -50,8 +50,10 @@ using ps_sql::OpenOptions;
 EngineConfig MakeConfig();
 
 Engine& GetEngine() {
-  static Engine engine(MakeConfig());
-  return engine;
+  // Intentionally heap-allocated (matching iOS/Android) so worker threads never
+  // race static destruction at process exit.
+  static Engine* engine = new Engine(MakeConfig());
+  return *engine;
 }
 
 std::string ModuleDirectory() {

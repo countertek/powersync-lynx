@@ -222,7 +222,7 @@ function main(argv) {
       }
       process.exit(1);
     }
-    if (existing !== generated) {
+    if (existing.replaceAll('\r\n', '\n') !== generated) {
       console.error(`FAIL: ${path.relative(ROOT, JAVA_PATH)} is stale; regenerate`);
       process.exit(1);
     }
