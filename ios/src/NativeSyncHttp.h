@@ -5,7 +5,7 @@ NS_ASSUME_NONNULL_BEGIN
 /// Native Module HTTP for /sync/stream. Autolink methods stay on
 /// NativePowerSyncModule; this is the SQL/HTTP boundary.
 ///
-/// Session decisions live in {@code shared/sync_http_session.h} (N3). Incremental
+/// Engine and session decisions live in {@code shared/sync_http/sync_http_{engine,session}.{h,cc}} (N3). Incremental
 /// GlobalEventEmitter events require a host-provided sender that implements
 /// {@code sendGlobalEvent:withParams:} ({@code LynxView} in the showcase).
 /// Inject via {@code initWithEventSender:} / Autolink {@code initWithParam:} or
