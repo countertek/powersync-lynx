@@ -177,13 +177,12 @@ static __weak id g_sharedStreamEventSender = nil;
 
 - (void)abort:(NSString*)streamId callback:(void (^)(id))callback {
   void (^cb)(id) = [callback copy];
-  _engine->Abort(Utf8FromNSString(streamId), [cb]() {
-    if (cb != nil) {
-      @autoreleasepool {
-        cb(@{@"ok" : @YES});
-      }
+  _engine->Abort(Utf8FromNSString(streamId));
+  if (cb != nil) {
+    @autoreleasepool {
+      cb(@{@"ok" : @YES});
     }
-  });
+  }
 }
 
 @end

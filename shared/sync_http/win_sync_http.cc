@@ -39,12 +39,6 @@ struct ParsedUrl {
 };
 
 bool CrackUrlUtf8(const std::string& url, ParsedUrl* out, std::string* error) {
-  if (url.empty()) {
-    if (error != nullptr) {
-      *error = "httpFetch requires string url";
-    }
-    return false;
-  }
   const std::wstring wide_url = ps_sql::Utf8ToWide(url);
   if (wide_url.empty()) {
     if (error != nullptr) {
@@ -154,19 +148,118 @@ void AddRequestHeaders(
 class ScopedHandle {
  public:
   explicit ScopedHandle(HINTERNET h = nullptr) : h_(h) {}
-  ~ScopedHandle() {
+  ~ScopedHandle() { reset(); }
+  ScopedHandle(const ScopedHandle&) = delete;
+  ScopedHandle& operator=(const ScopedHandle&) = delete;
+  ScopedHandle(ScopedHandle&& other) noexcept : h_(other.h_) {
+    other.h_ = nullptr;
+  }
+  ScopedHandle& operator=(ScopedHandle&& other) noexcept {
+    if (this != &other) {
+      reset(other.h_);
+      other.h_ = nullptr;
+    }
+    return *this;
+  }
+  void reset(HINTERNET next = nullptr) {
     if (h_ != nullptr) {
       WinHttpCloseHandle(h_);
     }
+    h_ = next;
   }
-  ScopedHandle(const ScopedHandle&) = delete;
-  ScopedHandle& operator=(const ScopedHandle&) = delete;
   HINTERNET get() const { return h_; }
   explicit operator bool() const { return h_ != nullptr; }
 
  private:
   HINTERNET h_;
 };
+
+struct OpenedWinHttpRequest {
+  ScopedHandle session;
+  ScopedHandle conn;
+  HINTERNET req = nullptr;
+};
+
+// Shared WinHTTP session -> connect -> open -> headers -> send -> receive setup
+// used by both streaming and idle-complete requests. `bind_request` transfers
+// ownership of the request handle before send/receive so cancellation can close it.
+bool OpenAndSendWinHttpRequest(
+    const HttpRequest& request, DWORD receive_timeout_ms,
+    const std::function<bool(HINTERNET)>& bind_request,
+    const std::function<bool()>& is_cancelled,
+    OpenedWinHttpRequest* out, std::string* error_out) {
+  ParsedUrl parsed;
+  if (!CrackUrlUtf8(request.url, &parsed, error_out)) {
+    return false;
+  }
+  if (is_cancelled && is_cancelled()) {
+    *error_out = PS_SYNC_HTTP_ABORT_MESSAGE;
+    return false;
+  }
+
+  out->session.reset(OpenWinHttpSession());
+  if (!out->session) {
+    *error_out = FormatWinHttpError("WinHttpOpen", GetLastError());
+    return false;
+  }
+
+  WinHttpSetTimeouts(out->session.get(), PS_SYNC_HTTP_CONNECT_TIMEOUT_MS,
+                     PS_SYNC_HTTP_CONNECT_TIMEOUT_MS,
+                     PS_SYNC_HTTP_CONNECT_TIMEOUT_MS, receive_timeout_ms);
+
+  if (is_cancelled && is_cancelled()) {
+    *error_out = PS_SYNC_HTTP_ABORT_MESSAGE;
+    return false;
+  }
+
+  out->conn.reset(
+      WinHttpConnect(out->session.get(), parsed.host.c_str(), parsed.port, 0));
+  if (!out->conn) {
+    *error_out = FormatWinHttpError("WinHttpConnect", GetLastError());
+    return false;
+  }
+
+  const std::wstring wide_method = ps_sql::Utf8ToWide(request.method);
+  const DWORD flags = parsed.secure ? WINHTTP_FLAG_SECURE : 0;
+  HINTERNET req = WinHttpOpenRequest(
+      out->conn.get(), wide_method.c_str(), parsed.path_and_query.c_str(),
+      nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
+  if (req == nullptr) {
+    *error_out = FormatWinHttpError("WinHttpOpenRequest", GetLastError());
+    return false;
+  }
+  if (bind_request && !bind_request(req)) {
+    *error_out = PS_SYNC_HTTP_ABORT_MESSAGE;
+    return false;
+  }
+  out->req = req;
+
+  AddRequestHeaders(req, request.headers);
+
+  LPVOID body_ptr =
+      request.body.empty()
+          ? WINHTTP_NO_REQUEST_DATA
+          : const_cast<char*>(request.body.data());
+  const DWORD body_len = static_cast<DWORD>(request.body.size());
+
+  if (!WinHttpSendRequest(req, WINHTTP_NO_ADDITIONAL_HEADERS, 0, body_ptr,
+                          body_len, body_len, 0)) {
+    *error_out = FormatWinHttpError("WinHttpSendRequest", GetLastError());
+    return false;
+  }
+
+  if (!WinHttpReceiveResponse(req, nullptr)) {
+    *error_out = FormatWinHttpError("WinHttpReceiveResponse", GetLastError());
+    return false;
+  }
+
+  if (is_cancelled && is_cancelled()) {
+    *error_out = PS_SYNC_HTTP_ABORT_MESSAGE;
+    return false;
+  }
+
+  return true;
+}
 
 class WinHttpStreamTask final
     : public PlatformStreamTask,
@@ -252,79 +345,17 @@ class WinHttpStreamTask final
   }
 
   void Run() {
-    ParsedUrl parsed;
-    std::string parse_err;
-    if (!CrackUrlUtf8(request_.url, &parsed, &parse_err)) {
-      FinishError(parse_err);
+    OpenedWinHttpRequest opened;
+    std::string err;
+    if (!OpenAndSendWinHttpRequest(
+            request_, PS_SYNC_HTTP_STREAM_READ_TIMEOUT_MS,
+            [this](HINTERNET h) { return AssignRequestHandle(h); },
+            [this]() { return cancelled_.load(); }, &opened, &err)) {
+      FinishError(err);
       return;
     }
 
-    if (cancelled_.load()) {
-      FinishError(PS_SYNC_HTTP_ABORT_MESSAGE);
-      return;
-    }
-
-    ScopedHandle session(OpenWinHttpSession());
-    if (!session) {
-      FinishError(FormatWinHttpError("WinHttpOpen", GetLastError()));
-      return;
-    }
-
-    WinHttpSetTimeouts(session.get(), PS_SYNC_HTTP_CONNECT_TIMEOUT_MS,
-                       PS_SYNC_HTTP_CONNECT_TIMEOUT_MS,
-                       PS_SYNC_HTTP_CONNECT_TIMEOUT_MS,
-                       PS_SYNC_HTTP_STREAM_READ_TIMEOUT_MS);
-
-    if (cancelled_.load()) {
-      FinishError(PS_SYNC_HTTP_ABORT_MESSAGE);
-      return;
-    }
-
-    ScopedHandle conn(
-        WinHttpConnect(session.get(), parsed.host.c_str(), parsed.port, 0));
-    if (!conn) {
-      FinishError(FormatWinHttpError("WinHttpConnect", GetLastError()));
-      return;
-    }
-
-    const std::string method =
-        request_.method.empty() ? std::string("GET") : request_.method;
-    const std::wstring wide_method = ps_sql::Utf8ToWide(method);
-    const DWORD flags = parsed.secure ? WINHTTP_FLAG_SECURE : 0;
-    HINTERNET req = WinHttpOpenRequest(
-        conn.get(), wide_method.c_str(), parsed.path_and_query.c_str(), nullptr,
-        WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
-    if (!AssignRequestHandle(req)) {
-      FinishError(cancelled_.load()
-                      ? PS_SYNC_HTTP_ABORT_MESSAGE
-                      : FormatWinHttpError("WinHttpOpenRequest", GetLastError()));
-      return;
-    }
-
-    AddRequestHeaders(req, request_.headers);
-
-    LPVOID body_ptr =
-        request_.body.empty()
-            ? WINHTTP_NO_REQUEST_DATA
-            : const_cast<char*>(request_.body.data());
-    const DWORD body_len = static_cast<DWORD>(request_.body.size());
-
-    if (!WinHttpSendRequest(req, WINHTTP_NO_ADDITIONAL_HEADERS, 0, body_ptr,
-                            body_len, body_len, 0)) {
-      FinishError(FormatWinHttpError("WinHttpSendRequest", GetLastError()));
-      return;
-    }
-
-    if (!WinHttpReceiveResponse(req, nullptr)) {
-      FinishError(FormatWinHttpError("WinHttpReceiveResponse", GetLastError()));
-      return;
-    }
-
-    if (cancelled_.load()) {
-      FinishError(PS_SYNC_HTTP_ABORT_MESSAGE);
-      return;
-    }
-
+    HINTERNET req = opened.req;
     const int status = QueryStatusCode(req);
     const std::string status_text =
         QueryHeaderUtf8(req, WINHTTP_QUERY_STATUS_TEXT);
@@ -376,104 +407,50 @@ class WinHttpStreamTask final
   std::atomic<bool> finished_{false};
 };
 
-HttpResponseEnvelope RunWinHttpIdleComplete(const HttpRequest& request,
-                                            bool is_sync_stream) {
-  ParsedUrl parsed;
-  std::string parse_err;
-  if (!CrackUrlUtf8(request.url, &parsed, &parse_err)) {
-    return MakeIdleErrorEnvelope(PS_SYNC_HTTP_FAIL_STATUS, parse_err);
+IdleHttpOutcome RunWinHttpIdleComplete(const HttpRequest& request,
+                                       bool is_sync_stream) {
+  IdleHttpOutcome outcome;
+  OpenedWinHttpRequest opened;
+  ScopedHandle owned_req;
+  if (!OpenAndSendWinHttpRequest(
+          request, PS_SYNC_HTTP_BUFFERED_READ_TIMEOUT_MS,
+          [&owned_req](HINTERNET h) {
+            owned_req.reset(h);
+            return true;
+          },
+          nullptr, &opened, &outcome.error)) {
+    return outcome;
   }
 
-  ScopedHandle session(OpenWinHttpSession());
-  if (!session) {
-    return MakeIdleErrorEnvelope(
-        PS_SYNC_HTTP_FAIL_STATUS,
-        FormatWinHttpError("WinHttpOpen", GetLastError()));
-  }
-
-  WinHttpSetTimeouts(session.get(), PS_SYNC_HTTP_CONNECT_TIMEOUT_MS,
-                     PS_SYNC_HTTP_CONNECT_TIMEOUT_MS,
-                     PS_SYNC_HTTP_CONNECT_TIMEOUT_MS,
-                     PS_SYNC_HTTP_BUFFERED_READ_TIMEOUT_MS);
-
-  ScopedHandle conn(
-      WinHttpConnect(session.get(), parsed.host.c_str(), parsed.port, 0));
-  if (!conn) {
-    return MakeIdleErrorEnvelope(
-        PS_SYNC_HTTP_FAIL_STATUS,
-        FormatWinHttpError("WinHttpConnect", GetLastError()));
-  }
-
-  const std::string method =
-      request.method.empty() ? std::string("GET") : request.method;
-  const std::wstring wide_method = ps_sql::Utf8ToWide(method);
-  const DWORD flags = parsed.secure ? WINHTTP_FLAG_SECURE : 0;
-  ScopedHandle req(WinHttpOpenRequest(
-      conn.get(), wide_method.c_str(), parsed.path_and_query.c_str(), nullptr,
-      WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags));
-  if (!req) {
-    return MakeIdleErrorEnvelope(
-        PS_SYNC_HTTP_FAIL_STATUS,
-        FormatWinHttpError("WinHttpOpenRequest", GetLastError()));
-  }
-
-  AddRequestHeaders(req.get(), request.headers);
-
-  LPVOID body_ptr = request.body.empty()
-                        ? WINHTTP_NO_REQUEST_DATA
-                        : const_cast<char*>(request.body.data());
-  const DWORD body_len = static_cast<DWORD>(request.body.size());
-
-  if (!WinHttpSendRequest(req.get(), WINHTTP_NO_ADDITIONAL_HEADERS, 0, body_ptr,
-                          body_len, body_len, 0)) {
-    return MakeIdleErrorEnvelope(
-        PS_SYNC_HTTP_FAIL_STATUS,
-        FormatWinHttpError("WinHttpSendRequest", GetLastError()));
-  }
-
-  if (!WinHttpReceiveResponse(req.get(), nullptr)) {
-    return MakeIdleErrorEnvelope(
-        PS_SYNC_HTTP_FAIL_STATUS,
-        FormatWinHttpError("WinHttpReceiveResponse", GetLastError()));
-  }
-
-  const int status = QueryStatusCode(req.get());
-  const std::string status_text =
-      QueryHeaderUtf8(req.get(), WINHTTP_QUERY_STATUS_TEXT);
-  const std::string content_type =
-      QueryHeaderUtf8(req.get(), WINHTTP_QUERY_CONTENT_TYPE);
+  HINTERNET req = owned_req.get();
+  outcome.status = QueryStatusCode(req);
+  outcome.status_text = QueryHeaderUtf8(req, WINHTTP_QUERY_STATUS_TEXT);
+  outcome.content_type = QueryHeaderUtf8(req, WINHTTP_QUERY_CONTENT_TYPE);
   const std::string transfer_encoding =
-      QueryHeaderUtf8(req.get(), WINHTTP_QUERY_TRANSFER_ENCODING);
+      QueryHeaderUtf8(req, WINHTTP_QUERY_TRANSFER_ENCODING);
   const std::string content_length =
-      QueryHeaderUtf8(req.get(), WINHTTP_QUERY_CONTENT_LENGTH);
+      QueryHeaderUtf8(req, WINHTTP_QUERY_CONTENT_LENGTH);
 
   const bool long_lived =
       is_sync_stream ||
       ps_sync_http_looks_like_long_lived(
           transfer_encoding.empty() ? nullptr : transfer_encoding.c_str(),
           content_length.empty() ? nullptr : content_length.c_str(),
-          content_type.empty() ? nullptr : content_type.c_str()) != 0;
+          outcome.content_type.empty() ? nullptr : outcome.content_type.c_str()) != 0;
 
-  std::vector<uint8_t> body;
   uint8_t buf[4096];
   bool lowered_idle_timeout = false;
-  bool idle_completed = false;
 
   for (;;) {
     DWORD avail = 0;
-    if (!WinHttpQueryDataAvailable(req.get(), &avail)) {
+    if (!WinHttpQueryDataAvailable(req, &avail)) {
       const DWORD err = GetLastError();
-      if (long_lived && !body.empty() && err == ERROR_WINHTTP_TIMEOUT) {
-        idle_completed = true;
+      if (long_lived && !outcome.bytes.empty() && err == ERROR_WINHTTP_TIMEOUT) {
+        outcome.idle_timed_out = true;
         break;
       }
-      if (!body.empty() && is_sync_stream) {
-        idle_completed = true;
-        break;
-      }
-      return MakeIdleErrorEnvelope(
-          PS_SYNC_HTTP_FAIL_STATUS,
-          FormatWinHttpError("WinHttpQueryDataAvailable", err));
+      outcome.error = FormatWinHttpError("WinHttpQueryDataAvailable", err);
+      return outcome;
     }
     if (avail == 0) {
       break;
@@ -481,35 +458,29 @@ HttpResponseEnvelope RunWinHttpIdleComplete(const HttpRequest& request,
     const DWORD to_read =
         avail < sizeof(buf) ? avail : static_cast<DWORD>(sizeof(buf));
     DWORD bytes_read = 0;
-    if (!WinHttpReadData(req.get(), buf, to_read, &bytes_read)) {
+    if (!WinHttpReadData(req, buf, to_read, &bytes_read)) {
       const DWORD err = GetLastError();
-      if (long_lived && !body.empty() && err == ERROR_WINHTTP_TIMEOUT) {
-        idle_completed = true;
+      if (long_lived && !outcome.bytes.empty() && err == ERROR_WINHTTP_TIMEOUT) {
+        outcome.idle_timed_out = true;
         break;
       }
-      if (!body.empty() && is_sync_stream) {
-        idle_completed = true;
-        break;
-      }
-      return MakeIdleErrorEnvelope(PS_SYNC_HTTP_FAIL_STATUS,
-                                   FormatWinHttpError("WinHttpReadData", err));
+      outcome.error = FormatWinHttpError("WinHttpReadData", err);
+      return outcome;
     }
     if (bytes_read == 0) {
       break;
     }
-    body.insert(body.end(), buf, buf + bytes_read);
+    outcome.bytes.insert(outcome.bytes.end(), buf, buf + bytes_read);
     if (long_lived && !lowered_idle_timeout) {
       lowered_idle_timeout = true;
-      WinHttpSetTimeouts(req.get(), PS_SYNC_HTTP_CONNECT_TIMEOUT_MS,
+      WinHttpSetTimeouts(req, PS_SYNC_HTTP_CONNECT_TIMEOUT_MS,
                          PS_SYNC_HTTP_CONNECT_TIMEOUT_MS,
                          PS_SYNC_HTTP_CONNECT_TIMEOUT_MS,
                          PS_SYNC_HTTP_IDLE_COMPLETE_MS);
     }
   }
 
-  return MakeIdleSuccessEnvelope(
-      status, status_text, body, content_type,
-      idle_completed || (is_sync_stream && !body.empty()));
+  return outcome;
 }
 
 class WinPlatformTransport final : public PlatformTransport {
@@ -523,7 +494,7 @@ class WinPlatformTransport final : public PlatformTransport {
   }
 
   void StartIdleComplete(const HttpRequest& request, bool is_sync_stream,
-                         EnvelopeCallback callback) override {
+                         IdleOutcomeCallback callback) override {
     if (!callback) {
       return;
     }

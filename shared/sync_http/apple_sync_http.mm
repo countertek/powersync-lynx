@@ -78,12 +78,6 @@ BOOL LooksLikeLongLivedHeaders(NSDictionary* headers) {
 NSMutableURLRequest* BuildURLRequest(const ps_sync_http::HttpRequest& request,
                                      NSTimeInterval timeoutInterval,
                                      std::string* errorOut) {
-  if (request.url.empty()) {
-    if (errorOut != nullptr) {
-      *errorOut = "httpFetch requires string url";
-    }
-    return nil;
-  }
   NSString* nsUrlStr = NSStringFromUtf8(request.url);
   NSURL* url = nsUrlStr != nil ? [NSURL URLWithString:nsUrlStr] : nil;
   if (url == nil) {
@@ -93,12 +87,9 @@ NSMutableURLRequest* BuildURLRequest(const ps_sync_http::HttpRequest& request,
     return nil;
   }
 
-  NSString* method = NSStringFromUtf8(
-      request.method.empty() ? std::string("GET") : request.method);
+  NSString* method = [NSStringFromUtf8(request.method) uppercaseString];
   if (method == nil || method.length == 0) {
     method = @"GET";
-  } else {
-    method = [method uppercaseString];
   }
 
   NSMutableURLRequest* urlRequest = [NSMutableURLRequest requestWithURL:url];
@@ -286,6 +277,7 @@ NSMutableURLRequest* BuildURLRequest(const ps_sync_http::HttpRequest& request,
 @property(nonatomic, strong, nullable) dispatch_source_t idleTimer;
 @property(nonatomic, strong) dispatch_queue_t syncQueue;
 @property(nonatomic, assign) BOOL finished;
+@property(nonatomic, assign) BOOL idleTimedOut;
 @property(nonatomic, strong) dispatch_semaphore_t done;
 @end
 
@@ -351,6 +343,7 @@ NSMutableURLRequest* BuildURLRequest(const ps_sync_http::HttpRequest& request,
       if (strongSelf == nil) {
         return;
       }
+      strongSelf.idleTimedOut = YES;
       [strongSelf finishLockedWithError:nil];
     });
     self.idleTimer = timer;
@@ -372,7 +365,7 @@ NSMutableURLRequest* BuildURLRequest(const ps_sync_http::HttpRequest& request,
       self.useIdleTimer = YES;
     }
   }
-  [self armIdleTimer];
+  // Idle quiet-window arms only once body bytes arrive (sync_http_policy.h).
   completionHandler(NSURLSessionResponseAllow);
 }
 
@@ -381,6 +374,9 @@ NSMutableURLRequest* BuildURLRequest(const ps_sync_http::HttpRequest& request,
     didReceiveData:(NSData*)data {
   (void)session;
   (void)dataTask;
+  if (data == nil || data.length == 0) {
+    return;
+  }
   NSData* copy = [data copy];
   dispatch_async(self.syncQueue, ^{
     if (self.finished) {
@@ -399,7 +395,7 @@ NSMutableURLRequest* BuildURLRequest(const ps_sync_http::HttpRequest& request,
   [self finishWithError:error];
 }
 
-- (ps_sync_http::HttpResponseEnvelope)waitForResult:(BOOL)syncStream {
+- (ps_sync_http::IdleHttpOutcome)waitForOutcome {
   NSTimeInterval remaining =
       self.readDeadline - [NSDate date].timeIntervalSince1970;
   if (remaining < 1.0) {
@@ -424,37 +420,32 @@ NSMutableURLRequest* BuildURLRequest(const ps_sync_http::HttpRequest& request,
   __block NSData* bytes = nil;
   __block NSError* error = nil;
   __block NSHTTPURLResponse* response = nil;
+  __block BOOL idleTimedOut = NO;
   dispatch_sync(self.syncQueue, ^{
     bytes = [self.buffer copy];
     error = self.sessionError;
     response = self.httpResponse;
+    idleTimedOut = self.idleTimedOut;
   });
 
-  if (error != nil && bytes.length == 0) {
-    return ps_sync_http::MakeIdleErrorEnvelope(
-        PS_SYNC_HTTP_FAIL_STATUS,
-        Utf8FromNSString(error.localizedDescription ?: @"request failed"));
+  ps_sync_http::IdleHttpOutcome outcome;
+  outcome.idle_timed_out = (idleTimedOut == YES);
+  if (error != nil) {
+    outcome.error = Utf8FromNSString(error.localizedDescription ?: @"request failed");
   }
-  int status = response != nil ? static_cast<int>(response.statusCode)
-                               : PS_SYNC_HTTP_FAIL_STATUS;
-  std::string statusText;
-  std::string contentType;
   if (response != nil) {
+    outcome.status = static_cast<int>(response.statusCode);
     NSString* reason =
         [NSHTTPURLResponse localizedStringForStatusCode:response.statusCode];
-    statusText = Utf8FromNSString(reason);
-    contentType =
+    outcome.status_text = Utf8FromNSString(reason);
+    outcome.content_type =
         Utf8FromNSString(HeaderValue(response.allHeaderFields, @"content-type"));
   }
-  std::vector<uint8_t> raw;
   if (bytes != nil && bytes.length > 0) {
     const auto* ptr = static_cast<const uint8_t*>(bytes.bytes);
-    raw.assign(ptr, ptr + bytes.length);
+    outcome.bytes.assign(ptr, ptr + bytes.length);
   }
-  const bool idleComplete =
-      (syncStream == YES) && (error == nil || !raw.empty());
-  return ps_sync_http::MakeIdleSuccessEnvelope(
-      status, statusText, raw, contentType, idleComplete);
+  return outcome;
 }
 
 @end
@@ -502,12 +493,12 @@ class ApplePlatformTransport final : public PlatformTransport {
   }
 
   void StartIdleComplete(const HttpRequest& request, bool is_sync_stream,
-                         EnvelopeCallback callback) override {
+                         IdleOutcomeCallback callback) override {
     if (!callback) {
       return;
     }
     HttpRequest reqCopy = request;
-    EnvelopeCallback cbCopy = std::move(callback);
+    IdleOutcomeCallback cbCopy = std::move(callback);
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
       @autoreleasepool {
         NSTimeInterval readTimeoutSec =
@@ -517,9 +508,9 @@ class ApplePlatformTransport final : public PlatformTransport {
         NSMutableURLRequest* urlRequest =
             BuildURLRequest(reqCopy, readTimeoutSec, &reqError);
         if (urlRequest == nil) {
-          cbCopy(MakeIdleErrorEnvelope(
-              PS_SYNC_HTTP_FAIL_STATUS,
-              reqError.empty() ? "httpFetch invalid url" : reqError));
+          IdleHttpOutcome outcome;
+          outcome.error = reqError.empty() ? "httpFetch invalid url" : reqError;
+          cbCopy(std::move(outcome));
           return;
         }
 
@@ -538,8 +529,7 @@ class ApplePlatformTransport final : public PlatformTransport {
                                                          delegateQueue:nil];
         NSURLSessionDataTask* task = [session dataTaskWithRequest:urlRequest];
         [task resume];
-        HttpResponseEnvelope result =
-            [delegate waitForResult:is_sync_stream ? YES : NO];
+        IdleHttpOutcome result = [delegate waitForOutcome];
         [task cancel];
         [session invalidateAndCancel];
         cbCopy(std::move(result));

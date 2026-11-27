@@ -109,25 +109,6 @@ bool WaitEnvelope(ps_sync_http::SyncHttpEngine& http,
                      [&] { return done; });
 }
 
-bool WaitAbort(ps_sync_http::SyncHttpEngine& http,
-               const std::string& stream_id, int timeout_ms = 5000) {
-  std::mutex mu;
-  std::condition_variable cv;
-  bool done = false;
-  http.Abort(stream_id, [&]() {
-    {
-      std::lock_guard<std::mutex> lock(mu);
-      done = true;
-    }
-    cv.notify_one();
-  });
-  std::unique_lock<std::mutex> lock(mu);
-  return cv.wait_for(lock, std::chrono::milliseconds(timeout_ms),
-                     [&] { return done; });
-}
-
-// Deterministic in-memory adapter for testing SyncHttpEngine lifecycle and races
-// without wall-clock sleeps or loopback sockets.
 class FakeStreamTask final : public ps_sync_http::PlatformStreamTask {
  public:
   std::atomic<int> cancel_calls{0};
@@ -147,6 +128,13 @@ class FakeTransport final : public ps_sync_http::PlatformTransport {
   std::shared_ptr<FakeStreamTask> last_task;
   ps_sync_http::PlatformStreamCallbacks last_callbacks;
   std::function<void(ps_sync_http::PlatformStreamCallbacks&)> on_start_streaming;
+  ps_sync_http::IdleHttpOutcome next_idle_outcome;
+
+  FakeTransport() {
+    next_idle_outcome.status = 200;
+    next_idle_outcome.status_text = "OK";
+    next_idle_outcome.content_type = "application/json";
+  }
 
   std::shared_ptr<ps_sync_http::PlatformStreamTask> StartStreaming(
       const ps_sync_http::HttpRequest&,
@@ -160,9 +148,9 @@ class FakeTransport final : public ps_sync_http::PlatformTransport {
   }
 
   void StartIdleComplete(const ps_sync_http::HttpRequest&, bool,
-                         ps_sync_http::EnvelopeCallback callback) override {
+                         ps_sync_http::IdleOutcomeCallback callback) override {
     if (callback) {
-      callback(ps_sync_http::MakeIdleSuccessEnvelope(200, "OK", {}, "application/json", false));
+      callback(next_idle_outcome);
     }
   }
 };
@@ -193,18 +181,45 @@ int main() {
     return 1;
   }
 
-  // 1. Base64 + fail envelope helpers.
+  // 1. In-memory idle-complete envelope & Base64 policy owned by SyncHttpEngine.
   {
+    auto transport = std::make_shared<FakeTransport>();
+    ps_sync_http::SyncHttpEngine http(transport);
     const std::string sample = "hello";
-    expect(ps_sync_http::Base64Encode(
-               reinterpret_cast<const uint8_t*>(sample.data()), sample.size()) ==
-               "aGVsbG8=",
-           "sync_http Base64Encode encodes UTF-8 bytes");
-    const auto fail = ps_sync_http::MakeFailEnvelope("boom");
-    expect(!fail.ok && fail.status == PS_SYNC_HTTP_FAIL_STATUS &&
-               fail.message == "boom" && !fail.idle_complete &&
-               fail.streaming_id.empty(),
-           "sync_http MakeFailEnvelope matches N3 contract");
+
+    // Non-sync buffered response: Base64 encoded, idleComplete=false.
+    transport->next_idle_outcome = ps_sync_http::IdleHttpOutcome{};
+    transport->next_idle_outcome.status = 200;
+    transport->next_idle_outcome.status_text = "OK";
+    transport->next_idle_outcome.content_type = "application/json";
+    transport->next_idle_outcome.bytes.assign(sample.begin(), sample.end());
+    ps_sync_http::HttpRequest req;
+    req.method = "GET";
+    req.url = "http://example.test/token";
+    ps_sync_http::HttpResponseEnvelope env;
+    expect(WaitEnvelope(http, req, nullptr, &env),
+           "in-memory buffered JSON returns envelope");
+    expect(env.ok && env.status == 200 && !env.idle_complete &&
+               env.body == "hello" && env.body_base64 == "aGVsbG8=",
+           "SyncHttpEngine owns Base64 encoding and idleComplete=false for non-sync");
+
+    // /sync/stream idle cutoff -> idleComplete=true.
+    transport->next_idle_outcome.idle_timed_out = true;
+    req.url = "http://example.test/sync/stream";
+    expect(WaitEnvelope(http, req, nullptr, &env),
+           "in-memory /sync/stream idle cutoff returns envelope");
+    expect(env.ok && env.idle_complete && env.body_base64 == "aGVsbG8=",
+           "SyncHttpEngine sets idleComplete=true on /sync/stream idle cutoff");
+
+    // Empty-body error -> ok=false, status=-1, idleComplete=false.
+    transport->next_idle_outcome = ps_sync_http::IdleHttpOutcome{};
+    transport->next_idle_outcome.error = "boom";
+    expect(WaitEnvelope(http, req, nullptr, &env),
+           "in-memory idle error returns envelope");
+    expect(!env.ok && env.status == PS_SYNC_HTTP_FAIL_STATUS &&
+               env.message == "boom" && !env.idle_complete &&
+               env.streaming_id.empty(),
+           "SyncHttpEngine maps empty-body IdleHttpOutcome error to N3 fail envelope");
   }
 
   // 2. Parse error: missing url -> pre-headers fail envelope, zero events.
@@ -234,7 +249,7 @@ int main() {
     // Abort triggered synchronously inside on_headers before StartStreaming returns.
     transport->on_start_streaming = [&](ps_sync_http::PlatformStreamCallbacks& cbs) {
       cbs.on_headers(200, "OK", catalog.content_type);
-      http.Abort(env.streaming_id, nullptr);
+      http.Abort(env.streaming_id);
     };
     ps_sync_http::HttpRequest req;
     req.method = "POST";
@@ -409,8 +424,7 @@ int main() {
            "platform hold-open returns streamingId before EOF");
     expect(rec.wait_for_count(1),
            "platform hold-open delivers incremental onData while stream stays open");
-    expect(WaitAbort(http, env.streaming_id),
-           "platform httpFetchAbort returns immediately");
+    http.Abort(env.streaming_id);
     expect(rec.wait_for_event(PS_SYNC_HTTP_EVENT_ON_END),
            "platform abort emits terminal onEnd promptly");
     const auto evs = rec.snapshot();

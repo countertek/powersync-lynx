@@ -751,7 +751,7 @@ Napi::Value HttpFetchAbort(const Napi::CallbackInfo& info) {
     stream_id = info[0].As<Napi::String>().Utf8Value();
   }
 
-  ps_sync_http::SharedSyncHttpEngine().Abort(stream_id, nullptr);
+  ps_sync_http::SharedSyncHttpEngine().Abort(stream_id);
 
   if (info.Length() >= 2 && info[1].IsFunction()) {
     try {
