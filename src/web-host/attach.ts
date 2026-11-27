@@ -2,7 +2,9 @@ import {
   MODULE_NAME,
   WebHostSqlBridge,
   type AttachOptions,
+  type LoadWeb,
   type NativeModulesCallHandler,
+  type PowerSyncWebModule,
 } from "./page-rpc.ts";
 
 export interface NativeModulesMap {
@@ -24,9 +26,14 @@ function asMutableMap(map: NativeModulesMap): { [key: string]: string } {
 }
 
 /**
- * Wire Native Module SQL RPC onto host-page WASQLite for one `<lynx-view>`.
+ * Internal seam beneath {@link attach} so tests can inject a WASQLite loader
+ * without widening the public `./web-host` interface.
  */
-export function attach(lynxView: LynxViewHost, options?: AttachOptions): AttachHandle {
+export function attachWithLoader(
+  lynxView: LynxViewHost,
+  options: AttachOptions | undefined,
+  loader: LoadWeb,
+): AttachHandle {
   if (lynxView == null || !(lynxView instanceof Object)) {
     throw new Error("attach requires a <lynx-view> element");
   }
@@ -38,7 +45,7 @@ export function attach(lynxView: LynxViewHost, options?: AttachOptions): AttachH
   lynxView.nativeModulesMap = nextMap;
 
   const previousCall = lynxView.onNativeModulesCall;
-  const bridge = new WebHostSqlBridge(options, loadWeb);
+  const bridge = new WebHostSqlBridge(options, loader);
   const wrapped = bridge.createHandler(previousCall);
   lynxView.onNativeModulesCall = wrapped;
 
@@ -61,13 +68,20 @@ export function attach(lynxView: LynxViewHost, options?: AttachOptions): AttachH
   };
 }
 
-async function loadWeb(): Promise<import("./page-rpc.ts").PowerSyncWebModule> {
+/**
+ * Wire Native Module SQL RPC onto host-page WASQLite for one `<lynx-view>`.
+ */
+export function attach(lynxView: LynxViewHost, options?: AttachOptions): AttachHandle {
+  return attachWithLoader(lynxView, options, loadWeb);
+}
+
+async function loadWeb(): Promise<PowerSyncWebModule> {
   // Native installs omit the optional @powersync/web peer (TS2307).
   // Web installs resolve it, so an unused expect-error directive would fail.
   // @ts-ignore TS2307
   const loaded = await import("@powersync/web");
   // SAFETY: Lynx-for-Web loads @powersync/web as WASQLiteOpenFactory + optional createConsoleLogger.
-  return loaded as import("./page-rpc.ts").PowerSyncWebModule;
+  return loaded as PowerSyncWebModule;
 }
 
 export type { AttachOptions };

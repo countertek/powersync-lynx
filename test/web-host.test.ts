@@ -7,9 +7,10 @@ import { Schema, Table, column } from "../src/index.ts";
 import { LynxDBAdapter } from "../src/adapter/LynxDBAdapter.ts";
 import { PowerSyncDatabase } from "../src/PowerSyncDatabase.ts";
 import { attach } from "../src/web-host/index.ts";
+import { attachWithLoader } from "../src/web-host/attach.ts";
 import { decodeCloneable, encodeCloneable } from "../src/web-host/cloneable.ts";
 import createFactory from "../src/web-host/factory.ts";
-import { MODULE_NAME, WebHostSqlBridge } from "../src/web-host/page-rpc.ts";
+import { MODULE_NAME } from "../src/web-host/page-rpc.ts";
 import { resetLynxHost } from "../src/host.ts";
 import { installFakeLynxHost } from "./fake-lynx-host.ts";
 import { FakeTabHub } from "./fake-tabs.ts";
@@ -23,8 +24,21 @@ interface WebCalls {
 }
 
 afterEach(() => {
+  resetLynxHost();
   delete globalThis.NativeModules;
 });
+
+function attachHost(options, loader, previousCall) {
+  const lynxView = { nativeModulesMap: {}, onNativeModulesCall: previousCall };
+  const handle = attachWithLoader(lynxView, options, loader);
+  return {
+    lynxView,
+    handle,
+    call(name, data, moduleName = MODULE_NAME) {
+      return lynxView.onNativeModulesCall(name, data, moduleName);
+    },
+  };
+}
 
 function defaultSqlResult(sql, params) {
   return {
@@ -177,13 +191,14 @@ function leaseRecoveringLoadWeb() {
   return async () => ({ WASQLiteOpenFactory });
 }
 
-function installHostHelper(handleSql, options) {
+function installHostHelper(handleSql, options, attachOptions, tabs) {
   const calls = {};
-  const bridge = new WebHostSqlBridge(undefined, loadMock(calls, handleSql, options));
-  const hop = (name, data) => bridge.handleCall(name, data);
-  globalThis.NativeModules = {
-    NativePowerSyncModule: createFactory({}, hop),
-  };
+  const host = attachHost(attachOptions, loadMock(calls, handleSql, options));
+  const hop = (name, data) => host.call(name, data);
+  installFakeLynxHost({
+    nativeModules: { NativePowerSyncModule: createFactory({}, hop) },
+    tabs,
+  });
   return calls;
 }
 
@@ -357,11 +372,11 @@ test("detach unwraps only when still current; reverse order restores", () => {
 test("one WASQLiteOpenFactory per dbFilename+dbLocation; extra opens refcount", async () => {
   const calls = {};
   const options = { vfs: "IDBBatchAtomicVFS", additionalReaders: 4 };
-  const bridge = new WebHostSqlBridge(options, loadMock(calls));
+  const host = attachHost(options, loadMock(calls));
 
   const ids = [];
   for (let i = 0; i < 6; i++) {
-    const open = await bridge.handleCall("open", { dbFilename: "app.db", readOnly: i !== 0 });
+    const open = await host.call("open", { dbFilename: "app.db", readOnly: i !== 0 });
     assert.equal(open.ok, true);
     ids.push(open.dbId);
   }
@@ -374,16 +389,16 @@ test("one WASQLiteOpenFactory per dbFilename+dbLocation; extra opens refcount", 
   assert.equal("ssrMode" in calls.constructs[0].open, false);
   assert.equal(new Set(ids).size, 6);
 
-  const other = await bridge.handleCall("open", { dbFilename: "app.db", dbLocation: "other" });
+  const other = await host.call("open", { dbFilename: "app.db", dbLocation: "other" });
   assert.equal(other.ok, true);
   assert.equal(calls.constructs.length, 2);
 
   for (let i = 0; i < 5; i++) {
-    const closed = await bridge.handleCall("close", ids[i]);
+    const closed = await host.call("close", ids[i]);
     assert.equal(closed.ok, true);
   }
   assert.equal(calls.closes.length, 0);
-  const closedExec = await bridge.handleCall("execute", {
+  const closedExec = await host.call("execute", {
     dbId: ids[0],
     sql: "select 1",
     params: [],
@@ -391,16 +406,16 @@ test("one WASQLiteOpenFactory per dbFilename+dbLocation; extra opens refcount", 
   assert.equal(closedExec.ok, false);
   assert.match(closedExec.message, /unknown dbId/);
 
-  const stillOpen = await bridge.handleCall("execute", {
+  const stillOpen = await host.call("execute", {
     dbId: ids[5],
     sql: "select 1",
     params: [],
   });
   assert.equal(stillOpen.ok, true);
 
-  await bridge.handleCall("close", ids[5]);
+  await host.call("close", ids[5]);
   assert.equal(calls.closes.length, 1);
-  const afterLastClose = await bridge.handleCall("execute", {
+  const afterLastClose = await host.call("execute", {
     dbId: ids[5],
     sql: "select 1",
     params: [],
@@ -408,32 +423,26 @@ test("one WASQLiteOpenFactory per dbFilename+dbLocation; extra opens refcount", 
   assert.equal(afterLastClose.ok, false);
   assert.match(afterLastClose.message, /unknown dbId/);
 
-  const otherExec = await bridge.handleCall("execute", {
+  const otherExec = await host.call("execute", {
     dbId: other.dbId,
     sql: "select 1",
     params: [],
   });
   assert.equal(otherExec.ok, true);
-  const otherClosed = await bridge.handleCall("close", other.dbId);
+  const otherClosed = await host.call("close", other.dbId);
   assert.equal(otherClosed.ok, true);
   assert.equal(calls.closes.length, 2);
 });
 
-test("separate WebHostSqlBridge and attach instances isolate state and AttachOptions", async () => {
+test("separate attach instances isolate state and AttachOptions", async () => {
   const callsA = {};
   const callsB = {};
-  const bridgeA = new WebHostSqlBridge(
-    { vfs: "IDBBatchAtomicVFS", enableMultiTabs: true },
-    loadMock(callsA),
-  );
-  const bridgeB = new WebHostSqlBridge(
-    { vfs: "OPFSCoopSyncVFS", enableMultiTabs: false },
-    loadMock(callsB),
-  );
+  const hostA = attachHost({ vfs: "IDBBatchAtomicVFS", enableMultiTabs: true }, loadMock(callsA));
+  const hostB = attachHost({ vfs: "OPFSCoopSyncVFS", enableMultiTabs: false }, loadMock(callsB));
 
-  const openA = await bridgeA.handleCall("open", { dbFilename: "shared.db" });
-  const openB1 = await bridgeB.handleCall("open", { dbFilename: "shared.db" });
-  const openB2 = await bridgeB.handleCall("open", { dbFilename: "shared.db", readOnly: true });
+  const openA = await hostA.call("open", { dbFilename: "shared.db" });
+  const openB1 = await hostB.call("open", { dbFilename: "shared.db" });
+  const openB2 = await hostB.call("open", { dbFilename: "shared.db", readOnly: true });
 
   assert.equal(openA.ok, true);
   assert.equal(openB1.ok, true);
@@ -448,8 +457,8 @@ test("separate WebHostSqlBridge and attach instances isolate state and AttachOpt
   assert.equal(callsA.constructs[0].open.vfs, "IDBBatchAtomicVFS");
   assert.equal(callsB.constructs[0].open.vfs, "OPFSCoopSyncVFS");
 
-  // Bridge A cannot see connections opened on Bridge B.
-  const crossLookup = await bridgeA.handleCall("execute", {
+  // Host A cannot see connections opened on Host B.
+  const crossLookup = await hostA.call("execute", {
     dbId: openB2.dbId,
     sql: "select 1",
     params: [],
@@ -457,13 +466,13 @@ test("separate WebHostSqlBridge and attach instances isolate state and AttachOpt
   assert.equal(crossLookup.ok, false);
   assert.match(crossLookup.message, /unknown dbId/);
 
-  // Closing Bridge A does not close or affect Bridge B.
-  const closedA = await bridgeA.handleCall("close", openA.dbId);
+  // Closing Host A does not close or affect Host B.
+  const closedA = await hostA.call("close", openA.dbId);
   assert.equal(closedA.ok, true);
   assert.equal(callsA.closes.length, 1);
   assert.equal(callsB.closes.length, 0);
 
-  const execB = await bridgeB.handleCall("execute", {
+  const execB = await hostB.call("execute", {
     dbId: openB1.dbId,
     sql: "select 1",
     params: [42],
@@ -472,22 +481,18 @@ test("separate WebHostSqlBridge and attach instances isolate state and AttachOpt
   assert.deepEqual(execB.rawRows, [[42]]);
 
   // Two attached views receive distinct handlers and detach independently.
-  const viewA = { nativeModulesMap: {}, onNativeModulesCall: undefined };
-  const viewB = { nativeModulesMap: {}, onNativeModulesCall: undefined };
-  const handleA = attach(viewA, { enableMultiTabs: true });
-  const handleB = attach(viewB, { enableMultiTabs: false });
-  assert.notEqual(viewA.onNativeModulesCall, viewB.onNativeModulesCall);
-  handleA.detach();
-  assert.equal(viewA.onNativeModulesCall, undefined);
-  assert.ok(viewB.onNativeModulesCall instanceof Function);
-  handleB.detach();
+  assert.notEqual(hostA.lynxView.onNativeModulesCall, hostB.lynxView.onNativeModulesCall);
+  hostA.handle.detach();
+  assert.equal(hostA.lynxView.onNativeModulesCall, undefined);
+  assert.ok(hostB.lynxView.onNativeModulesCall instanceof Function);
+  hostB.handle.detach();
 });
 
 test("open tells the Adapter when WASQLite shares the file between tabs", async (context) => {
   const loadWeb = loadMock({});
   const openWith = async (options) => {
-    const bridge = new WebHostSqlBridge(options, loadWeb);
-    const open = await bridge.handleCall("open", { dbFilename: "app.db" });
+    const host = attachHost(options, loadWeb);
+    const open = await host.call("open", { dbFilename: "app.db" });
     assert.equal(open.ok, true);
     return open.multiTab;
   };
@@ -506,18 +511,9 @@ test("open tells the Adapter when WASQLite shares the file between tabs", async 
   assert.equal(await openWith({ enableMultiTabs: false }), undefined);
 });
 
-test("an Adapter opened through a multi-tab Host helper exchanges table changes with other tabs", async (context) => {
+test("an Adapter opened through a multi-tab Host helper exchanges table changes with other tabs", async () => {
   const hub = new FakeTabHub();
-  const bridge = new WebHostSqlBridge(
-    { enableMultiTabs: true },
-    loadMock({}, hookTrackingSqlHandler()),
-  );
-  const hop = (name, data) => bridge.handleCall(name, data);
-  installFakeLynxHost({
-    nativeModules: { NativePowerSyncModule: createFactory({}, hop) },
-    tabs: hub.tab(),
-  });
-  context.after(resetLynxHost);
+  installHostHelper(hookTrackingSqlHandler(), undefined, { enableMultiTabs: true }, hub.tab());
   const received = [];
   hub.tab().channel("powersync-lynx:tables:app.db:", (change) => received.push(change));
 
@@ -532,15 +528,15 @@ test("an Adapter opened through a multi-tab Host helper exchanges table changes 
 
 test("readOnly routes execute to readLock+executeRaw; writes use writeLock", async () => {
   const calls = {};
-  const bridge = new WebHostSqlBridge(undefined, loadMock(calls));
+  const host = attachHost(undefined, loadMock(calls));
 
-  const write = await bridge.handleCall("open", { dbFilename: "w.db" });
-  const read = await bridge.handleCall("open", { dbFilename: "w.db", readOnly: true });
+  const write = await host.call("open", { dbFilename: "w.db" });
+  const read = await host.call("open", { dbFilename: "w.db", readOnly: true });
   assert.equal(calls.constructs.length, 1);
 
-  await bridge.handleCall("execute", { dbId: write.dbId, sql: "select 1", params: [1] });
-  await bridge.handleCall("execute", { dbId: read.dbId, sql: "select 1", params: [2] });
-  await bridge.handleCall("executeBatch", {
+  await host.call("execute", { dbId: write.dbId, sql: "select 1", params: [1] });
+  await host.call("execute", { dbId: read.dbId, sql: "select 1", params: [2] });
+  await host.call("executeBatch", {
     dbId: write.dbId,
     sql: "insert",
     params: [[1], [2]],
@@ -571,48 +567,48 @@ test("page catch returns ok:false envelope with optional code", async () => {
       return { log() {} };
     },
   });
-  const bridge = new WebHostSqlBridge(undefined, loadWeb);
-  const opened = await bridge.handleCall("open", { dbFilename: "x.db" });
-  const result = await bridge.handleCall("execute", { dbId: opened.dbId, sql: "x", params: [] });
+  const host = attachHost(undefined, loadWeb);
+  const opened = await host.call("open", { dbFilename: "x.db" });
+  const result = await host.call("execute", { dbId: opened.dbId, sql: "x", params: [] });
   assert.equal(result.ok, false);
   assert.equal(result.message, "boom");
   assert.equal(result.code, 19);
 });
 
 test("JS BEGIN/INSERT/COMMIT RPCs keep one WASQLite lease so COMMIT is active", async () => {
-  const bridge = new WebHostSqlBridge(undefined, leaseRecoveringLoadWeb());
-  const opened = await bridge.handleCall("open", { dbFilename: "txn.db" });
+  const host = attachHost(undefined, leaseRecoveringLoadWeb());
+  const opened = await host.call("open", { dbFilename: "txn.db" });
   assert.equal(opened.ok, true);
 
-  const created = await bridge.handleCall("execute", {
+  const created = await host.call("execute", {
     dbId: opened.dbId,
     sql: "CREATE TABLE t(x INTEGER)",
     params: [],
   });
   assert.equal(created.ok, true);
 
-  const begin = await bridge.handleCall("execute", {
+  const begin = await host.call("execute", {
     dbId: opened.dbId,
     sql: "BEGIN IMMEDIATE",
     params: [],
   });
   assert.equal(begin.ok, true);
 
-  const inserted = await bridge.handleCall("execute", {
+  const inserted = await host.call("execute", {
     dbId: opened.dbId,
     sql: "INSERT INTO t VALUES (1)",
     params: [],
   });
   assert.equal(inserted.ok, true);
 
-  const committed = await bridge.handleCall("execute", {
+  const committed = await host.call("execute", {
     dbId: opened.dbId,
     sql: "COMMIT",
     params: [],
   });
   assert.equal(committed.ok, true, committed.message);
 
-  const selected = await bridge.handleCall("execute", {
+  const selected = await host.call("execute", {
     dbId: opened.dbId,
     sql: "SELECT x FROM t",
     params: [],
@@ -622,34 +618,34 @@ test("JS BEGIN/INSERT/COMMIT RPCs keep one WASQLite lease so COMMIT is active", 
 });
 
 test("JS BEGIN/INSERT/ROLLBACK RPCs roll the insert back", async () => {
-  const bridge = new WebHostSqlBridge(undefined, leaseRecoveringLoadWeb());
-  const opened = await bridge.handleCall("open", { dbFilename: "rollback.db" });
+  const host = attachHost(undefined, leaseRecoveringLoadWeb());
+  const opened = await host.call("open", { dbFilename: "rollback.db" });
   assert.equal(opened.ok, true);
-  const created = await bridge.handleCall("execute", {
+  const created = await host.call("execute", {
     dbId: opened.dbId,
     sql: "CREATE TABLE t(x INTEGER)",
     params: [],
   });
   assert.equal(created.ok, true);
-  const begin = await bridge.handleCall("execute", {
+  const begin = await host.call("execute", {
     dbId: opened.dbId,
     sql: "BEGIN IMMEDIATE",
     params: [],
   });
   assert.equal(begin.ok, true);
-  const inserted = await bridge.handleCall("execute", {
+  const inserted = await host.call("execute", {
     dbId: opened.dbId,
     sql: "INSERT INTO t VALUES (1)",
     params: [],
   });
   assert.equal(inserted.ok, true);
-  const rolledBack = await bridge.handleCall("execute", {
+  const rolledBack = await host.call("execute", {
     dbId: opened.dbId,
     sql: "ROLLBACK",
     params: [],
   });
   assert.equal(rolledBack.ok, true, rolledBack.message);
-  const selected = await bridge.handleCall("execute", {
+  const selected = await host.call("execute", {
     dbId: opened.dbId,
     sql: "SELECT x FROM t",
     params: [],
@@ -659,22 +655,22 @@ test("JS BEGIN/INSERT/ROLLBACK RPCs roll the insert back", async () => {
 });
 
 test("executeBatch rolls back earlier rows on the first error", async () => {
-  const bridge = new WebHostSqlBridge(undefined, leaseRecoveringLoadWeb());
-  const opened = await bridge.handleCall("open", { dbFilename: "batch.db" });
+  const host = attachHost(undefined, leaseRecoveringLoadWeb());
+  const opened = await host.call("open", { dbFilename: "batch.db" });
   assert.equal(opened.ok, true);
-  const created = await bridge.handleCall("execute", {
+  const created = await host.call("execute", {
     dbId: opened.dbId,
     sql: "CREATE TABLE ids(id INTEGER PRIMARY KEY)",
     params: [],
   });
   assert.equal(created.ok, true);
-  const batched = await bridge.handleCall("executeBatch", {
+  const batched = await host.call("executeBatch", {
     dbId: opened.dbId,
     sql: "INSERT INTO ids(id) VALUES(?)",
     params: [[1], [1]],
   });
   assert.equal(batched.ok, false);
-  const selected = await bridge.handleCall("execute", {
+  const selected = await host.call("execute", {
     dbId: opened.dbId,
     sql: "SELECT count(*) FROM ids",
     params: [],
@@ -684,24 +680,24 @@ test("executeBatch rolls back earlier rows on the first error", async () => {
 });
 
 test("malformed tagged bigint resolves ok:false instead of rejecting", async () => {
-  const bridge = new WebHostSqlBridge(undefined, loadMock({}));
-  const result = await bridge.handleCall("execute", { __psBig: true, v: "invalid" });
+  const host = attachHost(undefined, loadMock({}));
+  const result = await host.call("execute", { __psBig: true, v: "invalid" });
   assert.equal(result.ok, false);
   assert.equal(result.message.constructor, String);
   assert.ok(result.message.length > 0);
 });
 
 test("malformed tagged ArrayBuffer resolves ok:false instead of rejecting", async () => {
-  const bridge = new WebHostSqlBridge(undefined, loadMock({}));
-  const result = await bridge.handleCall("execute", { __psAb: true, u8: ["nope"] });
+  const host = attachHost(undefined, loadMock({}));
+  const result = await host.call("execute", { __psAb: true, u8: ["nope"] });
   assert.equal(result.ok, false);
   assert.equal(result.message.constructor, String);
 });
 
 test("factory encodes params and decodes envelopes; Adapter sees ArrayBuffer/bigint", async () => {
   const calls = {};
-  const bridge = new WebHostSqlBridge(undefined, loadMock(calls));
-  const handler = async (name, data) => bridge.handleCall(name, data);
+  const host = attachHost(undefined, loadMock(calls));
+  const handler = async (name, data) => host.call(name, data);
   const methods = createFactory({}, handler);
 
   const opened = await new Promise((resolve) => methods.open({ dbFilename: "c.db" }, resolve));
@@ -722,8 +718,8 @@ test("factory encodes params and decodes envelopes; Adapter sees ArrayBuffer/big
 
 test("factory methods return immediately and invoke the callback later", async () => {
   const calls = {};
-  const bridge = new WebHostSqlBridge(undefined, loadMock(calls));
-  const handler = (name, data) => bridge.handleCall(name, data);
+  const host = attachHost(undefined, loadMock(calls));
+  const handler = (name, data) => host.call(name, data);
   const methods = createFactory({}, handler);
 
   let callbackRan = false;
@@ -743,39 +739,38 @@ test("factory methods return immediately and invoke the callback later", async (
 test("wrapped onNativeModulesCall dispatches NativePowerSyncModule and falls through", async () => {
   const calls = {};
   const previous = async () => ({ from: "prev" });
-  const bridge = new WebHostSqlBridge(undefined, loadMock(calls));
-  const handler = bridge.createHandler(previous);
+  const host = attachHost(undefined, loadMock(calls), previous);
 
-  const opened = await handler("open", { dbFilename: "wrap.db" }, MODULE_NAME);
+  const opened = await host.call("open", { dbFilename: "wrap.db" }, MODULE_NAME);
   assert.equal(opened.ok, true);
   assert.equal(calls.constructs.length, 1);
 
-  const other = await handler("ping", { a: 1 }, "bridge");
+  const other = await host.call("ping", { a: 1 }, "bridge");
   assert.deepEqual(other, { from: "prev" });
 });
 
 test("unknown method and missing dbFilename return ok:false envelopes", async () => {
-  const bridge = new WebHostSqlBridge(undefined, loadMock({}));
-  const missing = await bridge.handleCall("open", {});
+  const host = attachHost(undefined, loadMock({}));
+  const missing = await host.call("open", {});
   assert.equal(missing.ok, false);
   assert.match(missing.message, /dbFilename/);
 
-  const unknown = await bridge.handleCall("vacuum", {});
+  const unknown = await host.call("vacuum", {});
   assert.equal(unknown.ok, false);
   assert.match(unknown.message, /unknown method/);
 });
 
 test("last close then reopen constructs a new WASQLiteOpenFactory", async () => {
   const calls = {};
-  const bridge = new WebHostSqlBridge(undefined, loadMock(calls));
-  const first = await bridge.handleCall("open", { dbFilename: "reopen.db" });
+  const host = attachHost(undefined, loadMock(calls));
+  const first = await host.call("open", { dbFilename: "reopen.db" });
   assert.equal(first.ok, true);
   assert.equal(calls.constructs.length, 1);
 
-  const closed = await bridge.handleCall("close", first.dbId);
+  const closed = await host.call("close", first.dbId);
   assert.equal(closed.ok, true);
   assert.equal(calls.closes.length, 1);
-  const stale = await bridge.handleCall("execute", {
+  const stale = await host.call("execute", {
     dbId: first.dbId,
     sql: "select 1",
     params: [],
@@ -783,7 +778,7 @@ test("last close then reopen constructs a new WASQLiteOpenFactory", async () => 
   assert.equal(stale.ok, false);
   assert.match(stale.message, /unknown dbId/);
 
-  const second = await bridge.handleCall("open", { dbFilename: "reopen.db" });
+  const second = await host.call("open", { dbFilename: "reopen.db" });
   assert.equal(second.ok, true);
   assert.equal(calls.constructs.length, 2);
   assert.notEqual(second.dbId, first.dbId);
@@ -858,26 +853,26 @@ test("last close keeps dbId when adapter.close rejects so retry can finish", asy
     },
   });
 
-  const bridge = new WebHostSqlBridge(undefined, loadWeb);
-  const opened = await bridge.handleCall("open", { dbFilename: "retry-close.db" });
+  const host = attachHost(undefined, loadWeb);
+  const opened = await host.call("open", { dbFilename: "retry-close.db" });
   assert.equal(opened.ok, true);
   assert.equal(constructCount, 1);
 
-  const first = await bridge.handleCall("close", opened.dbId);
+  const first = await host.call("close", opened.dbId);
   assert.equal(first.ok, false);
   assert.equal(first.message, "worker already dead");
   // dbId remains registered so caller can still observe it and retry close.
-  const stillReachable = await bridge.handleCall("execute", {
+  const stillReachable = await host.call("execute", {
     dbId: opened.dbId,
     sql: "select 1",
     params: [],
   });
   assert.equal(stillReachable.ok, true);
 
-  const retry = await bridge.handleCall("close", opened.dbId);
+  const retry = await host.call("close", opened.dbId);
   assert.equal(retry.ok, true, retry.message);
   assert.equal(closeAttempts, 2);
-  const afterClose = await bridge.handleCall("execute", {
+  const afterClose = await host.call("execute", {
     dbId: opened.dbId,
     sql: "select 1",
     params: [],
@@ -885,23 +880,23 @@ test("last close keeps dbId when adapter.close rejects so retry can finish", asy
   assert.equal(afterClose.ok, false);
   assert.match(afterClose.message, /unknown dbId/);
 
-  const reopened = await bridge.handleCall("open", { dbFilename: "retry-close.db" });
+  const reopened = await host.call("open", { dbFilename: "retry-close.db" });
   assert.equal(reopened.ok, true);
   assert.equal(constructCount, 2);
 });
 
 test("duplicate close of one dbId does not close a sibling file share", async () => {
   const calls = {};
-  const bridge = new WebHostSqlBridge(undefined, loadMock(calls));
-  const first = await bridge.handleCall("open", { dbFilename: "share.db" });
-  const sibling = await bridge.handleCall("open", { dbFilename: "share.db", readOnly: true });
+  const host = attachHost(undefined, loadMock(calls));
+  const first = await host.call("open", { dbFilename: "share.db" });
+  const sibling = await host.call("open", { dbFilename: "share.db", readOnly: true });
   assert.equal(first.ok, true);
   assert.equal(sibling.ok, true);
   assert.equal(calls.constructs.length, 1);
 
   const [closeA, closeB] = await Promise.all([
-    bridge.handleCall("close", first.dbId),
-    bridge.handleCall("close", first.dbId),
+    host.call("close", first.dbId),
+    host.call("close", first.dbId),
   ]);
   const okCount = [closeA, closeB].filter((result) => result.ok === true).length;
   const failCount = [closeA, closeB].filter((result) => result.ok === false).length;
@@ -912,7 +907,7 @@ test("duplicate close of one dbId does not close a sibling file share", async ()
   );
   assert.equal(calls.closes.length, 0);
 
-  const closedFirst = await bridge.handleCall("execute", {
+  const closedFirst = await host.call("execute", {
     dbId: first.dbId,
     sql: "select 1",
     params: [1],
@@ -920,18 +915,18 @@ test("duplicate close of one dbId does not close a sibling file share", async ()
   assert.equal(closedFirst.ok, false);
   assert.match(closedFirst.message, /unknown dbId/);
 
-  const executed = await bridge.handleCall("execute", {
+  const executed = await host.call("execute", {
     dbId: sibling.dbId,
     sql: "select 1",
     params: [1],
   });
   assert.equal(executed.ok, true, executed.message);
 
-  const siblingClosed = await bridge.handleCall("close", sibling.dbId);
+  const siblingClosed = await host.call("close", sibling.dbId);
   assert.equal(siblingClosed.ok, true, siblingClosed.message);
   assert.equal(calls.closes.length, 1);
 
-  const closedSibling = await bridge.handleCall("execute", {
+  const closedSibling = await host.call("execute", {
     dbId: sibling.dbId,
     sql: "select 1",
     params: [1],
@@ -939,7 +934,7 @@ test("duplicate close of one dbId does not close a sibling file share", async ()
   assert.equal(closedSibling.ok, false);
   assert.match(closedSibling.message, /unknown dbId/);
 
-  const reopened = await bridge.handleCall("open", { dbFilename: "share.db" });
+  const reopened = await host.call("open", { dbFilename: "share.db" });
   assert.equal(reopened.ok, true);
   assert.equal(calls.constructs.length, 2);
 });

@@ -35,28 +35,18 @@ export type Cloneable =
   | TaggedBigInt
   | CloneableObject;
 
-export function asCloneable(
-  value: CloneableObject | Cloneable[] | TaggedArrayBuffer | TaggedBigInt,
-): Cloneable {
-  return value;
-}
-
-export function asCloneableObject(value: CloneableObject): CloneableObject {
-  return value;
-}
-
 export function encodeCloneable(value: Cloneable): Cloneable {
   if (value === null || value === undefined) {
     return value;
   }
   if (isBigInt(value)) {
-    return asCloneable(encodeTaggedBigInt(value));
+    return encodeTaggedBigInt(value);
   }
   if (value instanceof ArrayBuffer) {
-    return asCloneable({ [AB_TAG]: true, u8: Array.from(new Uint8Array(value)) });
+    return { [AB_TAG]: true, u8: Array.from(new Uint8Array(value)) };
   }
   if (value instanceof Uint8Array) {
-    return asCloneable({ [AB_TAG]: true, u8: Array.from(value) });
+    return { [AB_TAG]: true, u8: Array.from(value) };
   }
   if (Array.isArray(value)) {
     return value.map(encodeCloneable);
@@ -68,7 +58,7 @@ export function encodeCloneable(value: Cloneable): Cloneable {
     for (const key of Object.keys(source)) {
       mutable[key] = encodeCloneable(source[key]);
     }
-    return asCloneableObject(mutable);
+    return mutable;
   }
   return value;
 }
@@ -99,7 +89,7 @@ export function decodeCloneable(value: Cloneable): Cloneable {
     for (const key of Object.keys(source)) {
       mutable[key] = decodeCloneable(source[key]);
     }
-    return asCloneableObject(mutable);
+    return mutable;
   }
   return value;
 }
