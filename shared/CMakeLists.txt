@@ -85,11 +85,13 @@ endif()
 if(POWERSYNC_BUILD_LYNXTRON_NAPI AND NOT _ps_native_includes)
   add_library(powersync_lynx_native STATIC EXCLUDE_FROM_ALL
     nativeModule/NativePowerSyncModule.cc
+    nativeModule/NativeSyncHttpNapi.cc
     ${_ps_http_sources}
   )
 else()
   add_library(powersync_lynx_native STATIC
     nativeModule/NativePowerSyncModule.cc
+    nativeModule/NativeSyncHttpNapi.cc
     ${_ps_http_sources}
   )
 endif()
@@ -203,6 +205,7 @@ if(POWERSYNC_BUILD_LYNXTRON_NAPI)
 
   add_library(powersync_lynx_napi MODULE
     nativeModule/NativePowerSyncModule.cc
+    nativeModule/NativeSyncHttpNapi.cc
     ${_ps_http_sources}
     "${POWERSYNC_LYNX_ROOT}/lynxtron/library_entry.cc"
   )
@@ -225,8 +228,10 @@ if(POWERSYNC_BUILD_LYNXTRON_NAPI)
   endif()
 
   target_compile_definitions(powersync_lynx_napi PRIVATE NAPI_VERSION=8)
-  set_source_files_properties(nativeModule/NativePowerSyncModule.cc PROPERTIES
-    COMPILE_DEFINITIONS "USE_WEAK_SUFFIX_NAPI"
+  set_source_files_properties(
+    nativeModule/NativePowerSyncModule.cc
+    nativeModule/NativeSyncHttpNapi.cc
+    PROPERTIES COMPILE_DEFINITIONS "USE_WEAK_SUFFIX_NAPI"
   )
   set_target_properties(powersync_lynx_napi PROPERTIES
     PREFIX ""

@@ -52,6 +52,9 @@ enum class CoreLoad { kAutoExtension, kLoadExtension };
 struct EngineConfig {
   CoreLoad core_load = CoreLoad::kAutoExtension;
   std::string core_path;
+  // Optional worker-thread resolver for default dbLocation when omitted on
+  // relative filenames (keeps directory creation off the JS thread).
+  std::function<std::string(std::string* error)> resolve_default_db_location;
 };
 
 using Callback = std::function<void(Envelope)>;
